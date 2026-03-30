@@ -1,0 +1,512 @@
+/* Base styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+}
+
+/* App container with sidebar */
+.app-container {
+    display: flex;
+    height: 100vh;
+    width: 100%;
+}
+
+/* Sidebar navigation */
+.sidebar {
+    width: 260px;
+    background: #fff;
+    border-right: 1px solid #e5e5e5;
+    overflow-y: auto;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-header {
+    padding: 20px;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.sidebar-header h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+.nav-list {
+    list-style: none;
+    padding: 12px 0;
+    flex: 1;
+}
+
+.nav-item {
+    margin: 0;
+}
+
+.nav-link {
+    display: block;
+    padding: 10px 20px;
+    color: #333;
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: background 0.15s ease;
+}
+
+.nav-link:hover {
+    background: #f5f5f5;
+}
+
+.nav-link.active {
+    background: #f0f0f0;
+    color: #e11d48;
+    font-weight: 500;
+}
+
+/* Year section in sidebar */
+.year-section {
+    margin-bottom: 4px;
+}
+
+.year-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #1a1a1a;
+    transition: background 0.15s ease;
+}
+
+.year-header:hover {
+    background: #f5f5f5;
+}
+
+.year-header.active {
+    color: #e11d48;
+}
+
+.year-header .arrow {
+    font-size: 0.7rem;
+    transition: transform 0.2s ease;
+}
+
+.year-section.expanded .year-header .arrow {
+    transform: rotate(90deg);
+}
+
+.trip-list {
+    list-style: none;
+    display: none;
+    padding-left: 12px;
+}
+
+.year-section.expanded .trip-list {
+    display: block;
+}
+
+.trip-list .nav-link {
+    padding: 8px 20px;
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.trip-list .nav-link:hover {
+    color: #333;
+}
+
+.trip-list .nav-link.active {
+    color: #e11d48;
+    font-weight: 500;
+}
+
+/* Mobile sidebar toggle */
+.sidebar-toggle {
+    display: none;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 2001;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.sidebar-toggle span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    background: #333;
+    border-radius: 1px;
+    transition: all 0.2s ease;
+}
+
+.sidebar-toggle.active span:nth-child(1) {
+    transform: rotate(45deg) translate(4px, 4px);
+}
+
+.sidebar-toggle.active span:nth-child(2) {
+    opacity: 0;
+}
+
+.sidebar-toggle.active span:nth-child(3) {
+    transform: rotate(-45deg) translate(4px, -4px);
+}
+
+/* Main map container */
+.map-container {
+    flex: 1;
+    position: relative;
+    min-width: 0;
+}
+
+/* Full screen map */
+#map {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+/* Trip info overlay - modern glass effect */
+.trip-info {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 16px 20px;
+    border-radius: 14px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    max-width: 280px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.trip-info h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: #1a1a1a;
+}
+
+.trip-info p {
+    font-size: 0.8rem;
+    color: #666;
+    margin-bottom: 2px;
+}
+
+/* EXIF toggle button - modern style */
+.exif-toggle {
+    position: absolute;
+    bottom: 30px;
+    right: 20px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    z-index: 1000;
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #666;
+    transition: all 0.2s ease;
+}
+
+.exif-toggle:hover {
+    background: rgba(255, 255, 255, 1);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+}
+
+.exif-toggle.active {
+    background: #1a1a1a;
+    color: white;
+    border-color: #1a1a1a;
+}
+
+/* Hidden gallery container */
+.gallery-hidden {
+    display: none;
+}
+
+/* Photo marker with thumbnail - Instagram style */
+.photo-marker-icon {
+    position: relative;
+    cursor: pointer;
+}
+
+.photo-marker-wrapper {
+    position: relative;
+    width: 44px;
+    height: 44px;
+}
+
+.photo-marker-thumb {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    border: 2px solid white;
+    object-fit: cover;
+    background: #f0f0f0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s ease;
+}
+
+.photo-marker-icon:hover .photo-marker-thumb {
+    transform: scale(1.1);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    z-index: 1000 !important;
+}
+
+/* Count badge for multiple photos */
+.photo-marker-count {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    background: #1a1a1a;
+    color: white;
+    border-radius: 10px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    z-index: 5;
+    min-width: 18px;
+    text-align: center;
+    border: 1.5px solid white;
+}
+
+
+/* Custom cluster markers - clean minimal style */
+.marker-cluster {
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 2px solid #e11d48 !important;
+    border-radius: 50% !important;
+}
+
+.marker-cluster div {
+    background: transparent !important;
+    color: #1a1a1a !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.marker-cluster-small {
+    width: 36px !important;
+    height: 36px !important;
+    margin-left: -18px !important;
+    margin-top: -18px !important;
+}
+
+.marker-cluster-medium {
+    width: 42px !important;
+    height: 42px !important;
+    margin-left: -21px !important;
+    margin-top: -21px !important;
+}
+
+.marker-cluster-large {
+    width: 48px !important;
+    height: 48px !important;
+    margin-left: -24px !important;
+    margin-top: -24px !important;
+}
+
+/* Photo popup styling */
+.photo-popup {
+    min-width: 180px;
+    max-width: 220px;
+}
+
+.photo-popup .popup-thumbnail {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.photo-popup .popup-thumbnail:hover {
+    opacity: 0.9;
+}
+
+.photo-popup .popup-info {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #333;
+}
+
+.photo-popup .popup-info strong {
+    font-size: 0.9rem;
+    color: #1a1a1a;
+}
+
+/* Cluster popup with multiple photos */
+.cluster-popup {
+    max-width: 300px;
+}
+
+.cluster-popup h3 {
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    color: #1a1a1a;
+    font-weight: 600;
+}
+
+.cluster-popup .photo-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+}
+
+.cluster-popup .photo-grid img {
+    width: 100%;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.cluster-popup .photo-grid img:hover {
+    opacity: 0.85;
+}
+
+/* GLightbox customizations */
+.gslide-description {
+    background: rgba(0, 0, 0, 0.8) !important;
+}
+
+.gslide-desc {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.exif-info {
+    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #ccc;
+    padding: 10px;
+}
+
+.exif-info span {
+    margin-right: 15px;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        transform: translateX(-100%);
+        z-index: 2000;
+        transition: transform 0.3s ease;
+        box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
+    }
+
+    .sidebar.open {
+        transform: translateX(0);
+    }
+
+    .sidebar-toggle {
+        display: flex;
+    }
+
+    .trip-info {
+        top: 10px;
+        left: 70px;
+        right: 10px;
+        max-width: none;
+        padding: 12px 15px;
+    }
+
+    .trip-info h1 {
+        font-size: 1.1rem;
+    }
+
+    .exif-toggle {
+        bottom: 80px;
+        right: 10px;
+    }
+
+    .cluster-popup {
+        max-width: 280px;
+    }
+
+    .cluster-popup .photo-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    /* Overlay when sidebar is open */
+    .sidebar-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.3);
+        z-index: 1999;
+    }
+
+    .sidebar-overlay.active {
+        display: block;
+    }
+}
+
+/* Route line styling */
+.route-line {
+    stroke: #e11d48;
+    stroke-width: 3;
+    stroke-opacity: 0.8;
+    fill: none;
+}
+
+/* Leaflet popup overrides - clean modern style */
+.leaflet-popup-content-wrapper {
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.leaflet-popup-content {
+    margin: 14px;
+}
+
+.leaflet-popup-tip {
+    box-shadow: none;
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+    color: #666;
+    font-size: 20px;
+    padding: 8px 10px 0 0;
+}

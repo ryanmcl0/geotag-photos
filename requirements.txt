@@ -1,0 +1,16 @@
+# Travel Photography Map - Python Dependencies
+
+# Image processing
+Pillow>=10.0.0
+
+# GPX parsing
+gpxpy>=1.6.0
+
+# GeoJSON handling
+geojson>=3.0.0
+
+# CLI interface
+click>=8.0.0
+
+# Progress bars
+tqdm>=4.65.0

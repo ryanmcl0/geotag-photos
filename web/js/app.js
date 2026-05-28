@@ -192,27 +192,37 @@ function updateTripInfo() {
     const visibleManifests = allManifests.filter(m =>
         !tripLayers[m.tripId] || tripLayers[m.tripId].visible);
     const totalPhotos = visibleManifests.reduce((sum, m) => sum + m.photos.length, 0);
+    const uniqueCountries = new Set(visibleTrips.flatMap(t => t.countries || []));
+    const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
     const viewConfig = typeof VIEW_CONFIG !== 'undefined' ? VIEW_CONFIG : { mode: 'all' };
 
     let titleText = '';
     let subtitleText = '';
 
     if (visibleTrips.length === 1) {
-        // Single trip (either single-trip page or only one toggled on) — show its dates
         titleText = visibleTrips[0].name;
-        subtitleText = `${formatDate(visibleTrips[0].dates.start)} - ${formatDate(visibleTrips[0].dates.end)}`;
+        subtitleText = `${formatDate(visibleTrips[0].dates.start)} – ${formatDate(visibleTrips[0].dates.end)}`;
     } else if (viewConfig.mode === 'year' && viewConfig.year) {
         titleText = `${viewConfig.year}`;
         subtitleText = `${visibleTrips.length} trips`;
     } else {
-        // All / multi-trip view — just the counts
         titleText = `${visibleTrips.length} Trips`;
         subtitleText = '';
     }
 
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
-    document.getElementById('photo-count').textContent = `${totalPhotos.toLocaleString()} photos`;
+
+    const countryText = uniqueCountries.size > 0 ? ` · ${uniqueCountries.size} countries` : '';
+    document.getElementById('photo-count').textContent =
+        `${totalPhotos.toLocaleString()} photos${countryText}`;
+
+    const countryListEl = document.getElementById('country-list');
+    if (countryListEl) {
+        countryListEl.textContent = uniqueCountries.size > 0
+            ? [...uniqueCountries].map(cc => { try { return countryNames.of(cc); } catch { return cc; } }).sort().join(', ')
+            : '';
+    }
 }
 
 /**
@@ -327,15 +337,11 @@ function createSinglePhotoPopup(photo, location) {
     return `
         <div class="photo-popup">
             <img src="${photo.tripPath}/${photo.thumbnail}"
-                 alt="${location}"
+                 alt=""
                  class="popup-thumbnail"
                  data-photo-id="${photo.id}"
                  onclick="openGallery('${photo.id}')">
-            <div class="popup-info">
-                <strong>${location}</strong>
-                <div style="font-size: 0.85em; color: #666;">${photo.tripName}</div>
-                ${exifHtml}
-            </div>
+            ${exifHtml ? `<div class="popup-info">${exifHtml}</div>` : ''}
         </div>
     `;
 }
@@ -346,15 +352,13 @@ function createSinglePhotoPopup(photo, location) {
 function createMultiPhotoPopup(photos, location) {
     const thumbnails = photos.map(photo => `
         <img src="${photo.tripPath}/${photo.thumbnail}"
-             alt="${photo.id}"
+             alt=""
              data-photo-id="${photo.id}"
              onclick="openGallery('${photo.id}')">
     `).join('');
 
     return `
         <div class="cluster-popup">
-            <h3>${location} (${photos.length} photos)</h3>
-            <div style="font-size: 0.85em; color: #666; margin-bottom: 8px;">${photos[0].tripName}</div>
             <div class="photo-grid">
                 ${thumbnails}
             </div>

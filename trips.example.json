@@ -1,0 +1,36 @@
+{
+  "trips": [
+    {
+      "name": "2024 Trip With GPX",
+      "edits": "/Volumes/DRIVE/Edits/2024 Trip With GPX",
+      "gpx": "/Volumes/DRIVE/2024/Trip/GPX folder",
+      "public": true
+    },
+    {
+      "name": "2024 Trip Multiple GPX Folders",
+      "edits": "/Volumes/DRIVE/Edits/2024 Trip",
+      "gpx": [
+        "/Volumes/DRIVE/2024/Trip/North GPX",
+        "/Volumes/DRIVE/2024/Trip/South GPX"
+      ],
+      "public": true
+    },
+    {
+      "name": "2023 City Trip No GPX",
+      "edits": "/Volumes/DRIVE/Edits/2023 City Trip",
+      "public": false
+    },
+    {
+      "name": "2024 Trip With Options",
+      "edits": "/Volumes/DRIVE/Edits/2024 Trip",
+      "gpx": "/Volumes/DRIVE/2024/Trip/GPX",
+      "public": true,
+      "options": {
+        "geosync": "+08:00",
+        "filter_raws": "/Volumes/DRIVE/2024/Trip/Raws",
+        "fallback_location": "35.0,105.0",
+        "cluster_radius": 1000
+      }
+    }
+  ]
+}

@@ -10,6 +10,11 @@ web/trips/*/display
 # Generated trip metadata (manifests, routes, index)
 web/trips/
 
+# Personal trip config (drive paths, public/private trip lists)
+scripts/trip_inventory.json
+public.json
+trips.json
+
 # Generated year/trip HTML pages
 web/20*/
 

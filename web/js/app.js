@@ -9,9 +9,9 @@ const CONFIG = {
     defaultZoom: 6,
     maxZoom: 18,
 
-    // Clustering settings - more aggressive clustering
-    clusterRadius: 80,
-    disableClusteringAtZoom: 18,
+    // Clustering settings — keep markers separated until the map is dense
+    clusterRadius: 35,
+    disableClusteringAtZoom: 13,
 
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
@@ -21,12 +21,28 @@ const CONFIG = {
 
 // Global state
 let map;
-let markerClusterGroup;
-let routeLayers = [];
 let allTrips = [];
 let allManifests = [];
 let showExif = false;
 let lightbox;
+
+// Per-trip layers — so each trip can be toggled on/off independently.
+// tripLayers[tripId] = { route: L.GeoJSON, markers: L.MarkerClusterGroup, visible: bool }
+const tripLayers = {};
+
+const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
+
+function loadHiddenTripIds() {
+    try {
+        return new Set(JSON.parse(localStorage.getItem(HIDDEN_TRIPS_STORAGE_KEY)) || []);
+    } catch (e) {
+        return new Set();
+    }
+}
+
+function saveHiddenTripIds(hiddenSet) {
+    localStorage.setItem(HIDDEN_TRIPS_STORAGE_KEY, JSON.stringify([...hiddenSet]));
+}
 
 /**
  * Initialize the application
@@ -48,14 +64,22 @@ function initMap() {
         zoomControl: true
     });
 
-    // Add tile layer (CartoDB Positron - English labels)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // Esri World Imagery (satellite) base layer
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: CONFIG.maxZoom,
-        attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
     }).addTo(map);
 
-    // Initialize marker cluster group with better settings
-    markerClusterGroup = L.markerClusterGroup({
+    // Place/road labels on top of satellite (CartoDB labels-only overlay)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
+        maxZoom: CONFIG.maxZoom,
+        attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+        pane: 'overlayPane'
+    }).addTo(map);
+}
+
+function makeClusterGroup() {
+    return L.markerClusterGroup({
         maxClusterRadius: CONFIG.clusterRadius,
         disableClusteringAtZoom: CONFIG.disableClusteringAtZoom,
         spiderfyOnMaxZoom: false,
@@ -65,8 +89,6 @@ function initMap() {
         animateAddingMarkers: false,
         iconCreateFunction: createClusterIcon
     });
-
-    map.addLayer(markerClusterGroup);
 }
 
 /**
@@ -95,7 +117,7 @@ async function loadTripData() {
         const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
 
         // Load trips index
-        const indexResponse = await fetch(`${basePath}trips/index.json`);
+        const indexResponse = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
         const index = await indexResponse.json();
         let trips = index.trips;
 
@@ -123,33 +145,37 @@ async function loadTripData() {
             return;
         }
 
-        // Load all trip manifests and routes
+        const hidden = loadHiddenTripIds();
+
+        // Load each trip into its own route + marker cluster layer
         for (let i = 0; i < allTrips.length; i++) {
             const trip = allTrips[i];
             const tripPath = `${basePath}${trip.path}`;
             const color = CONFIG.routeColors[i % CONFIG.routeColors.length];
 
-            // Load manifest
-            const manifestResponse = await fetch(`${tripPath}/manifest.json`);
+            const manifestResponse = await fetch(`${tripPath}/manifest.json?t=${Date.now()}`);
             const manifest = await manifestResponse.json();
             manifest.tripId = trip.id;
             manifest.tripIndex = i;
-            manifest.tripPath = tripPath; // Store full path for later use
+            manifest.tripPath = tripPath;
             allManifests.push(manifest);
 
-            // Load and add route to map
-            const routeResponse = await fetch(`${tripPath}/route.geojson`);
+            const routeResponse = await fetch(`${tripPath}/route.geojson?t=${Date.now()}`);
             const routeData = await routeResponse.json();
-            addRouteToMap(routeData, color, trip.name);
+
+            tripLayers[trip.id] = {
+                route: buildRouteLayer(routeData, color, trip.name),
+                markers: buildMarkerLayer(manifest),
+                color,
+                visible: !hidden.has(trip.id),
+            };
+            if (tripLayers[trip.id].visible) {
+                tripLayers[trip.id].route.addTo(map);
+                tripLayers[trip.id].markers.addTo(map);
+            }
         }
 
-        // Update UI
         updateTripInfo();
-
-        // Add all photo markers
-        addAllPhotoMarkers();
-
-        // Fit map to content
         fitMapToBounds();
 
     } catch (error) {
@@ -159,36 +185,34 @@ async function loadTripData() {
 }
 
 /**
- * Update trip info overlay
+ * Update trip info overlay (reflects only currently-visible trips)
  */
 function updateTripInfo() {
-    const totalPhotos = allManifests.reduce((sum, m) => sum + m.photos.length, 0);
+    const visibleTrips = allTrips.filter(t => !tripLayers[t.id] || tripLayers[t.id].visible);
+    const visibleManifests = allManifests.filter(m =>
+        !tripLayers[m.tripId] || tripLayers[m.tripId].visible);
+    const totalPhotos = visibleManifests.reduce((sum, m) => sum + m.photos.length, 0);
     const viewConfig = typeof VIEW_CONFIG !== 'undefined' ? VIEW_CONFIG : { mode: 'all' };
 
     let titleText = '';
     let subtitleText = '';
 
-    if (viewConfig.mode === 'trip' && allTrips.length === 1) {
-        // Single trip view
-        titleText = allTrips[0].name;
-        subtitleText = `${formatDate(allTrips[0].dates.start)} - ${formatDate(allTrips[0].dates.end)}`;
+    if (visibleTrips.length === 1) {
+        // Single trip (either single-trip page or only one toggled on) — show its dates
+        titleText = visibleTrips[0].name;
+        subtitleText = `${formatDate(visibleTrips[0].dates.start)} - ${formatDate(visibleTrips[0].dates.end)}`;
     } else if (viewConfig.mode === 'year' && viewConfig.year) {
-        // Year view
         titleText = `${viewConfig.year}`;
-        subtitleText = allTrips.map(t => t.name).join(', ');
+        subtitleText = `${visibleTrips.length} trips`;
     } else {
-        // All trips view
-        titleText = allTrips.length === 1 ? allTrips[0].name : `${allTrips.length} Trips`;
-        if (allTrips.length === 1) {
-            subtitleText = `${formatDate(allTrips[0].dates.start)} - ${formatDate(allTrips[0].dates.end)}`;
-        } else {
-            subtitleText = allTrips.map(t => t.name).join(', ');
-        }
+        // All / multi-trip view — just the counts
+        titleText = `${visibleTrips.length} Trips`;
+        subtitleText = '';
     }
 
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
-    document.getElementById('photo-count').textContent = `${totalPhotos} photos`;
+    document.getElementById('photo-count').textContent = `${totalPhotos.toLocaleString()} photos`;
 }
 
 /**
@@ -204,69 +228,75 @@ function formatDate(dateStr) {
 }
 
 /**
- * Add route polyline to map
+ * Build a polyline layer for a trip's GPX route.
  */
-function addRouteToMap(routeData, color, tripName) {
+function buildRouteLayer(routeData, color, tripName) {
     const layer = L.geoJSON(routeData, {
         style: {
             color: color,
             weight: CONFIG.routeWeight,
             opacity: CONFIG.routeOpacity
         }
-    }).addTo(map);
-
-    // Add tooltip showing trip name
-    layer.bindTooltip(tripName, {
-        permanent: false,
-        sticky: true
     });
-
-    routeLayers.push(layer);
+    layer.bindTooltip(tripName, { permanent: false, sticky: true });
+    return layer;
 }
 
 /**
- * Add photo markers from all trips to cluster group
+ * Build a MarkerClusterGroup for a single trip's photos.
  */
-function addAllPhotoMarkers() {
-    // Combine all photos from all manifests
-    allManifests.forEach(manifest => {
-        // Create lookup for quick photo access
-        const photoLookup = {};
-        manifest.photos.forEach(photo => {
-            photo.tripName = manifest.trip_name; // Add trip name to each photo
-            photo.tripIndex = manifest.tripIndex; // Add trip index for coloring
-            photo.tripId = manifest.tripId; // Add trip ID for path lookup
-            photo.tripPath = manifest.tripPath; // Add trip path for asset URLs
-            photoLookup[photo.id] = photo;
-        });
-
-        // Add markers for each cluster
-        manifest.clusters.forEach(cluster => {
-            const photos = cluster.photo_ids.map(id => photoLookup[id]);
-
-            // Use first photo's thumbnail for the marker
-            const thumbnailUrl = `${manifest.tripPath}/${photos[0].thumbnail}`;
-
-            // Create marker
-            const marker = L.marker([cluster.lat, cluster.lon], {
-                icon: createPhotoIcon(photos.length, thumbnailUrl)
-            });
-
-            // Bind popup
-            if (photos.length === 1) {
-                marker.bindPopup(() => createSinglePhotoPopup(photos[0], cluster.location));
-            } else {
-                marker.bindPopup(() => createMultiPhotoPopup(photos, cluster.location));
-            }
-
-            // Store photo data on marker for gallery
-            marker.photoData = photos;
-            marker.locationName = cluster.location;
-
-            markerClusterGroup.addLayer(marker);
-        });
+function buildMarkerLayer(manifest) {
+    const group = makeClusterGroup();
+    const photoLookup = {};
+    manifest.photos.forEach(photo => {
+        photo.tripName = manifest.trip_name;
+        photo.tripIndex = manifest.tripIndex;
+        photo.tripId = manifest.tripId;
+        photo.tripPath = manifest.tripPath;
+        photoLookup[photo.id] = photo;
     });
+
+    manifest.clusters.forEach(cluster => {
+        const photos = cluster.photo_ids.map(id => photoLookup[id]);
+        const thumbnailUrl = `${manifest.tripPath}/${photos[0].thumbnail}`;
+        const marker = L.marker([cluster.lat, cluster.lon], {
+            icon: createPhotoIcon(photos.length, thumbnailUrl)
+        });
+        if (photos.length === 1) {
+            marker.bindPopup(() => createSinglePhotoPopup(photos[0], cluster.location));
+        } else {
+            marker.bindPopup(() => createMultiPhotoPopup(photos, cluster.location));
+        }
+        marker.photoData = photos;
+        marker.locationName = cluster.location;
+        group.addLayer(marker);
+    });
+    return group;
 }
+
+/**
+ * Show or hide all of a trip's content (route + markers). Called by the sidebar
+ * checkbox handler. Persists the hidden set in localStorage.
+ */
+function setTripVisibility(tripId, visible) {
+    const entry = tripLayers[tripId];
+    if (!entry || entry.visible === visible) return;
+    entry.visible = visible;
+    if (visible) {
+        entry.route.addTo(map);
+        entry.markers.addTo(map);
+    } else {
+        map.removeLayer(entry.route);
+        map.removeLayer(entry.markers);
+    }
+    const hidden = loadHiddenTripIds();
+    if (visible) hidden.delete(tripId);
+    else hidden.add(tripId);
+    saveHiddenTripIds(hidden);
+    updateTripInfo();
+    reinitLightbox();
+}
+window.setTripVisibility = setTripVisibility;
 
 /**
  * Create icon for photo marker with thumbnail preview
@@ -349,21 +379,17 @@ function createExifHtml(photo) {
 }
 
 /**
- * Fit map to show all content
+ * Fit map to show currently-visible trips' content
  */
 function fitMapToBounds() {
     const bounds = L.latLngBounds([]);
-
-    // Include all route bounds
-    routeLayers.forEach(layer => {
-        bounds.extend(layer.getBounds());
+    Object.values(tripLayers).forEach(entry => {
+        if (!entry.visible) return;
+        try { bounds.extend(entry.route.getBounds()); } catch (e) {}
+        if (entry.markers.getLayers().length > 0) {
+            bounds.extend(entry.markers.getBounds());
+        }
     });
-
-    // Include marker bounds
-    if (markerClusterGroup.getLayers().length > 0) {
-        bounds.extend(markerClusterGroup.getBounds());
-    }
-
     if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [50, 50] });
     }
@@ -373,27 +399,28 @@ function fitMapToBounds() {
  * Initialize GLightbox
  */
 function initLightbox() {
-    // Build gallery elements from all manifests
-    const galleryContainer = document.getElementById('gallery');
+    rebuildLightbox();
+}
 
+function rebuildLightbox() {
+    const galleryContainer = document.getElementById('gallery');
+    galleryContainer.innerHTML = '';
     allManifests.forEach(manifest => {
+        if (tripLayers[manifest.tripId] && !tripLayers[manifest.tripId].visible) return;
         manifest.photos.forEach(photo => {
             const a = document.createElement('a');
             a.href = `${manifest.tripPath}/${photo.display}`;
             a.className = 'glightbox';
             a.dataset.photoId = photo.id;
             a.dataset.gallery = 'trip-photos';
-
             if (showExif && photo.camera_settings) {
                 const { iso, aperture, shutter } = photo.camera_settings;
                 a.dataset.description = `ISO ${iso} | ${aperture} | ${shutter}`;
             }
-
             galleryContainer.appendChild(a);
         });
     });
-
-    // Initialize GLightbox
+    if (lightbox) lightbox.destroy();
     lightbox = GLightbox({
         selector: '.glightbox',
         touchNavigation: true,
@@ -440,40 +467,8 @@ function initExifToggle() {
     });
 }
 
-/**
- * Reinitialize lightbox (e.g., after EXIF toggle)
- */
 function reinitLightbox() {
-    if (lightbox) {
-        lightbox.destroy();
-    }
-
-    // Clear and rebuild gallery
-    const galleryContainer = document.getElementById('gallery');
-    galleryContainer.innerHTML = '';
-
-    allManifests.forEach(manifest => {
-        manifest.photos.forEach(photo => {
-            const a = document.createElement('a');
-            a.href = `${manifest.tripPath}/${photo.display}`;
-            a.className = 'glightbox';
-            a.dataset.photoId = photo.id;
-            a.dataset.gallery = 'trip-photos';
-
-            if (showExif && photo.camera_settings) {
-                const { iso, aperture, shutter } = photo.camera_settings;
-                a.dataset.description = `ISO ${iso} | ${aperture} | ${shutter}`;
-            }
-
-            galleryContainer.appendChild(a);
-        });
-    });
-
-    lightbox = GLightbox({
-        selector: '.glightbox',
-        touchNavigation: true,
-        loop: true
-    });
+    rebuildLightbox();
 }
 
 // Initialize on DOM ready

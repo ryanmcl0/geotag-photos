@@ -1,0 +1,25 @@
+# ── Generated output (personal trip data) ────────────────────────────────────
+
+# Compressed images — hosted on R2, never in git
+hosted-photos/
+
+# Symlinks into hosted-photos/
+web/trips/*/thumbnails
+web/trips/*/display
+
+# Generated trip metadata (manifests, routes, index)
+web/trips/
+
+# Generated year/trip HTML pages
+web/20*/
+
+# ── Credentials / local config ────────────────────────────────────────────────
+.env.deploy
+wrangler.toml
+
+# ── OS / tooling ─────────────────────────────────────────────────────────────
+.DS_Store
+__pycache__/
+*.pyc
+venv/
+.venv/

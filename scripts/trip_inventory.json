@@ -1,0 +1,115 @@
+{
+  "scanned_at": "2026-05-26",
+  "drive_root": "/Volumes/RYAN",
+  "edits_root": "/Volumes/RYAN/Edits",
+  "notes": "Photo counts include JPG/JPEG/PNG/TIFF up to depth 2. Some Edits folders also contain raw .ARW/.DNG/.MP4 in the originating year folder (different path). GPX paths are the parent folder containing all track .gpx files for that trip.",
+  "trips_with_gpx": [
+    {
+      "name": "2020 Via Alpina",
+      "edits_path": "/Volumes/RYAN/Edits/2020 Via Alpina",
+      "photo_count": 327,
+      "gpx_path": "/Volumes/RYAN/2020/Alps/2020 Via Alpina GPX",
+      "gpx_count": 22,
+      "notes": "Multi-country thru-hike Slovenia/Italy/Austria, days 1-22"
+    },
+    {
+      "name": "2024 China (summer — North Xinjiang + Guizhou)",
+      "edits_path": "/Volumes/RYAN/Edits/2024 China",
+      "photo_count": 1201,
+      "gpx_path": "/Volumes/RYAN/2024/Asia 24 pt2/06.2024 China/2024 North Xinjiang + Guizhou GPX",
+      "gpx_count": 6
+    },
+    {
+      "name": "2024 China Nov (South Xinjiang)",
+      "edits_path": "/Volumes/RYAN/Edits/2024 China Nov",
+      "photo_count": 1366,
+      "gpx_path": "/Volumes/RYAN/2024/China - Zhejiang, Shanghai, Jiangsu, Jiangxi, Xinjiang/Xinjiang/2024 South Xinjiang GPX",
+      "gpx_count": 13,
+      "notes": "Edits folder also contains many non-Xinjiang building shoots — GPX only covers the Xinjiang leg"
+    },
+    {
+      "name": "2024 Japan",
+      "edits_path": "/Volumes/RYAN/Edits/2024 Japan",
+      "photo_count": 143,
+      "gpx_path": "/Volumes/RYAN/2024/Asia 24 pt2/07.2024 Japan/2024 Japan GPX",
+      "gpx_count": 6
+    },
+    {
+      "name": "2024 Kyrgyzstan",
+      "edits_path": "/Volumes/RYAN/Edits/2024 Kyrgyzstan",
+      "photo_count": 940,
+      "gpx_path": "/Volumes/RYAN/2024/Kyrgyzstan/2024 Kyrgyzstan GPX",
+      "gpx_count": 9
+    },
+    {
+      "name": "2024 Mongolia (North + South Gobi)",
+      "edits_path": "/Volumes/RYAN/Edits/2024 Mongolia",
+      "photo_count": 385,
+      "gpx_paths": [
+        "/Volumes/RYAN/2024/Asia 24 pt2/06-07.2024 Mongolia/2024 Mongolia North GPX",
+        "/Volumes/RYAN/2024/Asia 24 pt2/06-07.2024 Mongolia/2024 Mongolia South Gobi GPX"
+      ],
+      "gpx_count": 12
+    },
+    {
+      "name": "2025 China CNY (North)",
+      "edits_path": "/Volumes/RYAN/Edits/2025 China CNY",
+      "photo_count": 1348,
+      "gpx_path": "/Volumes/RYAN/2025/01:25 China/2025 China CNY GPX",
+      "gpx_count": 21
+    },
+    {
+      "name": "2026:02 China CNY (Bridges)",
+      "edits_path": "/Volumes/RYAN/Edits/2026:02 China CNY",
+      "photo_count": 325,
+      "gpx_path": "/Volumes/RYAN/2026/02-03.26 China CNY/Bridges/China CNY 2026 Bridges GPX",
+      "gpx_count": 20,
+      "notes": "GPX covers the Bridges leg specifically — Edits folder may also include non-Bridges Guangzhou/Shenzhen shoots"
+    }
+  ],
+  "trips_without_gpx": [
+    { "name": "2018 Hong Kong", "edits_path": "/Volumes/RYAN/Edits/2018 Hong Kong", "photo_count": 337 },
+    { "name": "2018 Paris", "edits_path": "/Volumes/RYAN/Edits/2018 Paris", "photo_count": 178 },
+    { "name": "2019 Frankfurt", "edits_path": "/Volumes/RYAN/Edits/2019 Frankfurt", "photo_count": 121 },
+    { "name": "2019 NYC", "edits_path": "/Volumes/RYAN/Edits/2019 NYC", "photo_count": 344 },
+    { "name": "2019 Scotland", "edits_path": "/Volumes/RYAN/Edits/2019 Scotland", "photo_count": 30 },
+    { "name": "2019 UK", "edits_path": "/Volumes/RYAN/Edits/2019 UK", "photo_count": 231 },
+    { "name": "2020 UK", "edits_path": "/Volumes/RYAN/Edits/2020 UK", "photo_count": 129 },
+    { "name": "2020:09 France - Paris", "edits_path": "/Volumes/RYAN/Edits/2020:09 France - Paris", "photo_count": 141 },
+    { "name": "2020:12 UAE - Dubai", "edits_path": "/Volumes/RYAN/Edits/2020:12 UAE - Dubai", "photo_count": 300 },
+    { "name": "2021-2023 UK", "edits_path": "/Volumes/RYAN/Edits/2021-2023 UK", "photo_count": 227 },
+    { "name": "2021:10 Alps - Mont Blanc", "edits_path": "/Volumes/RYAN/Edits/2021:10 Alps - Mont Blanc", "photo_count": 68 },
+    { "name": "2022:04 Egypt - Cairo", "edits_path": "/Volumes/RYAN/Edits/2022:04 Egypt - Cairo", "photo_count": 120 },
+    { "name": "2022:05 Malaysia - Kuala Lumpur", "edits_path": "/Volumes/RYAN/Edits/2022:05 Malaysia - Kuala Lumpur", "photo_count": 85 },
+    { "name": "2022:06 Poland - Warsaw", "edits_path": "/Volumes/RYAN/Edits/2022:06 Poland - Warsaw", "photo_count": 15 },
+    { "name": "2022:07 Thailand - Bangkok, Chiang Mai", "edits_path": "/Volumes/RYAN/Edits/2022:07 Thailand - Bangkok, Chiang Mai", "photo_count": 205 },
+    { "name": "2022:08 Alps - Italy, Switzerland", "edits_path": "/Volumes/RYAN/Edits/2022:08 Alps - Italy, Switzerland", "photo_count": 41 },
+    { "name": "2022:11 Northern Africa - Morocco, Mauritania, Western Sahara", "edits_path": "/Volumes/RYAN/Edits/2022:11 Northern Africa - Morocco, Mauritania, Western Sahara", "photo_count": 140 },
+    { "name": "2022:12 South Korea - Seoul, Dongtan, Cheonan", "edits_path": "/Volumes/RYAN/Edits/2022:12 South Korea - Seoul, Dongtan, Cheonan", "photo_count": 426 },
+    { "name": "2023:04 Israel - Tel Aviv, Bat Yam, Netanya", "edits_path": "/Volumes/RYAN/Edits/2023:04 Israel - Tel Aviv, Bat Yam, Netanya", "photo_count": 242 },
+    { "name": "2023:05 Germany - Hamburg", "edits_path": "/Volumes/RYAN/Edits/2023:05 Germany - Hamburg", "photo_count": 52 },
+    { "name": "2023:07 Asia - Vietnam, South Korea, Phillipines", "edits_path": "/Volumes/RYAN/Edits/2023:07 Asia - Vietnam, South Korea, Phillipines", "photo_count": 508 },
+    { "name": "2023:10 Norway - Narvik, Bergen", "edits_path": "/Volumes/RYAN/Edits/2023:10 Norway - Narvik, Bergen", "photo_count": 70 },
+    { "name": "2023:11 Austria - Hallstatt, Vienna", "edits_path": "/Volumes/RYAN/Edits/2023:11 Austria - Hallstatt, Vienna", "photo_count": 25 },
+    { "name": "2023:11 Sweden - Gothenburg", "edits_path": "/Volumes/RYAN/Edits/2023:11 Sweden - Gothenburg", "photo_count": 30 },
+    { "name": "2023:11 Turkey - Istanbul", "edits_path": "/Volumes/RYAN/Edits/2023:11 Turkey - Istanbul", "photo_count": 58 },
+    { "name": "2023:12 Iceland - South Coast, Italy - Courmayeur, Gran Paradiso, Turin", "edits_path": "/Volumes/RYAN/Edits/2023:12 Iceland - South Coast, Italy - Courmayeur, Gran Paradiso, Turin", "photo_count": 163 },
+    { "name": "2024 Europe - Germany, Switzerland, France, Italy, Austria", "edits_path": "/Volumes/RYAN/Edits/2024 Europe - Germany, Switzerland, France, Italy, Austria", "photo_count": 122 },
+    { "name": "2024 Hong Kong", "edits_path": "/Volumes/RYAN/Edits/2024 Hong Kong", "photo_count": 60 },
+    { "name": "2024 India", "edits_path": "/Volumes/RYAN/Edits/2024 India", "photo_count": 236 },
+    { "name": "2024 Indonesia", "edits_path": "/Volumes/RYAN/Edits/2024 Indonesia", "photo_count": 44 },
+    { "name": "2024 Korea", "edits_path": "/Volumes/RYAN/Edits/2024 Korea", "photo_count": 24 },
+    { "name": "2024 Malaysia", "edits_path": "/Volumes/RYAN/Edits/2024 Malaysia", "photo_count": 8 },
+    { "name": "2024:01 Italy - Sicily, Etna", "edits_path": "/Volumes/RYAN/Edits/2024:01 Italy - Sicily, Etna", "photo_count": 53 },
+    { "name": "2024:08 Denmark - Billund, Copenhagen", "edits_path": "/Volumes/RYAN/Edits/2024:08 Denmark - Billund, Copenhagen", "photo_count": 125 }
+  ],
+  "in_progress_edits": [
+    { "name": "2023:03 Italy - Lake Como", "photo_count": 3 },
+    { "name": "2023:08 France - Paris", "photo_count": 1 },
+    { "name": "2025 UK", "photo_count": 5 },
+    { "name": "2025:06 Finland, Estonia, Latvia, Austria", "photo_count": 1 },
+    { "name": "2025:07 Italy - Dolomites birthday", "photo_count": 2 },
+    { "name": "2025:09 Austria - Vienna", "photo_count": 1 }
+  ],
+  "non_trip_buckets": ["Lightroom Cat", "Mixed edits", "Posts", "Reels", "Reports", "UK", "Videos"]
+}

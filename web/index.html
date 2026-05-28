@@ -27,6 +27,12 @@
             <div class="sidebar-header">
                 <h2>Travel Maps</h2>
             </div>
+            <!-- Trip info summary -->
+            <div id="trip-info" class="trip-info">
+                <h1 id="trip-name">Loading...</h1>
+                <p id="trip-dates"></p>
+                <p id="photo-count"></p>
+            </div>
             <ul class="nav-list" id="nav-list">
                 <!-- Populated by sidebar.js -->
             </ul>
@@ -43,13 +49,6 @@
         <main class="map-container">
             <!-- Map container -->
             <div id="map"></div>
-
-            <!-- Trip info overlay -->
-            <div id="trip-info" class="trip-info">
-                <h1 id="trip-name">Loading...</h1>
-                <p id="trip-dates"></p>
-                <p id="photo-count"></p>
-            </div>
 
             <!-- EXIF toggle button -->
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info">

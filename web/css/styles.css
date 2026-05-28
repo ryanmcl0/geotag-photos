@@ -127,6 +127,26 @@ html, body {
     font-weight: 500;
 }
 
+.trip-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 12px;
+}
+
+.trip-item .nav-link {
+    padding: 8px 12px 8px 0;
+    flex: 1;
+}
+
+.trip-toggle {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    accent-color: #e11d48;
+    flex-shrink: 0;
+}
+
 /* Mobile sidebar toggle */
 .sidebar-toggle {
     display: none;
@@ -186,26 +206,16 @@ html, body {
     left: 0;
 }
 
-/* Trip info overlay - modern glass effect */
+/* Trip info summary - sits inside the sidebar */
 .trip-info {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
     padding: 16px 20px;
-    border-radius: 14px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-    z-index: 1000;
-    max-width: 280px;
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-bottom: 1px solid #e5e5e5;
 }
 
 .trip-info h1 {
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
     color: #1a1a1a;
 }
 
@@ -213,6 +223,7 @@ html, body {
     font-size: 0.8rem;
     color: #666;
     margin-bottom: 2px;
+    line-height: 1.4;
 }
 
 /* EXIF toggle button - modern style */
@@ -439,18 +450,6 @@ html, body {
 
     .sidebar-toggle {
         display: flex;
-    }
-
-    .trip-info {
-        top: 10px;
-        left: 70px;
-        right: 10px;
-        max-width: none;
-        padding: 12px 15px;
-    }
-
-    .trip-info h1 {
-        font-size: 1.1rem;
     }
 
     .exif-toggle {

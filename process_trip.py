@@ -108,6 +108,34 @@ def _simplify_coords(coords: list, tolerance: float) -> list:
     return [coords[0], coords[-1]]
 
 
+def get_countries_from_gpx(gpx_path: Path, n_samples: int = 20) -> list[str]:
+    """Sample points along the GPX track and reverse-geocode to unique country names."""
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return []
+
+    with open(gpx_path, 'r') as f:
+        gpx = gpxpy.parse(f)
+
+    all_points = [
+        (pt.latitude, pt.longitude)
+        for track in gpx.tracks
+        for segment in track.segments
+        for pt in segment.points
+    ]
+    if not all_points:
+        return []
+
+    # Sample evenly across the track
+    step = max(1, len(all_points) // n_samples)
+    samples = all_points[::step][:n_samples]
+
+    results = rg.search(samples, verbose=False)
+    countries = sorted(set(r['cc'] for r in results if r.get('cc')))
+    return countries
+
+
 def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0,
                    simplify_tolerance: float = 0.0001) -> dict:
     """
@@ -500,7 +528,7 @@ def find_dji_raw(photo_path: Path, raws_dir: Path) -> Optional[Path]:
     return None
 
 
-def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_count: int):
+def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_count: int, countries: list = None):
     """
     Update the trips index file with the new trip.
     """
@@ -525,14 +553,17 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     index['trips'] = [t for t in index['trips'] if t.get('id') != trip_id]
 
     # Add new trip entry
-    index['trips'].append({
+    entry = {
         'id': trip_id,
         'name': trip_name,
         'year': year,
         'dates': dates,
         'photo_count': photo_count,
         'path': f'trips/{trip_id}'
-    })
+    }
+    if countries:
+        entry['countries'] = countries
+    index['trips'].append(entry)
 
     # Sort by start date (most recent first)
     index['trips'].sort(key=lambda t: t['dates']['start'], reverse=True)
@@ -1100,6 +1131,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     clusters = cluster_photos(processed_photos, cluster_radius)
     click.echo(f"Created {len(clusters)} clusters")
 
+    # Detect countries from GPX
+    click.echo("\nDetecting countries...")
+    countries = get_countries_from_gpx(gpx_path)
+    if countries:
+        click.echo(f"Countries: {', '.join(countries)}")
+
     # Generate manifest
     manifest = {
         'trip_name': name,
@@ -1107,6 +1144,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             'start': trip_start,
             'end': trip_end
         },
+        'countries': countries,
         'source': {
             'photos_path': str(photos_path),
             'gpx_path': str(gpx_path),
@@ -1142,7 +1180,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             output_path,
             name,
             manifest['dates'],
-            len(processed_photos)
+            len(processed_photos),
+            countries=countries,
         )
         click.echo(f"Updated trips index: {index_path}")
 

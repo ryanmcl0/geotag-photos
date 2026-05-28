@@ -108,6 +108,59 @@ def _simplify_coords(coords: list, tolerance: float) -> list:
     return [coords[0], coords[-1]]
 
 
+def geocode_from_name(trip_name: str) -> Optional[dict]:
+    """Derive a fallback lat/lon from the trip name by geocoding location parts.
+
+    Strips the year prefix, takes the part after ' - ' if present, then geocodes
+    each comma-separated location and returns their centroid.
+    """
+    import urllib.request
+    import urllib.parse
+    import time
+
+    loc = re.sub(r'^\d{4}[:\d]*\s+', '', trip_name).strip()
+    if ' - ' in loc:
+        loc = loc.split(' - ', 1)[1]
+
+    parts = [p.strip() for p in loc.split(',') if p.strip()]
+
+    coords = []
+    for part in parts[:5]:
+        url = 'https://nominatim.openstreetmap.org/search?' + urllib.parse.urlencode({
+            'q': part, 'format': 'json', 'limit': 1
+        })
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'geotag-photos/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                results = json.loads(resp.read())
+                if results:
+                    coords.append((float(results[0]['lat']), float(results[0]['lon'])))
+        except Exception:
+            pass
+        time.sleep(1.1)  # Nominatim rate limit: 1 req/s
+
+    if not coords:
+        return None
+    return {
+        'lat': sum(c[0] for c in coords) / len(coords),
+        'lon': sum(c[1] for c in coords) / len(coords),
+    }
+
+
+def get_countries_from_photos(photos: list[dict]) -> list[str]:
+    """Reverse-geocode countries from photos that have exact EXIF GPS."""
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return []
+    exact = [(p['lat'], p['lon']) for p in photos if p.get('gps_source') == 'exif']
+    if not exact:
+        return []
+    step = max(1, len(exact) // 20)
+    results = rg.search(exact[::step][:20], verbose=False)
+    return sorted(set(r['cc'] for r in results if r.get('cc')))
+
+
 def get_countries_from_gpx(gpx_path: Path, n_samples: int = 20) -> list[str]:
     """Sample points along the GPX track and reverse-geocode to unique country names."""
     try:
@@ -711,7 +764,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
 
 @click.command()
 @click.option('--name', required=True, help='Trip name for display')
-@click.option('--gpx', required=True, type=click.Path(exists=True), help='Path to GPX file')
+@click.option('--gpx', required=False, default=None, type=click.Path(), help='Path to GPX file (omit for no-GPX trips — uses EXIF GPS + geocoded fallback)')
 @click.option('--photos', required=True, type=click.Path(exists=True), help='Path to photos directory')
 @click.option('--output', default=None, type=click.Path(),
               help='Metadata output dir (default: web/trips/<slug>)')
@@ -764,8 +817,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     Metadata (manifest.json, route.geojson) goes to web/trips/<slug>/.
     Symlinks at web/trips/<slug>/{thumbnails,display} point to hosted-photos/<slug>/.
     """
-    gpx_path = Path(gpx)
+    gpx_path = Path(gpx) if gpx else None
+    no_gpx_mode = gpx_path is None
     photos_path = Path(photos)
+
+    if gpx_path and not gpx_path.exists():
+        click.echo(f"Error: GPX file not found: {gpx_path}", err=True)
+        sys.exit(1)
 
     slug = slugify(name)
     if output:
@@ -781,7 +839,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     image_ext = FORMAT_TO_EXT[format_name]
 
     click.echo(f"Processing trip: {name}")
-    click.echo(f"GPX file: {gpx_path}")
+    click.echo(f"GPX file: {gpx_path or 'none (no-GPX mode — EXIF GPS + geocoded fallback)'}")
     click.echo(f"Photos directory: {photos_path}")
     click.echo(f"Output directory: {output_path}")
     click.echo(f"Hosted photos directory: {hosted_photos_path}")
@@ -794,18 +852,20 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     if raws:
         click.echo(f"DJI raws directory: {raws}")
 
-    # Parse GPX
-    click.echo("\nParsing GPX file...")
-    trackpoints = parse_gpx(gpx_path)
-    click.echo(f"Found {len(trackpoints)} trackpoints")
-
-    if not trackpoints:
-        click.echo("Error: No trackpoints found in GPX file", err=True)
-        sys.exit(1)
-
-    # Get trip date range
-    trip_start = trackpoints[0]['time'].date().isoformat()
-    trip_end = trackpoints[-1]['time'].date().isoformat()
+    # Parse GPX (or skip in no-GPX mode)
+    if not no_gpx_mode:
+        click.echo("\nParsing GPX file...")
+        trackpoints = parse_gpx(gpx_path)
+        click.echo(f"Found {len(trackpoints)} trackpoints")
+        if not trackpoints:
+            click.echo("Error: No trackpoints found in GPX file", err=True)
+            sys.exit(1)
+        trip_start = trackpoints[0]['time'].date().isoformat()
+        trip_end = trackpoints[-1]['time'].date().isoformat()
+    else:
+        click.echo("\nNo-GPX mode — dates will be derived from EXIF timestamps")
+        trackpoints = []
+        trip_start = trip_end = None  # filled in after processing photos
 
     # Find photos
     click.echo("\nFinding photos...")
@@ -869,15 +929,18 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     gpx_tolerance_seconds = gpx_tolerance_hours * 3600
 
     # GPX window in UTC, used to compute "how far out of range" deltas
-    _t0 = trackpoints[0]['time']
-    _t1 = trackpoints[-1]['time']
-    if _t0.tzinfo is None: _t0 = _t0.replace(tzinfo=timezone.utc)
-    if _t1.tzinfo is None: _t1 = _t1.replace(tzinfo=timezone.utc)
-    gpx_window_start, gpx_window_end = _t0, _t1
+    if trackpoints:
+        _t0 = trackpoints[0]['time']
+        _t1 = trackpoints[-1]['time']
+        if _t0.tzinfo is None: _t0 = _t0.replace(tzinfo=timezone.utc)
+        if _t1.tzinfo is None: _t1 = _t1.replace(tzinfo=timezone.utc)
+        gpx_window_start, gpx_window_end = _t0, _t1
+    else:
+        gpx_window_start = gpx_window_end = None
 
-    # Decide fallback location for photos with no GPS + outside GPX window.
-    # Default chain: nearest placed photo → nearest GPX endpoint → centroid.
-    # User can override with an explicit lat,lon, or disable with "none".
+    # Decide fallback location for photos with no GPS.
+    # With GPX: default chain → nearest placed photo → nearest trackpoint → centroid.
+    # Without GPX: auto-geocode from trip name (or --fallback-location override).
     fallback_gps: Optional[dict] = None
     fallback_source = None
     if fallback_location and fallback_location.lower() == 'none':
@@ -890,13 +953,23 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         except ValueError:
             click.echo(f"Error: --fallback-location must be 'lat,lon' or 'none'", err=True)
             sys.exit(1)
+    elif no_gpx_mode:
+        click.echo("Auto-geocoding fallback location from trip name...")
+        geocoded = geocode_from_name(name)
+        if geocoded:
+            fallback_gps = geocoded
+            fallback_source = 'geocoded'
+            click.echo(f"  → {fallback_gps['lat']:.4f}, {fallback_gps['lon']:.4f}")
+        else:
+            click.echo("  ⚠ Geocoding failed — photos without EXIF GPS will be dropped")
     else:
-        # Sentinel — actual placement chosen per-photo in second pass.
+        # GPX mode: sentinel centroid, real placement chosen per-photo in second pass
         fallback_gps = {
             'lat': sum(p['lat'] for p in trackpoints) / len(trackpoints),
             'lon': sum(p['lon'] for p in trackpoints) / len(trackpoints),
         }
         fallback_source = 'default_chain'
+
     if fallback_source == 'default_chain':
         click.echo(f"Fallback chain: nearest placed photo (≤{nearest_photo_max_hours}h) "
                    f"→ nearest GPX trackpoint by time → GPX centroid")
@@ -948,7 +1021,10 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
         # Compute how far out of the GPX window the photo is (for diagnostics either way)
         pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
-        if pt < gpx_window_start:
+        if gpx_window_start is None:
+            delta_h = 0.0
+            direction = 'no_gpx'
+        elif pt < gpx_window_start:
             delta_h = (gpx_window_start - pt).total_seconds() / 3600
             direction = 'before'
         elif pt > gpx_window_end:
@@ -1112,6 +1188,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if gps_source_counts.get('pending_fallback'):
             gps_source_counts['fallback_centroid'] = gps_source_counts.pop('pending_fallback')
 
+    # Derive date range from EXIF when no GPX
+    if trip_start is None:
+        timestamps = sorted(p['timestamp'] for p in processed_photos)
+        trip_start = timestamps[0][:10] if timestamps else datetime.now().date().isoformat()
+        trip_end = timestamps[-1][:10] if timestamps else trip_start
+
     # Report results
     click.echo(f"\nProcessed: {len(processed_photos)} photos")
     if gps_source_counts:
@@ -1131,9 +1213,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     clusters = cluster_photos(processed_photos, cluster_radius)
     click.echo(f"Created {len(clusters)} clusters")
 
-    # Detect countries from GPX
+    # Detect countries
     click.echo("\nDetecting countries...")
-    countries = get_countries_from_gpx(gpx_path)
+    if not no_gpx_mode:
+        countries = get_countries_from_gpx(gpx_path)
+    else:
+        countries = get_countries_from_photos(processed_photos)
     if countries:
         click.echo(f"Countries: {', '.join(countries)}")
 
@@ -1147,7 +1232,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         'countries': countries,
         'source': {
             'photos_path': str(photos_path),
-            'gpx_path': str(gpx_path),
+            'gpx_path': str(gpx_path) if gpx_path else None,
         },
         'compression': {
             'format': format_name,
@@ -1168,8 +1253,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             json.dump(manifest, f, indent=2)
         click.echo(f"\nSaved manifest: {manifest_path}")
 
-        # Convert GPX to GeoJSON (splits on big jumps to avoid teleport lines)
-        geojson_data = gpx_to_geojson(gpx_path, split_gap_km=gpx_split_gap_km)
+        # Convert GPX to GeoJSON (or write empty for no-GPX trips)
+        if not no_gpx_mode:
+            geojson_data = gpx_to_geojson(gpx_path, split_gap_km=gpx_split_gap_km)
+        else:
+            geojson_data = {'type': 'FeatureCollection', 'features': []}
         geojson_path = output_path / 'route.geojson'
         with open(geojson_path, 'w') as f:
             json.dump(geojson_data, f, indent=2)

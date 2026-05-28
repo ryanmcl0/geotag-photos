@@ -226,6 +226,12 @@ html, body {
     line-height: 1.4;
 }
 
+.country-list {
+    font-size: 0.75rem;
+    color: #999;
+    margin-top: 4px;
+}
+
 /* EXIF toggle button - modern style */
 .exif-toggle {
     position: absolute;
@@ -382,14 +388,7 @@ html, body {
 
 /* Cluster popup with multiple photos */
 .cluster-popup {
-    max-width: 300px;
-}
-
-.cluster-popup h3 {
-    font-size: 0.95rem;
-    margin-bottom: 8px;
-    color: #1a1a1a;
-    font-weight: 600;
+    width: 210px;
 }
 
 .cluster-popup .photo-grid {
@@ -400,11 +399,11 @@ html, body {
 
 .cluster-popup .photo-grid img {
     width: 100%;
-    height: 60px;
+    height: 64px;
     object-fit: cover;
     border-radius: 6px;
     cursor: pointer;
-    transition: transform 0.2s, opacity 0.2s;
+    transition: opacity 0.2s;
 }
 
 .cluster-popup .photo-grid img:hover {

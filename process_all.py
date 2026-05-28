@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""
+Process all trips listed in trips.json.
+
+Skips trips that are already processed (manifest.json exists).
+Use --force to reprocess everything, or --trip NAME to target one trip.
+
+Usage:
+  ./process_all.py                        # process new/unprocessed trips
+  ./process_all.py --force                # reprocess all trips
+  ./process_all.py --trip "Scotland"      # process one trip by name (partial match)
+  ./process_all.py --dry-run              # show what would run without executing
+"""
+
+import json
+import re
+import sys
+import subprocess
+import tempfile
+from pathlib import Path
+
+import click
+
+PROJECT_ROOT = Path(__file__).parent.resolve()
+TRIPS_CONFIG = PROJECT_ROOT / 'trips.json'
+WEB_TRIPS_DIR = PROJECT_ROOT / 'web' / 'trips'
+
+
+def slugify(name: str) -> str:
+    s = name.lower()
+    s = re.sub(r'[^a-z0-9]+', '-', s)
+    return s.strip('-')
+
+
+def is_processed(slug: str) -> bool:
+    return (WEB_TRIPS_DIR / slug / 'manifest.json').exists()
+
+
+def gather_gpx_files(gpx_entry) -> list[Path]:
+    """Collect .gpx files from a path string or list of path strings."""
+    paths = [gpx_entry] if isinstance(gpx_entry, str) else gpx_entry
+    files = []
+    for p in paths:
+        path = Path(p)
+        if not path.exists():
+            click.echo(f"  ⚠ GPX path not found: {path}", err=True)
+            continue
+        if path.is_file():
+            files.append(path)
+        else:
+            found = sorted(path.glob('*.gpx')) + sorted(path.glob('*.GPX'))
+            if not found:
+                click.echo(f"  ⚠ No .gpx files in: {path}", err=True)
+            files.extend(found)
+    return files
+
+
+def merge_gpx_to_temp(gpx_files: list[Path]) -> Path:
+    """Merge multiple GPX files into a single temp file. Returns the temp path."""
+    try:
+        import gpxpy
+        import gpxpy.gpx
+    except ImportError:
+        click.echo("Error: gpxpy not installed", err=True)
+        sys.exit(1)
+
+    combined = gpxpy.gpx.GPX()
+    for f in gpx_files:
+        with open(f) as fh:
+            gpx = gpxpy.parse(fh)
+        for track in gpx.tracks:
+            combined.tracks.append(track)
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.gpx', delete=False)
+    Path(tmp.name).write_text(combined.to_xml())
+    tmp.close()
+    return Path(tmp.name)
+
+
+def build_command(trip: dict, gpx_path: Path | None) -> list[str]:
+    cmd = [sys.executable, 'process_trip.py',
+           '--name', trip['name'],
+           '--photos', trip['edits']]
+
+    if gpx_path:
+        cmd += ['--gpx', str(gpx_path)]
+
+    opts = trip.get('options', {})
+    if opts.get('geosync'):
+        cmd += ['--geosync', opts['geosync']]
+    if opts.get('filter_raws'):
+        cmd += ['--filter-by-raws-in', opts['filter_raws']]
+    if opts.get('fallback_location'):
+        cmd += ['--fallback-location', opts['fallback_location']]
+    if opts.get('cluster_radius'):
+        cmd += ['--cluster-radius', str(opts['cluster_radius'])]
+
+    return cmd
+
+
+@click.command()
+@click.option('--force', is_flag=True, help='Reprocess already-processed trips')
+@click.option('--trip', 'trip_filter', default=None, metavar='NAME',
+              help='Process only trips whose name contains NAME (case-insensitive)')
+@click.option('--dry-run', is_flag=True, help='Show what would run without executing')
+def process_all(force: bool, trip_filter: str | None, dry_run: bool):
+    """Process all trips listed in trips.json."""
+    if not TRIPS_CONFIG.exists():
+        click.echo("Error: trips.json not found. Copy trips.example.json to trips.json and fill it in.", err=True)
+        sys.exit(1)
+
+    config = json.loads(TRIPS_CONFIG.read_text())
+    trips = config.get('trips', [])
+
+    if trip_filter:
+        trips = [t for t in trips if trip_filter.lower() in t['name'].lower()]
+        if not trips:
+            click.echo(f"No trips matching '{trip_filter}'", err=True)
+            sys.exit(1)
+
+    to_process, already_done = [], []
+    for trip in trips:
+        slug = slugify(trip['name'])
+        if not force and is_processed(slug):
+            already_done.append(trip['name'])
+        else:
+            to_process.append(trip)
+
+    if already_done:
+        click.echo(f"Skipping {len(already_done)} already-processed trip(s) (--force to reprocess)")
+
+    if not to_process:
+        click.echo("Nothing to process.")
+        return
+
+    click.echo(f"\nWill process {len(to_process)} trip(s):")
+    for t in to_process:
+        tag = 'GPX' if t.get('gpx') else 'no GPX'
+        vis = 'public' if t.get('public') else 'private'
+        click.echo(f"  [{tag}] [{vis}] {t['name']}")
+
+    if dry_run:
+        click.echo("\n[dry-run — no processing done]")
+        return
+
+    click.echo()
+    failed = []
+    for trip in to_process:
+        click.echo(f"{'='*60}")
+        click.echo(f"  {trip['name']}")
+        click.echo(f"{'='*60}")
+
+        tmp_gpx = None
+        try:
+            gpx_path = None
+            if trip.get('gpx'):
+                gpx_files = gather_gpx_files(trip['gpx'])
+                if not gpx_files:
+                    click.echo("  ⚠ No GPX files found — running in no-GPX mode")
+                elif len(gpx_files) == 1:
+                    gpx_path = gpx_files[0]
+                else:
+                    click.echo(f"  Merging {len(gpx_files)} GPX files...")
+                    tmp_gpx = merge_gpx_to_temp(gpx_files)
+                    gpx_path = tmp_gpx
+
+            cmd = build_command(trip, gpx_path)
+            result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+            if result.returncode != 0:
+                click.echo(f"\n  ✗ Failed (exit {result.returncode})", err=True)
+                failed.append(trip['name'])
+        finally:
+            if tmp_gpx and tmp_gpx.exists():
+                tmp_gpx.unlink()
+
+    click.echo(f"\n{'='*60}")
+    done = len(to_process) - len(failed)
+    click.echo(f"Done — {done}/{len(to_process)} trips processed successfully")
+    if failed:
+        click.echo(f"Failed: {', '.join(failed)}", err=True)
+
+
+if __name__ == '__main__':
+    process_all()

@@ -169,6 +169,35 @@ For "tens of thousands of photos" the realistic shape is:
 
 This split is intentional: the script writes images and metadata to different roots so swapping the image host is a path change, not a refactor.
 
+### Scaling to 10k+ photos
+
+This project is expected to grow well past 10,000 photos as more trips are added. Here's how the constraints shift at that scale:
+
+**Cloudflare Pages file limit (25k files)** is the first wall you'll hit. At 2 files per photo (thumbnail + display), 25k files = ~12,500 photos. Options when you get there:
+- Switch to **R2 with custom domain** for image serving — Pages only hosts the HTML/JS/JSON, images come straight from R2. No file limit applies to R2.
+- This is already how `deploy.py` works (images proxied through Pages Functions) — you'd just move to direct R2 serving with a custom domain to avoid the proxy overhead at scale.
+
+**R2 storage (10 GB free)** at Q90/2160px averages ~0.7 MB per display image. 10k photos ≈ 7 GB display + ~0.3 GB thumbnails = ~7.3 GB — still within the free tier. At ~14k photos you'd cross 10 GB and pay ~$0.015/GB/month beyond that (roughly $0.06/month per extra 4GB).
+
+**Compression strategy at scale** — if storage becomes a concern, re-encoding the whole library with `recompress.py` is a single command:
+```bash
+# Drop to Q85/1920px — cuts ~25% per image, ~5.5 GB for 10k photos
+./venv/bin/python recompress.py --trip all --quality 85 --display-longest 1920
+```
+
+**Page load time** — at 10k+ photos, loading all manifests on the all-trips view gets heavy (~10 MB of JSON). Consider splitting into per-year lazy loading if initial load feels slow.
+
+**Rough cost projection**:
+
+| Library size | Storage | Monthly R2 cost | Notes |
+|---|---:|---:|---|
+| ~4k photos (current) | ~3 GB | $0 | Within free tier |
+| ~10k photos | ~7 GB | $0 | Still within free tier |
+| ~14k photos | ~10 GB | ~$0.06/mo | Just over free tier |
+| ~30k photos | ~21 GB | ~$0.17/mo | Full lifetime library |
+
+The numbers above are not typos. Cloudflare R2 charges **zero egress fees** — unlike S3 or GCS which charge $0.08–0.09/GB for every image a visitor loads, R2 only charges for storage. A full lifetime library of 30,000 travel photos costs less than a cup of coffee per month to host, with unlimited bandwidth. Even a very active site with thousands of daily visitors would stay under $1/month.
+
 ## Preparing input data
 
 ### GPX

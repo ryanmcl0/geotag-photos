@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""
+Deploy the travel map to Cloudflare (Pages + R2).
+
+Images are served privately via a Pages Function that proxies R2 —
+the R2 bucket stays private (no public r2.dev URL needed).
+
+Usage:
+  ./deploy.py [--skip-images] [--skip-pages] [--dry-run] [--trip SLUG]
+
+Environment variables (set in .env.deploy):
+  CF_ACCOUNT_ID      Cloudflare account ID (32-char hex)
+  CF_API_TOKEN       Cloudflare API token (R2:Edit + Pages:Edit)
+  CF_R2_BUCKET       R2 bucket name
+  CF_PAGES_PROJECT   Pages project name
+  CF_R2_ENDPOINT     S3-compatible endpoint for uploads
+  CF_SITE_PASSWORD   Password to protect the site (optional)
+
+CF_CDN_BASE_URL is auto-derived as https://<pages-project>.pages.dev/photos
+"""
+
+import os
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+except ImportError:
+    print("Error: boto3 not installed. Install with: pip install boto3")
+    sys.exit(1)
+
+
+class DeployConfig:
+    def __init__(self):
+        self.account_id = os.getenv('CF_ACCOUNT_ID')
+        self.api_token = os.getenv('CF_API_TOKEN')
+        self.r2_bucket = os.getenv('CF_R2_BUCKET')
+        self.pages_project = os.getenv('CF_PAGES_PROJECT')
+        self.r2_endpoint = os.getenv('CF_R2_ENDPOINT')
+        self.r2_access_key_id = os.getenv('CF_R2_ACCESS_KEY_ID')
+        self.r2_secret_key = os.getenv('CF_R2_SECRET_KEY')
+
+        missing = [f"CF_{n.upper()}" for n in ['account_id', 'api_token', 'r2_bucket', 'pages_project', 'r2_endpoint', 'r2_access_key_id', 'r2_secret_key']
+                   if not getattr(self, n)]
+        if missing:
+            print(f"Error: Missing environment variables: {', '.join(missing)}")
+            sys.exit(1)
+
+        # CDN base URL: images are served through Pages proxy, not directly from R2
+        self.cdn_base_url = f"https://{self.pages_project}.pages.dev/photos"
+
+
+def write_wrangler_toml(config: DeployConfig):
+    """Generate wrangler.toml with R2 binding so Pages Functions can access the bucket."""
+    content = f"""name = "{config.pages_project}"
+pages_build_output_dir = "web"
+
+[[r2_buckets]]
+binding = "PHOTOS_BUCKET"
+bucket_name = "{config.r2_bucket}"
+"""
+    Path('wrangler.toml').write_text(content)
+    print(f"    ✓ wrangler.toml written (bucket: {config.r2_bucket})")
+
+
+class R2Uploader:
+    def __init__(self, config: DeployConfig):
+        self.config = config
+        self.s3 = boto3.client(
+            's3',
+            endpoint_url=config.r2_endpoint,
+            aws_access_key_id=config.r2_access_key_id,
+            aws_secret_access_key=config.r2_secret_key,
+            region_name='auto'
+        )
+
+    def upload_trip(self, trip_slug: str, dry_run: bool = False) -> dict:
+        hosted_dir = Path('hosted-photos') / trip_slug
+        if not hosted_dir.exists():
+            print(f"  ⚠️  hosted-photos/{trip_slug} not found, skipping")
+            return {'skipped': True}
+
+        stats = {'uploaded': 0, 'skipped_existing': 0, 'errors': 0, 'bytes': 0}
+
+        # Get existing keys to skip re-uploads
+        existing = set()
+        try:
+            paginator = self.s3.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=self.config.r2_bucket, Prefix=f"{trip_slug}/"):
+                for obj in page.get('Contents', []):
+                    existing.add(obj['Key'])
+        except Exception:
+            pass  # If listing fails, upload everything
+
+        for img_file in sorted(hosted_dir.rglob('*.webp')):
+            s3_key = str(img_file.relative_to('hosted-photos'))
+
+            if dry_run:
+                status = "(exists)" if s3_key in existing else "(new)"
+                print(f"    [dry-run] {s3_key} {status}")
+                continue
+
+            if s3_key in existing:
+                stats['skipped_existing'] += 1
+                continue
+
+            try:
+                self.s3.upload_file(str(img_file), self.config.r2_bucket, s3_key)
+                stats['uploaded'] += 1
+                stats['bytes'] += img_file.stat().st_size
+            except ClientError as e:
+                stats['errors'] += 1
+                print(f"    ✗ {s3_key}: {e}")
+
+        if not dry_run:
+            msg = f"    ✓ {trip_slug}: {stats['uploaded']} uploaded, {stats['skipped_existing']} already exist"
+            if stats['errors']:
+                msg += f", {stats['errors']} errors"
+            print(msg)
+
+        return stats
+
+
+class ManifestPatcher:
+    """Patch manifest.json files with CDN URLs for deployment.
+    Saves originals and restores them after Pages deploy so local dev is unaffected."""
+
+    def __init__(self, config: DeployConfig):
+        self.config = config
+        self._originals: dict[Path, str] = {}
+
+    def patch_all(self, dry_run: bool = False):
+        for manifest_file in sorted(Path('web/trips').rglob('manifest.json')):
+            trip_slug = manifest_file.parent.name
+            original = manifest_file.read_text()
+            manifest = json.loads(original)
+
+            if dry_run:
+                print(f"    [dry-run] {trip_slug}: {len(manifest.get('photos', []))} photos → CDN URLs")
+                continue
+
+            self._originals[manifest_file] = original
+
+            for photo in manifest.get('photos', []):
+                photo['thumbnail'] = f"{self.config.cdn_base_url}/{trip_slug}/{photo['thumbnail']}"
+                photo['display'] = f"{self.config.cdn_base_url}/{trip_slug}/{photo['display']}"
+
+            manifest_file.write_text(json.dumps(manifest, indent=2))
+            print(f"    ✓ {trip_slug}")
+
+    def restore_all(self):
+        """Restore original manifests (relative paths) after deploy."""
+        for manifest_file, original in self._originals.items():
+            manifest_file.write_text(original)
+        if self._originals:
+            print(f"    ✓ Restored {len(self._originals)} local manifests")
+
+
+class PagesDeployer:
+    def __init__(self, config: DeployConfig):
+        self.config = config
+
+    def _check_wrangler(self) -> bool:
+        try:
+            subprocess.run(['wrangler', '--version'], capture_output=True, check=True)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            print("  ✗ wrangler not found. Install: npm install -g wrangler")
+            return False
+
+    def set_secret(self, name: str, value: str, dry_run: bool = False) -> bool:
+        if dry_run:
+            print(f"    [dry-run] would set Pages secret: {name}")
+            return True
+        result = subprocess.run(
+            ['wrangler', 'pages', 'secret', 'put', name,
+             '--project-name', self.config.pages_project],
+            input=value, text=True, capture_output=True
+        )
+        if result.returncode == 0:
+            print(f"    ✓ Secret {name} set")
+            return True
+        print(f"    ✗ Failed to set {name}: {result.stderr.strip()}")
+        return False
+
+    def deploy(self, dry_run: bool = False) -> bool:
+        if dry_run:
+            print("    [dry-run] would run: wrangler pages deploy web/")
+            return True
+        if not self._check_wrangler():
+            return False
+        try:
+            result = subprocess.run(
+                ['wrangler', 'pages', 'deploy', 'web/',
+                 '--project-name', self.config.pages_project],
+                capture_output=True, text=True, check=True
+            )
+            # Extract deployment URL from output
+            for line in result.stdout.splitlines() + result.stderr.splitlines():
+                if 'pages.dev' in line:
+                    print(f"    {line.strip()}")
+                    break
+            print(f"    ✓ Deployed")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ Deployment failed:\n{e.stderr}")
+            return False
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Deploy travel map to Cloudflare Pages + R2')
+    parser.add_argument('--skip-images', action='store_true', help='Skip R2 image upload')
+    parser.add_argument('--skip-pages', action='store_true', help='Skip Pages deployment')
+    parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
+    parser.add_argument('--trip', help='Upload only a specific trip slug')
+    args = parser.parse_args()
+
+    config = DeployConfig()
+    password = os.getenv('CF_SITE_PASSWORD')
+
+    print(f"🚀 Deploying to Cloudflare")
+    print(f"   Account:  {config.account_id[:8]}...")
+    print(f"   Bucket:   {config.r2_bucket}")
+    print(f"   Project:  {config.pages_project}")
+    print(f"   Site URL: https://{config.pages_project}.pages.dev")
+    print(f"   Photos:   {config.cdn_base_url}")
+    print(f"   Auth:     {'password protected' if password else 'none'}")
+    if args.dry_run:
+        print(f"   Mode:     DRY RUN")
+    print()
+
+    # Step 1: Upload images to R2
+    if not args.skip_images:
+        print("📤 Uploading images to R2...")
+        uploader = R2Uploader(config)
+        if args.trip:
+            uploader.upload_trip(args.trip, dry_run=args.dry_run)
+        else:
+            total_bytes = 0
+            for trip_dir in sorted(Path('hosted-photos').iterdir()):
+                if trip_dir.is_dir():
+                    stats = uploader.upload_trip(trip_dir.name, dry_run=args.dry_run)
+                    total_bytes += stats.get('bytes', 0)
+            if not args.dry_run and total_bytes:
+                print(f"   Total uploaded: {total_bytes / 1e9:.2f} GB")
+        print()
+
+    # Step 2: Patch manifests with CDN URLs
+    print("📝 Patching manifests with CDN URLs...")
+    patcher = ManifestPatcher(config)
+    patcher.patch_all(dry_run=args.dry_run)
+    print()
+
+    # Step 3: Write wrangler.toml with R2 binding
+    print("⚙️  Writing wrangler.toml...")
+    if not args.dry_run:
+        write_wrangler_toml(config)
+    else:
+        print(f"    [dry-run] would write wrangler.toml (bucket: {config.r2_bucket})")
+    print()
+
+    deployer = PagesDeployer(config)
+
+    # Step 4: Set password secret
+    if password and not args.skip_pages:
+        print("🔐 Setting site password...")
+        deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
+        print()
+
+    # Step 5: Deploy to Pages
+    if not args.skip_pages:
+        print("🌐 Deploying to Cloudflare Pages...")
+        success = deployer.deploy(dry_run=args.dry_run)
+
+        # Restore local manifests regardless of deploy outcome
+        if not args.dry_run:
+            print("\n♻️  Restoring local manifests...")
+            patcher.restore_all()
+
+        if success:
+            print()
+            print(f"✅ Done! https://{config.pages_project}.pages.dev")
+        else:
+            print()
+            print("❌ Pages deployment failed")
+            sys.exit(1)
+
+    if args.dry_run:
+        print("\n(Dry run — no changes made)")
+
+
+if __name__ == '__main__':
+    main()

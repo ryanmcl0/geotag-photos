@@ -1,176 +1,218 @@
 # Travel Photography Map
 
-An automated system to create interactive map-based travel photo galleries. Display GPX routes on maps with geotagged photos clustered at capture locations.
+A personal project to turn many years of travel photos into a single interactive world map.
 
-## Quick Start
+For each trip, you point the script at a GPX track and a folder of photos. It interpolates GPS coordinates onto every photo by matching EXIF timestamps to the GPX trackpoints, generates web-sized thumbnails and display images, and registers the trip with the front-end Leaflet map. Every trip gets a coloured route line and a cluster of photo markers along it.
+
+## Project goals
+
+- **Show, don't curate.** A lifetime of trips on one map, browsable by year/region/trip.
+- **Free hosting friendly.** Output is small, static, and CDN-cacheable. Photos are aggressively compressed so the full library can fit in a free-tier object store. See [Hosting](#hosting) below.
+- **Re-runnable.** Re-process a trip at any time. Outputs are deterministic and gitignored.
+- **One source of truth per trip.** GPX route + photo folder in, manifest + compressed images out.
+
+## How it works
+
+1. **Parse GPX** — extract trackpoints with UTC timestamps.
+2. **Find photos** — scan the input directory, skipping known noise subdirs (`Compressed/`, `Phone/`, `Videos/`).
+3. **Resolve GPS coordinates** per photo. Priority order:
+   1. The photo's **own EXIF GPS tag** (DJI drone JPEGs have this baked in).
+   2. The matching **DJI DNG** (pass `--raws` to enable).
+   3. **GPX interpolation** between trackpoints surrounding the photo's timestamp.
+   4. **Fallback location** — when 1-3 all fail. Defaults to the *GPX centroid* (rough geographic middle of the trip), or whatever you pass to `--fallback-location lat,lon`. Photos placed here are tagged `placement: approximate` in the manifest so the frontend can style them differently. Pass `--fallback-location none` to drop them instead.
+   5. The manifest records a `skipped` array for every photo that didn't get exact placement, including the reason and hours outside the GPX window — useful for auditing after a long run.
+5. **Compress** — write a small thumbnail (400 px longer-side) and a display image (2160 px longer-side WebP Q90 by default) to `hosted-photos/<slug>/`. Both caps apply to the *longer* side so portrait drone shots don't blow up. Originals are never touched.
+6. **Cluster** — group photos within `--cluster-radius` metres (default 50) into a single marker.
+7. **Publish** — write `manifest.json` + `route.geojson` to `web/trips/<slug>/`, symlink the compressed images in, and update `web/trips/index.json` and the year/trip HTML pages.
+
+## Quick start
 
 ### Prerequisites
 
-1. **Install ExifTool** (required for geotagging):
-   ```bash
-   brew install exiftool
-   ```
+```bash
+brew install exiftool
+python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+```
 
-2. **Install Python dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### View the Web Interface
-
-Start the web server:
+### Run
 
 ```bash
-cd web
-python -m http.server 8000
+./venv/bin/python process_trip.py \
+  --name "2024 Kyrgyzstan" \
+  --gpx "/path/to/2024 Kyrgyzstan.gpx" \
+  --photos "/path/to/Edits/2024 Kyrgyzstan"
 ```
 
-Open http://localhost:8000 in your browser.
+`--output` defaults to `web/trips/<slug>`, where `<slug>` is derived from `--name`. Override with `--output ...` if you want.
 
-**How it works:**
-- All processed trips are automatically displayed on the same map
-- Each trip gets a different colored route
-- Photo markers are color-coded to match their trip's route
-- The trips index is automatically updated when you process new trips
-
-### Process Your Own Trip
+### View the map
 
 ```bash
-python process_trip.py \
-  --name "My Trip 2024" \
-  --gpx /path/to/route.gpx \
-  --photos /path/to/photos \
-  --output web/trips/my-trip
+cd web && python3 -m http.server 8000
 ```
 
-**Processing multiple trips:**
+Open http://localhost:8000. All processed trips appear together. Each trip page lives at `/<year>/<slug>/`.
 
-Simply run the script multiple times with different trips. Each trip will be automatically added to the map:
+## CLI options
+
+```
+--name TEXT                Trip name for display  [required]
+--gpx PATH                 Path to GPX file  [required]
+--photos PATH              Path to photos directory  [required]
+--output PATH              Metadata output dir (default: web/trips/<slug>)
+--hosted-photos-dir PATH   Root for compressed image storage (default: <project>/hosted-photos)
+--geosync TEXT             Timezone offset for camera sync (e.g., +02:00)
+--gpx-tolerance-hours FLOAT  Hours outside GPX window before fallback kicks in (default: 2)
+--fallback-location LAT,LON  Lat,lon for photos w/ no GPS + outside GPX window
+                             (default: GPX centroid; pass "none" to drop)
+--cluster-radius INTEGER   Clustering radius in meters (default: 50)
+--raws PATH                Path to original DNG files for DJI drone GPS data
+--format [webp|jpeg]       Image format for thumbnails/display (default: webp)
+--quality INTEGER          Encoder quality 1-100 (default: 90)
+--display-longest INTEGER  Max longer-side for display images in px (default: 2160)
+--thumbnail-longest INTEGER Max longer-side for thumbnails in px (default: 400)
+--test-mode PERCENT        Process only X% of photos (e.g., 10 for 10%)
+--dry-run                  Preview without writing files
+```
+
+## Output layout
+
+```
+hosted-photos/                  # gitignored — the bytes
+  <trip-slug>/
+    thumbnails/<id>.webp        # ~30 KB each, ~400 px longer-side
+    display/<id>.webp           # ~500-1100 KB each, ~2160 px longer-side
+
+web/                            # tracked — the site
+  index.html                    # all trips overview
+  <year>/index.html             # one year of trips
+  <year>/<trip-slug>/index.html # single trip
+  trips/
+    index.json                  # auto-generated trip directory
+    <trip-slug>/
+      manifest.json             # photo list + clusters + camera settings
+      route.geojson             # GPX converted for Leaflet
+      thumbnails -> ../../../hosted-photos/<trip-slug>/thumbnails   (symlink)
+      display    -> ../../../hosted-photos/<trip-slug>/display      (symlink)
+```
+
+`hosted-photos/` and the symlinks under `web/trips/*/` are in `.gitignore` — the bytes never go into the repo.
+
+## Compression
+
+The defaults (`webp`, `q=90`, longest-side `2160 px`) are tuned to keep fine detail (snow texture, ridgelines, rock edges) intact on drone shots while still cutting library size by ~50% vs uncompressed source. The longer-side cap matters: portrait drone shots (4536×8064) would otherwise become 1920×3413 monsters that waste bytes on resolution the lightbox can't display.
+
+Sample sizes per display image, mixed library average:
+
+| Profile | Per display | 30k photos | Notes |
+|---|---:|---:|---|
+| `--quality 80 --display-longest 1600` | ~350 KB | ~10 GB | Visibly soft on detail-heavy drone shots |
+| `--quality 85 --display-longest 1920` | ~540 KB | ~16 GB | OK for Sony, soft on DJI |
+| `--quality 90 --display-longest 2160` **(default)** | ~700 KB | ~21 GB | Indistinguishable from source on most shots |
+| `--quality 92 --display-longest 2400` | ~1100 KB | ~33 GB | True near-lossless |
+| `--format jpeg --quality 92 --display-longest 2400` | ~1400 KB | ~42 GB | Fallback for hosts without WebP |
+
+WebP is ~30% smaller than JPEG at the same dimensions and quality, and Safari has supported it since 14 — global browser support is ~97%. Decode is fast and there are no perceptual artifacts at Q80.
+
+If a future host requires JPEG: `--format jpeg --quality 90`. No other code changes needed.
+
+### Changing clustering retroactively
+
+Cluster radii are baked into the manifest at process time, but you can change them across the whole library at any point without re-encoding photos:
 
 ```bash
-# First trip
-python process_trip.py \
-  --name "Iceland 2024" \
-  --gpx iceland.gpx \
-  --photos ~/Photos/Iceland \
-  --output web/trips/iceland-2024
+# Re-cluster one trip
+./venv/bin/python recluster.py --trip 2024-kyrgyzstan --cluster-radius 25
 
-# Second trip
-python process_trip.py \
-  --name "Japan 2023" \
-  --gpx japan.gpx \
-  --photos ~/Photos/Japan \
-  --output web/trips/japan-2023
+# Re-cluster every trip in web/trips/
+./venv/bin/python recluster.py --trip all --cluster-radius 20
 ```
 
-All trips will appear together on the same map with different colored routes.
+Visual (Leaflet) clustering lives in `web/js/app.js` (`clusterRadius`, `disableClusteringAtZoom`) and is read on every page load — no rebuild needed, just refresh.
 
-## Usage
+### Changing compression retroactively
 
-### Processing Script
+`process_trip.py` is destructive on re-run (it expects GPX + source photos). To re-encode an already-processed library at different quality/format/dimensions without re-doing GPX matching, use `recompress.py`:
 
 ```bash
-python process_trip.py [OPTIONS]
+# One trip, bump to WebP Q95
+./venv/bin/python recompress.py --trip 2024-kyrgyzstan --quality 95
 
-Options:
-  --name TEXT           Trip name for display (required)
-  --gpx PATH            Path to GPX file (required)
-  --photos PATH         Path to photos directory (required)
-  --output PATH         Output directory (required)
-  --geosync TEXT        Timezone offset for camera sync (e.g., +02:00)
-  --cluster-radius INT  Clustering radius in meters (default: 50)
-  --test-mode INT       Process only X% of photos for faster testing (e.g., 10)
-  --dry-run             Preview without writing files
-  --help                Show this message and exit
+# Every trip in web/trips/, switch to JPEG for a host that doesn't support WebP
+./venv/bin/python recompress.py --trip all --format jpeg --quality 90
+
+# Smaller library — re-encode at lower quality
+./venv/bin/python recompress.py --trip all --quality 82 --display-longest 1600
 ```
 
-### Example
+It reads each manifest's `source.photos_path` (recorded at first process), regenerates only the thumbnail + display images, updates the manifest's `compression` block and the per-photo `thumbnail`/`display` paths (handling extension changes), and recreates the symlinks. If the originals have moved, pass `--photos /new/path` to override.
 
+The host-side workflow after a recompress is just: re-sync `hosted-photos/<trip>/` to your bucket. Manifest paths change with the format (`.webp` → `.jpg`) so the front-end picks up the new files automatically.
+
+## Hosting
+
+The site itself is tiny (HTML + JS + manifest JSON). The photos are the budget.
+
+| Host | Free quota | Suitable for |
+|---|---|---|
+| GitHub Pages | 1 GB hard cap | Small libraries only (~1k photos) |
+| Cloudflare Pages | Unlimited bandwidth, **25k file limit** | ~12k photos max (thumb + display = 2 files each) |
+| Netlify | ~10 GB practical | Medium libraries |
+| **Cloudflare R2** | **10 GB storage + 1M reads/mo** | Large libraries; pair with Pages for the HTML |
+| **Backblaze B2** + Cloudflare CDN | 10 GB + free egress to CDN | Same idea as R2 |
+
+For "tens of thousands of photos" the realistic shape is:
+
+1. Push the `web/` directory to **Cloudflare Pages** (the HTML/JS/JSON, no images).
+2. Sync `hosted-photos/` to **Cloudflare R2** or **Backblaze B2**.
+3. Replace the symlinks (or the manifest paths) with absolute CDN URLs so the browser fetches images straight from the bucket.
+
+This split is intentional: the script writes images and metadata to different roots so swapping the image host is a path change, not a refactor.
+
+### Scaling to 10k+ photos
+
+This project is expected to grow well past 10,000 photos as more trips are added. Here's how the constraints shift at that scale:
+
+**Cloudflare Pages file limit (25k files)** is the first wall you'll hit. At 2 files per photo (thumbnail + display), 25k files = ~12,500 photos. Options when you get there:
+- Switch to **R2 with custom domain** for image serving — Pages only hosts the HTML/JS/JSON, images come straight from R2. No file limit applies to R2.
+- This is already how `deploy.py` works (images proxied through Pages Functions) — you'd just move to direct R2 serving with a custom domain to avoid the proxy overhead at scale.
+
+**R2 storage (10 GB free)** at Q90/2160px averages ~0.7 MB per display image. 10k photos ≈ 7 GB display + ~0.3 GB thumbnails = ~7.3 GB — still within the free tier. At ~14k photos you'd cross 10 GB and pay ~$0.015/GB/month beyond that (roughly $0.06/month per extra 4GB).
+
+**Compression strategy at scale** — if storage becomes a concern, re-encoding the whole library with `recompress.py` is a single command:
 ```bash
-# Process Iceland trip photos
-python process_trip.py \
-  --name "Iceland Ring Road 2024" \
-  --gpx ~/Downloads/iceland-strava.gpx \
-  --photos ~/Lightroom/Iceland-2024 \
-  --output web/trips/iceland-2024 \
-  --geosync +00:00
-
-# Preview without writing files
-python process_trip.py \
-  --name "Test" \
-  --gpx test.gpx \
-  --photos ./photos \
-  --output ./output \
-  --dry-run
-
-# Test with 10% of photos for faster iteration
-python process_trip.py \
-  --name "Test" \
-  --gpx test.gpx \
-  --photos ./photos \
-  --output ./output \
-  --test-mode 10
+# Drop to Q85/1920px — cuts ~25% per image, ~5.5 GB for 10k photos
+./venv/bin/python recompress.py --trip all --quality 85 --display-longest 1920
 ```
 
-## Output Structure
+**Page load time** — at 10k+ photos, loading all manifests on the all-trips view gets heavy (~10 MB of JSON). Consider splitting into per-year lazy loading if initial load feels slow.
 
-After processing, you'll get:
+**Rough cost projection**:
 
-```
-web/trips/iceland-2024/
-├── thumbnails/       # 300px images (~60KB each)
-├── display/          # 1920px images (~350KB each)
-├── route.geojson     # Converted GPX for web
-└── manifest.json     # Trip metadata
-```
+| Library size | Storage | Monthly R2 cost | Notes |
+|---|---:|---:|---|
+| ~4k photos (current) | ~3 GB | $0 | Within free tier |
+| ~10k photos | ~7 GB | $0 | Still within free tier |
+| ~14k photos | ~10 GB | ~$0.06/mo | Just over free tier |
+| ~30k photos | ~21 GB | ~$0.17/mo | Full lifetime library |
 
-## Project Structure
+The numbers above are not typos. Cloudflare R2 charges **zero egress fees** — unlike S3 or GCS which charge $0.08–0.09/GB for every image a visitor loads, R2 only charges for storage. A full lifetime library of 30,000 travel photos costs less than a cup of coffee per month to host, with unlimited bandwidth. Even a very active site with thousands of daily visitors would stay under $1/month.
 
-```
-geotag-photos-map/
-├── process_trip.py       # Main CLI script
-├── requirements.txt      # Python dependencies
-├── web/                  # Static website
-│   ├── index.html
-│   ├── css/styles.css
-│   ├── js/app.js
-│   └── trips/            # Processed trip data
-│       └── index.json    # Auto-generated trips index
-└── README.md
-```
+## Preparing input data
 
-## Features
+### GPX
+- Strava: Activity → ⋯ → **Export GPX**
+- Garmin Connect: Activity → ⋯ → Export → GPX
+- Combine per-day tracks into one file or pass them individually; the script handles multiple `<trk>` segments inside one file.
 
-### Photo Processing
-- Recursive photo discovery (JPG, JPEG, PNG, TIFF)
-- EXIF timestamp extraction
-- GPS interpolation from GPX trackpoints
-- Timezone offset support
-- Multi-size image generation (thumbnail + display)
-- Proximity-based clustering
+### Photos
+- Need valid EXIF `DateTimeOriginal`.
+- Sub-folders called `Compressed/`, `Phone/`, or `Videos/` are skipped automatically.
+- If your camera was set to local time, pass `--geosync` (e.g. `+02:00` for CET). For UTC cameras, omit it.
+- Drone photos: pass `--raws <path-to-DNGs>` to use the drone's embedded GPS instead of GPX interpolation.
 
-### Web Interface
-- Full-screen Leaflet map
-- GPX route overlay
-- Clustered photo markers
-- GLightbox gallery with swipe navigation
-- EXIF info toggle
-- Mobile responsive
+## Stack
 
-## Preparing Your Data
-
-### Export GPX from Strava
-1. Open your activity on Strava
-2. Click the three dots (...)
-3. Select "Export GPX"
-
-### Prepare Photos
-- Photos need valid EXIF DateTimeOriginal timestamps
-- Camera time must be synchronized with GPS time
-- Use `--geosync` to adjust for timezone differences
-
-## Technology Stack
-
-- **Python**: Pillow, gpxpy, Click, tqdm
-- **Web**: Leaflet.js, MarkerCluster, GLightbox
-- **Tools**: ExifTool (geotagging)
+- **Python** — Pillow (WebP/JPEG), gpxpy, Click, tqdm
+- **ExifTool** — for writing geotags back to JPEGs
+- **Frontend** — Leaflet, Leaflet.markercluster, GLightbox

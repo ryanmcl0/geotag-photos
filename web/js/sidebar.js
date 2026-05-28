@@ -25,7 +25,7 @@
     async function loadTripsData() {
         try {
             const basePath = VIEW_CONFIG.basePath || '';
-            const response = await fetch(`${basePath}trips/index.json`);
+            const response = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
             const data = await response.json();
             tripsData = data.trips || [];
 
@@ -62,12 +62,25 @@
         // Get years sorted descending (most recent first)
         const years = Object.keys(yearGroups).sort((a, b) => b - a);
 
+        // Only "all" and "year" views support the toggle — single-trip pages
+        // don't load other trips so toggling them is meaningless.
+        const showToggles = VIEW_CONFIG.mode === 'all' || VIEW_CONFIG.mode === 'year';
+        const hidden = readHiddenTrips();
+
         years.forEach(year => {
             const trips = yearGroups[year];
             const tripsHtml = trips.map(trip => {
-                const tripSlug = trip.id.replace(/-\d{4}$/, ''); // Remove year suffix for URL
+                const tripSlug = trip.id.replace(/-\d{4}$/, '');
+                const isHidden = hidden.has(trip.id);
+                const checkbox = showToggles
+                    ? `<input type="checkbox" class="trip-toggle"
+                              data-trip-id="${trip.id}"
+                              ${isHidden ? '' : 'checked'}
+                              aria-label="Toggle ${trip.name}">`
+                    : '';
                 return `
-                    <li>
+                    <li class="trip-item">
+                        ${checkbox}
                         <a href="${basePath}${year}/${tripSlug}/index.html"
                            class="nav-link"
                            data-trip-id="${trip.id}">
@@ -92,16 +105,33 @@
 
         navList.innerHTML = html;
 
-        // Add click handlers for year headers
         document.querySelectorAll('.year-header').forEach(header => {
             header.addEventListener('click', (e) => {
-                // Don't toggle if clicking the year link itself
                 if (e.target.classList.contains('year-link')) return;
-
+                if (e.target.classList.contains('trip-toggle')) return;
                 const section = header.closest('.year-section');
                 section.classList.toggle('expanded');
             });
         });
+
+        // Wire checkbox -> map visibility toggle.
+        document.querySelectorAll('.trip-toggle').forEach(cb => {
+            cb.addEventListener('click', (e) => e.stopPropagation());
+            cb.addEventListener('change', (e) => {
+                const tripId = e.target.dataset.tripId;
+                if (typeof window.setTripVisibility === 'function') {
+                    window.setTripVisibility(tripId, e.target.checked);
+                }
+            });
+        });
+    }
+
+    function readHiddenTrips() {
+        try {
+            return new Set(JSON.parse(localStorage.getItem('geotagPhotos.hiddenTrips')) || []);
+        } catch (e) {
+            return new Set();
+        }
     }
 
     /**

@@ -108,42 +108,225 @@ def _simplify_coords(coords: list, tolerance: float) -> list:
     return [coords[0], coords[-1]]
 
 
-def geocode_from_name(trip_name: str) -> Optional[dict]:
-    """Derive a fallback lat/lon from the trip name by geocoding location parts.
-
-    Strips the year prefix, takes the part after ' - ' if present, then geocodes
-    each comma-separated location and returns their centroid.
-    """
-    import urllib.request
-    import urllib.parse
-    import time
-
+def parse_location_names(trip_name: str) -> list[str]:
+    """Extract individual location names from a trip name string."""
     loc = re.sub(r'^\d{4}[:\d]*\s+', '', trip_name).strip()
     if ' - ' in loc:
         loc = loc.split(' - ', 1)[1]
+    return [p.strip() for p in loc.split(',') if p.strip()]
 
-    parts = [p.strip() for p in loc.split(',') if p.strip()]
 
-    coords = []
-    for part in parts[:5]:
-        url = 'https://nominatim.openstreetmap.org/search?' + urllib.parse.urlencode({
-            'q': part, 'format': 'json', 'limit': 1
-        })
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'geotag-photos/1.0'})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                results = json.loads(resp.read())
-                if results:
-                    coords.append((float(results[0]['lat']), float(results[0]['lon'])))
-        except Exception:
-            pass
-        time.sleep(1.1)  # Nominatim rate limit: 1 req/s
+def geocode_single(query: str) -> Optional[dict]:
+    """Geocode one location string via Nominatim. Returns {lat, lon} or None."""
+    import urllib.request
+    import urllib.parse
+    import time
+    url = 'https://nominatim.openstreetmap.org/search?' + urllib.parse.urlencode({
+        'q': query, 'format': 'json', 'limit': 1
+    })
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'geotag-photos/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            results = json.loads(resp.read())
+            if results:
+                return {'lat': float(results[0]['lat']), 'lon': float(results[0]['lon'])}
+    except Exception:
+        pass
+    time.sleep(1.1)
+    return None
 
+
+def geocode_from_name(trip_name: str) -> Optional[dict]:
+    """Geocode all location parts of a trip name and return their centroid."""
+    coords = [geocode_single(n) for n in parse_location_names(trip_name)[:5]]
+    coords = [c for c in coords if c]
     if not coords:
         return None
     return {
-        'lat': sum(c[0] for c in coords) / len(coords),
-        'lon': sum(c[1] for c in coords) / len(coords),
+        'lat': sum(c['lat'] for c in coords) / len(coords),
+        'lon': sum(c['lon'] for c in coords) / len(coords),
+    }
+
+
+def apply_exif_interpolation(processed_photos: list[dict]) -> int:
+    """
+    For no-GPX trips that have some photos with EXIF GPS (e.g. drone shots),
+    use those as time-anchored control points to interpolate approximate positions
+    for the remaining fallback_centroid photos.
+
+    Photos between two EXIF anchors get a linearly interpolated position.
+    Photos before/after all anchors snap to the nearest anchor.
+
+    Returns count of photos updated.
+    """
+    import bisect
+
+    anchors = sorted(
+        [p for p in processed_photos if p['gps_source'] == 'exif'],
+        key=lambda p: p['timestamp']
+    )
+    if not anchors:
+        return 0
+
+    anchor_times = [
+        datetime.fromisoformat(p['timestamp'].replace('Z', '+00:00'))
+        for p in anchors
+    ]
+
+    updated = 0
+    for photo in processed_photos:
+        if photo['gps_source'] != 'fallback_centroid':
+            continue
+
+        pt = datetime.fromisoformat(photo['timestamp'].replace('Z', '+00:00'))
+        idx = bisect.bisect_left(anchor_times, pt)
+
+        if idx == 0:
+            photo['lat'] = anchors[0]['lat']
+            photo['lon'] = anchors[0]['lon']
+        elif idx >= len(anchors):
+            photo['lat'] = anchors[-1]['lat']
+            photo['lon'] = anchors[-1]['lon']
+        else:
+            before, after = anchors[idx - 1], anchors[idx]
+            t0, t1 = anchor_times[idx - 1], anchor_times[idx]
+            span = (t1 - t0).total_seconds()
+            f = (pt - t0).total_seconds() / span if span > 0 else 0
+            photo['lat'] = before['lat'] + f * (after['lat'] - before['lat'])
+            photo['lon'] = before['lon'] + f * (after['lon'] - before['lon'])
+
+        photo['gps_source'] = 'interpolated_from_exif'
+        photo['placement'] = 'approximate'
+        updated += 1
+
+    return updated
+
+
+FAKE_ROUTE_CLOSE_KM = 500
+
+
+def max_pairwise_distance_km(locations: list[dict]) -> float:
+    """Maximum haversine distance (km) between any pair of geocoded locations."""
+    max_dist = 0.0
+    for i in range(len(locations)):
+        for j in range(i + 1, len(locations)):
+            d = haversine_distance(
+                locations[i]['lat'], locations[i]['lon'],
+                locations[j]['lat'], locations[j]['lon']
+            ) / 1000
+            max_dist = max(max_dist, d)
+    return max_dist
+
+
+def interpolate_along_line(locations: list[dict], fraction: float) -> dict:
+    """Return lat/lon at `fraction` (0–1) along a polyline through locations."""
+    if len(locations) == 1:
+        return {'lat': locations[0]['lat'], 'lon': locations[0]['lon']}
+    segments, total = [], 0.0
+    for i in range(len(locations) - 1):
+        d = haversine_distance(locations[i]['lat'], locations[i]['lon'],
+                               locations[i + 1]['lat'], locations[i + 1]['lon'])
+        segments.append(d)
+        total += d
+    if total == 0:
+        return {'lat': locations[0]['lat'], 'lon': locations[0]['lon']}
+    target, cumulative = fraction * total, 0.0
+    for i, seg_len in enumerate(segments):
+        if cumulative + seg_len >= target or i == len(segments) - 1:
+            f = (target - cumulative) / seg_len if seg_len > 0 else 0
+            return {
+                'lat': locations[i]['lat'] + f * (locations[i + 1]['lat'] - locations[i]['lat']),
+                'lon': locations[i]['lon'] + f * (locations[i + 1]['lon'] - locations[i]['lon']),
+            }
+        cumulative += seg_len
+    return {'lat': locations[-1]['lat'], 'lon': locations[-1]['lon']}
+
+
+def apply_fake_route(processed_photos: list[dict], trip_name: str,
+                     explicit_locations: Optional[list[str]] = None) -> Optional[dict]:
+    """
+    For no-GPX trips with multiple locations in the name, assigns approximate
+    coordinates to photos that have no real GPS and generates a fake route line.
+
+    Close locations (< 500km): photos interpolated along the line by timestamp order.
+    Distant locations: photos split by the N-1 largest time gaps and pinned per segment.
+
+    Mutates processed_photos in place. Returns route GeoJSON or None if not applicable.
+    """
+    names = explicit_locations if explicit_locations else parse_location_names(trip_name)
+    if len(names) < 2:
+        return None
+
+    click.echo(f"\nMultiple locations detected: {', '.join(names)}")
+    click.echo("Geocoding for fake route...")
+    locations = []
+    for name in names[:6]:
+        coords = geocode_single(name)
+        if coords:
+            locations.append({'name': name, **coords})
+            click.echo(f"  {name} → {coords['lat']:.3f}, {coords['lon']:.3f}")
+
+    if len(locations) < 2:
+        return None
+
+    eligible = [p for p in processed_photos
+                if p['gps_source'] in ('fallback_centroid', 'pending_fallback', 'geocoded')]
+
+    max_dist = max_pairwise_distance_km(locations)
+    click.echo(f"Max span: {max_dist:.0f} km", nl=False)
+
+    if not eligible:
+        click.echo(" — no unplaced photos, route line only")
+        coords = [[loc['lon'], loc['lat']] for loc in locations]
+        return {
+            'type': 'FeatureCollection',
+            'features': [{'type': 'Feature', 'properties': {'name': 'Estimated route'},
+                          'geometry': {'type': 'LineString', 'coordinates': coords}}]
+        }
+
+    click.echo(" — ", nl=False)
+    by_time = sorted(eligible, key=lambda p: p['timestamp'])
+
+    if max_dist < FAKE_ROUTE_CLOSE_KM:
+        click.echo("interpolating along route")
+        n = len(by_time)
+        for i, photo in enumerate(by_time):
+            coords = interpolate_along_line(locations, i / (n - 1) if n > 1 else 0.5)
+            photo['lat'], photo['lon'] = coords['lat'], coords['lon']
+            photo['gps_source'] = 'fake_route_interpolated'
+            photo['placement'] = 'approximate'
+    else:
+        n_locs = len(locations)
+        click.echo(f"splitting into {n_locs} segments by time gaps")
+        # Find the n_locs-1 largest inter-photo time gaps
+        gaps = []
+        for i in range(1, len(by_time)):
+            t0 = datetime.fromisoformat(by_time[i - 1]['timestamp'].replace('Z', '+00:00'))
+            t1 = datetime.fromisoformat(by_time[i]['timestamp'].replace('Z', '+00:00'))
+            gaps.append(((t1 - t0).total_seconds(), i))
+        gaps.sort(reverse=True)
+        split_at = sorted(idx for _, idx in gaps[:n_locs - 1])
+
+        segments, start = [], 0
+        for split_i in split_at + [len(by_time)]:
+            segments.append(by_time[start:split_i])
+            start = split_i
+
+        for seg_idx, (segment, loc) in enumerate(zip(segments, locations)):
+            click.echo(f"  Segment {seg_idx + 1}/{n_locs}: {loc['name']} ({len(segment)} photos)")
+            for photo in segment:
+                photo['lat'], photo['lon'] = loc['lat'], loc['lon']
+                photo['gps_source'] = 'fake_route_segment'
+                photo['placement'] = 'approximate'
+
+    coords = [[loc['lon'], loc['lat']] for loc in locations]
+    return {
+        'type': 'FeatureCollection',
+        'features': [{
+            'type': 'Feature',
+            'properties': {'name': 'Estimated route'},
+            'geometry': {'type': 'LineString', 'coordinates': coords}
+        }]
     }
 
 
@@ -592,8 +775,9 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     # Get trip folder name from output path
     trip_id = output_path.name
 
-    # Extract year from start date
-    year = int(dates['start'][:4])
+    # Prefer year from trip name (immune to corrupted EXIF dates)
+    name_year = re.match(r'^(\d{4})', trip_name)
+    year = int(name_year.group(1)) if name_year else int(dates['start'][:4])
 
     # Load existing index or create new one
     if index_path.exists():
@@ -797,6 +981,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
               help=f'Max length of longer side for display images (default: {DEFAULT_DISPLAY_LONGEST}px)')
 @click.option('--thumbnail-longest', default=DEFAULT_THUMBNAIL_LONGEST, type=int,
               help=f'Max length of longer side for thumbnails (default: {DEFAULT_THUMBNAIL_LONGEST}px)')
+@click.option('--fake-route-locations', default=None, metavar='LOC1,LOC2,...',
+              help='Explicitly set location names for fake route (overrides name parsing). E.g. "Iceland,Italy"')
 @click.option('--skip-existing-images', is_flag=True,
               help='Reuse already-generated thumbnails/display images. Only recomputes GPS placement, clusters, and manifest. Fast re-run after logic changes.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
@@ -809,6 +995,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
                  cluster_radius: float, raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
+                 fake_route_locations: Optional[str],
                  skip_existing_images: bool, test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
@@ -1188,6 +1375,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if gps_source_counts.get('pending_fallback'):
             gps_source_counts['fallback_centroid'] = gps_source_counts.pop('pending_fallback')
 
+    # No-GPX: use EXIF GPS photos as interpolation anchors for remaining fallback photos
+    if no_gpx_mode:
+        exif_placed = apply_exif_interpolation(processed_photos)
+        if exif_placed:
+            gps_source_counts['interpolated_from_exif'] = exif_placed
+            gps_source_counts['fallback_centroid'] = gps_source_counts.get('fallback_centroid', 0) - exif_placed
+            if gps_source_counts['fallback_centroid'] <= 0:
+                gps_source_counts.pop('fallback_centroid', None)
+
     # Derive date range from EXIF when no GPX
     if trip_start is None:
         timestamps = sorted(p['timestamp'] for p in processed_photos)
@@ -1253,11 +1449,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             json.dump(manifest, f, indent=2)
         click.echo(f"\nSaved manifest: {manifest_path}")
 
-        # Convert GPX to GeoJSON (or write empty for no-GPX trips)
+        # Convert GPX to GeoJSON (or build fake route for no-GPX trips)
         if not no_gpx_mode:
             geojson_data = gpx_to_geojson(gpx_path, split_gap_km=gpx_split_gap_km)
         else:
-            geojson_data = {'type': 'FeatureCollection', 'features': []}
+            explicit = [l.strip() for l in fake_route_locations.split(',')] \
+                       if fake_route_locations else None
+            geojson_data = apply_fake_route(processed_photos, name, explicit) \
+                           or {'type': 'FeatureCollection', 'features': []}
         geojson_path = output_path / 'route.geojson'
         with open(geojson_path, 'w') as f:
             json.dump(geojson_data, f, indent=2)
@@ -1273,8 +1472,9 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         )
         click.echo(f"Updated trips index: {index_path}")
 
-        # Generate year and trip HTML pages
-        year = int(manifest['dates']['start'][:4])
+        # Generate year and trip HTML pages — prefer year from name over EXIF
+        name_year_m = re.match(r'^(\d{4})', name)
+        year = int(name_year_m.group(1)) if name_year_m else int(manifest['dates']['start'][:4])
         trip_id = output_path.name
         year_page, trip_page = generate_html_pages(output_path, name, trip_id, year)
         click.echo(f"Generated year page: {year_page}")

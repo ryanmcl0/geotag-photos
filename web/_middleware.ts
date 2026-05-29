@@ -35,8 +35,9 @@ export const onRequest: PagesFunction<{
     const sitePassword = context.env.CF_SITE_PASSWORD;
     if (!sitePassword) return context.next();
 
-    // Always allow the login page and auth POST through
-    if (url.pathname === '/login.html' || url.pathname === '/auth') {
+    // Always allow the login page and auth endpoints through.
+    // CF Pages strips .html extensions (308 /login.html → /login), so check both.
+    if (['/login', '/login.html', '/auth', '/auth-all'].includes(url.pathname)) {
         return context.next();
     }
 
@@ -47,5 +48,6 @@ export const onRequest: PagesFunction<{
         return context.next();
     }
 
-    return Response.redirect(new URL('/login.html', context.request.url), 302);
+    // Redirect to extensionless /login (CF Pages' canonical form)
+    return Response.redirect(new URL('/login', context.request.url), 302);
 };

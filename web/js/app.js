@@ -38,6 +38,7 @@ function checkAllAccess() {
 }
 
 const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
+let activeRouteFilter = 'all'; // 'all' | 'gpx'
 
 function loadHiddenTripIds() {
     try {
@@ -61,6 +62,44 @@ async function init() {
     await loadTripData();
     initLightbox();
     initYearFilter();
+    initRouteFilter();
+}
+
+function tripMatchesYearFilter(trip) {
+    if (!activeYearFilter) return true;
+    const m = (trip.name || '').match(/^(\d{4})/);
+    const tripYear = m ? parseInt(m[1]) : trip.year;
+    return tripYear === activeYearFilter;
+}
+
+function tripMatchesRouteFilter(trip) {
+    if (activeRouteFilter === 'all') return true;
+    const layer = tripLayers[trip.id];
+    return Boolean(layer && layer.hasGpx);
+}
+
+function shouldDisplayTrip(trip) {
+    const layer = tripLayers[trip.id];
+    return Boolean(layer && layer.visible && tripMatchesYearFilter(trip) && tripMatchesRouteFilter(trip));
+}
+
+function syncVisibleTripLayers({ fit = false } = {}) {
+    allTrips.forEach(trip => {
+        const layer = tripLayers[trip.id];
+        if (!layer) return;
+        const show = shouldDisplayTrip(trip);
+        if (show) {
+            if (!map.hasLayer(layer.route)) layer.route.addTo(map);
+            if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
+        } else {
+            map.removeLayer(layer.route);
+            map.removeLayer(layer.markers);
+        }
+    });
+
+    updateTripInfo();
+    reinitLightbox();
+    if (fit) fitMapToBounds();
 }
 
 function initYearFilter() {
@@ -132,22 +171,30 @@ function setYearFilter(year, wrapper) {
         opt.querySelector('.year-filter-check').textContent = active ? '✓' : '';
     });
 
-    allTrips.forEach(t => {
-        const layer = tripLayers[t.id];
-        if (!layer || !layer.visible) return;
-        const m = (t.name || '').match(/^(\d{4})/);
-        const tripYear = m ? parseInt(m[1]) : t.year;
-        const show = !year || tripYear === year;
-        if (show) {
-            if (!map.hasLayer(layer.route)) layer.route.addTo(map);
-            if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
-        } else {
-            map.removeLayer(layer.route);
-            map.removeLayer(layer.markers);
-        }
-    });
+    syncVisibleTripLayers({ fit: true });
+}
 
-    if (!year) fitMapToBounds();
+function initRouteFilter() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'route-filter-wrapper';
+    wrapper.innerHTML = `
+        <button class="route-filter-btn" data-filter="all">All</button>
+        <button class="route-filter-btn" data-filter="gpx">GPX</button>
+    `;
+    document.getElementById('map').appendChild(wrapper);
+
+    wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
+        btn.addEventListener('click', () => setRouteFilter(btn.dataset.filter, wrapper));
+    });
+}
+
+function setRouteFilter(filter, wrapper) {
+    activeRouteFilter = filter === 'gpx' ? 'gpx' : 'all';
+    wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
+    });
+    syncVisibleTripLayers({ fit: true });
 }
 
 // Base layer definitions
@@ -328,16 +375,18 @@ async function loadSingleTrip(trip, basePath) {
         route: buildRouteLayer(routeData, color, trip.name),
         markers: buildMarkerLayer(manifest),
         color,
+        hasGpx: Boolean(manifest.source && manifest.source.gpx_path),
         visible: !hidden.has(trip.id),
     };
-    if (tripLayers[trip.id].visible) {
-        tripLayers[trip.id].route.addTo(map);
-        tripLayers[trip.id].markers.addTo(map);
-    }
 
     allTrips.push(trip);
     allManifests.push(manifest);
     loadedTripIds.add(trip.id);
+
+    if (shouldDisplayTrip(trip)) {
+        tripLayers[trip.id].route.addTo(map);
+        tripLayers[trip.id].markers.addTo(map);
+    }
 }
 
 /**
@@ -390,9 +439,9 @@ window.lockAllAccess = lockAllAccess;
  * Update trip info overlay (reflects only currently-visible trips)
  */
 function updateTripInfo() {
-    const visibleTrips = allTrips.filter(t => !tripLayers[t.id] || tripLayers[t.id].visible);
-    const visibleManifests = allManifests.filter(m =>
-        !tripLayers[m.tripId] || tripLayers[m.tripId].visible);
+    const visibleTrips = allTrips.filter(shouldDisplayTrip);
+    const visibleTripIds = new Set(visibleTrips.map(t => t.id));
+    const visibleManifests = allManifests.filter(m => visibleTripIds.has(m.tripId));
     const totalPhotos = visibleManifests.reduce((sum, m) => sum + m.photos.length, 0);
     const uniqueCountries = new Set(visibleTrips.flatMap(t => t.countries || []));
     const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
@@ -494,19 +543,11 @@ function setTripVisibility(tripId, visible) {
     const entry = tripLayers[tripId];
     if (!entry || entry.visible === visible) return;
     entry.visible = visible;
-    if (visible) {
-        entry.route.addTo(map);
-        entry.markers.addTo(map);
-    } else {
-        map.removeLayer(entry.route);
-        map.removeLayer(entry.markers);
-    }
     const hidden = loadHiddenTripIds();
     if (visible) hidden.delete(tripId);
     else hidden.add(tripId);
     saveHiddenTripIds(hidden);
-    updateTripInfo();
-    reinitLightbox();
+    syncVisibleTripLayers();
 }
 window.setTripVisibility = setTripVisibility;
 
@@ -575,8 +616,9 @@ function createMultiPhotoPopup(photos, location) {
  */
 function fitMapToBounds() {
     const bounds = L.latLngBounds([]);
-    Object.values(tripLayers).forEach(entry => {
-        if (!entry.visible) return;
+    allTrips.forEach(trip => {
+        if (!shouldDisplayTrip(trip)) return;
+        const entry = tripLayers[trip.id];
         try { bounds.extend(entry.route.getBounds()); } catch (e) {}
         if (entry.markers.getLayers().length > 0) {
             bounds.extend(entry.markers.getBounds());
@@ -597,8 +639,9 @@ function initLightbox() {
 function rebuildLightbox() {
     const galleryContainer = document.getElementById('gallery');
     galleryContainer.innerHTML = '';
+    const visibleTripIds = new Set(allTrips.filter(shouldDisplayTrip).map(t => t.id));
     allManifests.forEach(manifest => {
-        if (tripLayers[manifest.tripId] && !tripLayers[manifest.tripId].visible) return;
+        if (!visibleTripIds.has(manifest.tripId)) return;
         manifest.photos.forEach(photo => {
             const a = document.createElement('a');
             a.href = resolveUrl(manifest.tripPath, photo.display);

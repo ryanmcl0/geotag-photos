@@ -48,6 +48,19 @@ html, body {
     color: #e11d48;
 }
 
+.sidebar-portfolio-link {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.78rem;
+    color: #999;
+    text-decoration: none;
+}
+
+.sidebar-portfolio-link:hover {
+    color: #e11d48;
+    text-decoration: underline;
+}
+
 .sidebar-note {
     margin-top: 10px;
     font-size: 0.78rem;
@@ -668,6 +681,47 @@ html, body {
     margin-left: auto;
     color: #666;
     font-size: 12px;
+}
+
+/* Route type filter */
+.route-filter-wrapper {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 1000;
+    display: flex;
+    gap: 3px;
+    padding: 4px;
+    background: rgba(20, 20, 20, 0.88);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.route-filter-btn {
+    min-width: 44px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 600;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+}
+
+.route-filter-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+.route-filter-btn.active {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
 }
 
 /* Map style switcher */

@@ -39,6 +39,35 @@ html, body {
     color: #1a1a1a;
 }
 
+.sidebar-header h2 a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.sidebar-header h2 a:hover {
+    color: #e11d48;
+}
+
+.sidebar-portfolio-link {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.78rem;
+    color: #999;
+    text-decoration: none;
+}
+
+.sidebar-portfolio-link:hover {
+    color: #e11d48;
+    text-decoration: underline;
+}
+
+.sidebar-note {
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: #888;
+    line-height: 1.5;
+}
+
 .nav-list {
     list-style: none;
     padding: 12px 0;
@@ -232,37 +261,6 @@ html, body {
     margin-top: 4px;
 }
 
-/* EXIF toggle button - modern style */
-.exif-toggle {
-    position: absolute;
-    bottom: 30px;
-    right: 20px;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-    cursor: pointer;
-    z-index: 1000;
-    font-size: 1.1rem;
-    font-weight: bold;
-    color: #666;
-    transition: all 0.2s ease;
-}
-
-.exif-toggle:hover {
-    background: rgba(255, 255, 255, 1);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
-}
-
-.exif-toggle.active {
-    background: #1a1a1a;
-    color: white;
-    border-color: #1a1a1a;
-}
 
 /* Hidden gallery container */
 .gallery-hidden {
@@ -271,7 +269,7 @@ html, body {
 
 /* Photo marker with thumbnail - Instagram style */
 .photo-marker-icon {
-    position: relative;
+    position: absolute;
     cursor: pointer;
 }
 
@@ -319,6 +317,7 @@ html, body {
 
 /* Custom cluster markers - clean minimal style */
 .marker-cluster {
+    position: absolute;
     background: rgba(255, 255, 255, 0.95) !important;
     border: 2px solid #e11d48 !important;
     border-radius: 50% !important;
@@ -375,16 +374,6 @@ html, body {
     opacity: 0.9;
 }
 
-.photo-popup .popup-info {
-    margin-top: 10px;
-    font-size: 0.85rem;
-    color: #333;
-}
-
-.photo-popup .popup-info strong {
-    font-size: 0.9rem;
-    color: #1a1a1a;
-}
 
 /* Cluster popup with multiple photos */
 .cluster-popup {
@@ -419,16 +408,6 @@ html, body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-.exif-info {
-    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
-    font-size: 0.85rem;
-    color: #ccc;
-    padding: 10px;
-}
-
-.exif-info span {
-    margin-right: 15px;
-}
 
 /* Mobile responsive */
 @media (max-width: 768px) {
@@ -449,11 +428,6 @@ html, body {
 
     .sidebar-toggle {
         display: flex;
-    }
-
-    .exif-toggle {
-        bottom: 80px;
-        right: 10px;
     }
 
     .cluster-popup {
@@ -626,4 +600,174 @@ html, body {
     color: #666;
     font-size: 20px;
     padding: 8px 10px 0 0;
+}
+
+/* Year filter dropdown */
+.year-filter-wrapper {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    font-family: inherit;
+}
+
+.year-filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: rgba(20, 20, 20, 0.88);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 500;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.year-filter-btn:hover { background: rgba(35,35,35,0.95); }
+
+.year-filter-chevron { flex-shrink: 0; color: #aaa; }
+
+.year-filter-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 180px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.year-filter-menu.open { display: block; }
+
+.year-filter-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.12s, color 0.12s;
+}
+
+.year-filter-option:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+.year-filter-option--active { color: #fff; font-weight: 600; }
+
+.year-filter-check {
+    width: 14px;
+    flex-shrink: 0;
+    color: #fff;
+    font-size: 11px;
+}
+
+.year-filter-count {
+    margin-left: auto;
+    color: #666;
+    font-size: 12px;
+}
+
+/* Route type filter */
+.route-filter-wrapper {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 1000;
+    display: flex;
+    gap: 3px;
+    padding: 4px;
+    background: rgba(20, 20, 20, 0.88);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.route-filter-btn {
+    min-width: 44px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 600;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+}
+
+.route-filter-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+.route-filter-btn.active {
+    background: rgba(255,255,255,0.2);
+    color: #fff;
+}
+
+/* Map style switcher */
+.map-style-control {
+    position: absolute;
+    bottom: 32px;
+    right: 12px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: rgba(20, 20, 20, 0.85);
+    backdrop-filter: blur(6px);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.map-style-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+
+.map-style-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+.map-style-btn.active {
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+    font-weight: 600;
+}
+
+.map-style-icon {
+    font-size: 14px;
+    line-height: 1;
 }

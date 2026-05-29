@@ -9,9 +9,11 @@ const CONFIG = {
     defaultZoom: 6,
     maxZoom: 18,
 
-    // Clustering settings — keep markers separated until the map is dense
+    // Cluster for readability once the map is regional enough. At world/continent
+    // zooms, pixel clustering can merge unrelated places into a synthetic marker.
     clusterRadius: 35,
     disableClusteringAtZoom: 13,
+    minClusteringZoom: 5,
 
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
@@ -24,7 +26,6 @@ let map;
 let allTrips = [];        // trips currently loaded onto the map
 let allManifests = [];
 let allTripsMeta = [];    // full index — all trips including non-public
-let showExif = false;
 let lightbox;
 
 // Per-trip layers — so each trip can be toggled on/off independently.
@@ -37,6 +38,7 @@ function checkAllAccess() {
 }
 
 const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
+let activeRouteFilter = 'all'; // 'all' | 'gpx'
 
 function loadHiddenTripIds() {
     try {
@@ -53,12 +55,176 @@ function saveHiddenTripIds(hiddenSet) {
 /**
  * Initialize the application
  */
+let activeYearFilter = null; // null = all years
+
 async function init() {
     initMap();
     await loadTripData();
     initLightbox();
-    initExifToggle();
+    initYearFilter();
+    initRouteFilter();
 }
+
+function tripMatchesYearFilter(trip) {
+    if (!activeYearFilter) return true;
+    const m = (trip.name || '').match(/^(\d{4})/);
+    const tripYear = m ? parseInt(m[1]) : trip.year;
+    return tripYear === activeYearFilter;
+}
+
+function tripMatchesRouteFilter(trip) {
+    if (activeRouteFilter === 'all') return true;
+    const layer = tripLayers[trip.id];
+    return Boolean(layer && layer.hasGpx);
+}
+
+function shouldDisplayTrip(trip) {
+    const layer = tripLayers[trip.id];
+    return Boolean(layer && layer.visible && tripMatchesYearFilter(trip) && tripMatchesRouteFilter(trip));
+}
+
+function syncVisibleTripLayers({ fit = false } = {}) {
+    allTrips.forEach(trip => {
+        const layer = tripLayers[trip.id];
+        if (!layer) return;
+        const show = shouldDisplayTrip(trip);
+        if (show) {
+            if (!map.hasLayer(layer.route)) layer.route.addTo(map);
+            if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
+        } else {
+            map.removeLayer(layer.route);
+            map.removeLayer(layer.markers);
+        }
+    });
+
+    updateTripInfo();
+    reinitLightbox();
+    if (fit) fitMapToBounds();
+}
+
+function initYearFilter() {
+    const years = [...new Set(allTrips.map(t => {
+        const m = (t.name || '').match(/^(\d{4})/);
+        return m ? parseInt(m[1]) : t.year;
+    }))].filter(Boolean).sort((a, b) => b - a);
+
+    if (years.length < 2) return; // not worth showing for 1 year
+
+    const countByYear = {};
+    allTrips.forEach(t => {
+        const m = (t.name || '').match(/^(\d{4})/);
+        const y = m ? parseInt(m[1]) : t.year;
+        if (y) countByYear[y] = (countByYear[y] || 0) + 1;
+    });
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'year-filter-wrapper';
+    wrapper.innerHTML = `
+        <button class="year-filter-btn" id="yearFilterBtn">
+            <span id="yearFilterLabel">All years</span>
+            <svg class="year-filter-chevron" viewBox="0 0 10 6" width="10" height="6">
+                <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            </svg>
+        </button>
+        <div class="year-filter-menu" id="yearFilterMenu">
+            <div class="year-filter-option year-filter-option--active" data-year="">
+                <span class="year-filter-check">✓</span>All years
+            </div>
+            ${years.map(y => `
+                <div class="year-filter-option" data-year="${y}">
+                    <span class="year-filter-check"></span>${y}
+                    <span class="year-filter-count">${countByYear[y]} trip${countByYear[y] !== 1 ? 's' : ''}</span>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    document.getElementById('map').appendChild(wrapper);
+
+    const btn = wrapper.querySelector('#yearFilterBtn');
+    const menu = wrapper.querySelector('#yearFilterMenu');
+
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        menu.classList.toggle('open');
+    });
+    document.addEventListener('click', () => menu.classList.remove('open'));
+    menu.addEventListener('click', e => e.stopPropagation());
+
+    wrapper.querySelectorAll('.year-filter-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+            const year = opt.dataset.year ? parseInt(opt.dataset.year) : null;
+            setYearFilter(year, wrapper);
+            menu.classList.remove('open');
+        });
+    });
+}
+
+function setYearFilter(year, wrapper) {
+    activeYearFilter = year;
+    const label = wrapper.querySelector('#yearFilterLabel');
+    label.textContent = year ? String(year) : 'All years';
+
+    wrapper.querySelectorAll('.year-filter-option').forEach(opt => {
+        const optYear = opt.dataset.year ? parseInt(opt.dataset.year) : null;
+        const active = optYear === year;
+        opt.classList.toggle('year-filter-option--active', active);
+        opt.querySelector('.year-filter-check').textContent = active ? '✓' : '';
+    });
+
+    syncVisibleTripLayers({ fit: true });
+}
+
+function initRouteFilter() {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'route-filter-wrapper';
+    wrapper.innerHTML = `
+        <button class="route-filter-btn" data-filter="all">All</button>
+        <button class="route-filter-btn" data-filter="gpx">GPX</button>
+    `;
+    document.getElementById('map').appendChild(wrapper);
+
+    wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
+        btn.addEventListener('click', () => setRouteFilter(btn.dataset.filter, wrapper));
+    });
+}
+
+function setRouteFilter(filter, wrapper) {
+    activeRouteFilter = filter === 'gpx' ? 'gpx' : 'all';
+    wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
+    });
+    syncVisibleTripLayers({ fit: true });
+}
+
+// Base layer definitions
+const BASE_LAYERS = {
+    satellite: {
+        label: 'Satellite',
+        icon: '🛰',
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        options: { attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics' },
+        labels: true
+    },
+    streets: {
+        label: 'Streets',
+        icon: '🗺',
+        url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+        options: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+        labels: false
+    },
+    topo: {
+        label: 'Topo',
+        icon: '⛰',
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        options: { maxZoom: 17, attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> &bull; Style &copy; <a href="https://opentopomap.org">OpenTopoMap</a>' },
+        labels: false
+    }
+};
+
+const BASE_LAYER_KEY = 'geotagPhotos.baseLayer';
+let currentBaseLayer = null;
+let labelsLayer = null;
 
 /**
  * Initialize Leaflet map
@@ -70,23 +236,48 @@ function initMap() {
         zoomControl: true
     });
 
-    // Esri World Imagery (satellite) base layer
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: CONFIG.maxZoom,
-        attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-    }).addTo(map);
+    const saved = localStorage.getItem(BASE_LAYER_KEY) || 'satellite';
+    setBaseLayer(saved in BASE_LAYERS ? saved : 'satellite');
+    initMapStyleControl();
+}
 
-    // Place/road labels on top of satellite (CartoDB labels-only overlay)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
-        maxZoom: CONFIG.maxZoom,
-        attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
-        pane: 'overlayPane'
-    }).addTo(map);
+function setBaseLayer(key) {
+    const def = BASE_LAYERS[key];
+    if (!def) return;
+    if (currentBaseLayer) map.removeLayer(currentBaseLayer);
+    if (labelsLayer) { map.removeLayer(labelsLayer); labelsLayer = null; }
+    currentBaseLayer = L.tileLayer(def.url, { ...def.options, maxZoom: CONFIG.maxZoom }).addTo(map);
+    if (def.labels) {
+        labelsLayer = L.tileLayer(
+            'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
+            { maxZoom: CONFIG.maxZoom, pane: 'overlayPane' }
+        ).addTo(map);
+    }
+    localStorage.setItem(BASE_LAYER_KEY, key);
+    document.querySelectorAll('.map-style-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.layer === key);
+    });
+}
+
+function initMapStyleControl() {
+    const ctrl = document.createElement('div');
+    ctrl.className = 'map-style-control';
+    const current = localStorage.getItem(BASE_LAYER_KEY) || 'satellite';
+    ctrl.innerHTML = Object.entries(BASE_LAYERS).map(([key, def]) => `
+        <button class="map-style-btn${current === key ? ' active' : ''}" data-layer="${key}" title="${def.label}">
+            <span class="map-style-icon">${def.icon}</span>
+            <span class="map-style-label">${def.label}</span>
+        </button>
+    `).join('');
+    ctrl.querySelectorAll('.map-style-btn').forEach(btn =>
+        btn.addEventListener('click', () => setBaseLayer(btn.dataset.layer))
+    );
+    document.getElementById('map').appendChild(ctrl);
 }
 
 function makeClusterGroup() {
     return L.markerClusterGroup({
-        maxClusterRadius: CONFIG.clusterRadius,
+        maxClusterRadius: zoom => zoom < CONFIG.minClusteringZoom ? 1 : CONFIG.clusterRadius,
         disableClusteringAtZoom: CONFIG.disableClusteringAtZoom,
         spiderfyOnMaxZoom: false,
         showCoverageOnHover: false,
@@ -136,9 +327,8 @@ async function loadTripData() {
             }
         }
 
-        // On 'all' view: show only public trips unless user has all_access cookie
-        const viewMode = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.mode) || 'all';
-        if (viewMode === 'all' && !checkAllAccess()) {
+        // Always hide private trips unless user has all_access cookie
+        if (!checkAllAccess()) {
             trips = trips.filter(t => t.public !== false);
         }
 
@@ -185,16 +375,18 @@ async function loadSingleTrip(trip, basePath) {
         route: buildRouteLayer(routeData, color, trip.name),
         markers: buildMarkerLayer(manifest),
         color,
+        hasGpx: Boolean(manifest.source && manifest.source.gpx_path),
         visible: !hidden.has(trip.id),
     };
-    if (tripLayers[trip.id].visible) {
-        tripLayers[trip.id].route.addTo(map);
-        tripLayers[trip.id].markers.addTo(map);
-    }
 
     allTrips.push(trip);
     allManifests.push(manifest);
     loadedTripIds.add(trip.id);
+
+    if (shouldDisplayTrip(trip)) {
+        tripLayers[trip.id].route.addTo(map);
+        tripLayers[trip.id].markers.addTo(map);
+    }
 }
 
 /**
@@ -247,9 +439,9 @@ window.lockAllAccess = lockAllAccess;
  * Update trip info overlay (reflects only currently-visible trips)
  */
 function updateTripInfo() {
-    const visibleTrips = allTrips.filter(t => !tripLayers[t.id] || tripLayers[t.id].visible);
-    const visibleManifests = allManifests.filter(m =>
-        !tripLayers[m.tripId] || tripLayers[m.tripId].visible);
+    const visibleTrips = allTrips.filter(shouldDisplayTrip);
+    const visibleTripIds = new Set(visibleTrips.map(t => t.id));
+    const visibleManifests = allManifests.filter(m => visibleTripIds.has(m.tripId));
     const totalPhotos = visibleManifests.reduce((sum, m) => sum + m.photos.length, 0);
     const uniqueCountries = new Set(visibleTrips.flatMap(t => t.countries || []));
     const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
@@ -327,7 +519,7 @@ function buildMarkerLayer(manifest) {
 
     manifest.clusters.forEach(cluster => {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
-        const thumbnailUrl = `${manifest.tripPath}/${photos[0].thumbnail}`;
+        const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
         const marker = L.marker([cluster.lat, cluster.lon], {
             icon: createPhotoIcon(photos.length, thumbnailUrl)
         });
@@ -351,21 +543,17 @@ function setTripVisibility(tripId, visible) {
     const entry = tripLayers[tripId];
     if (!entry || entry.visible === visible) return;
     entry.visible = visible;
-    if (visible) {
-        entry.route.addTo(map);
-        entry.markers.addTo(map);
-    } else {
-        map.removeLayer(entry.route);
-        map.removeLayer(entry.markers);
-    }
     const hidden = loadHiddenTripIds();
     if (visible) hidden.delete(tripId);
     else hidden.add(tripId);
     saveHiddenTripIds(hidden);
-    updateTripInfo();
-    reinitLightbox();
+    syncVisibleTripLayers();
 }
 window.setTripVisibility = setTripVisibility;
+
+function resolveUrl(tripPath, photoPath) {
+    return photoPath.startsWith('http') ? photoPath : `${tripPath}/${photoPath}`;
+}
 
 /**
  * Create icon for photo marker with thumbnail preview
@@ -391,16 +579,13 @@ function createPhotoIcon(count, thumbnailUrl) {
  * Create popup for single photo
  */
 function createSinglePhotoPopup(photo, location) {
-    const exifHtml = showExif ? createExifHtml(photo) : '';
-
     return `
         <div class="photo-popup">
-            <img src="${photo.tripPath}/${photo.thumbnail}"
+            <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
                  alt=""
                  class="popup-thumbnail"
                  data-photo-id="${photo.id}"
                  onclick="openGallery('${photo.id}')">
-            ${exifHtml ? `<div class="popup-info">${exifHtml}</div>` : ''}
         </div>
     `;
 }
@@ -410,7 +595,7 @@ function createSinglePhotoPopup(photo, location) {
  */
 function createMultiPhotoPopup(photos, location) {
     const thumbnails = photos.map(photo => `
-        <img src="${photo.tripPath}/${photo.thumbnail}"
+        <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
              alt=""
              data-photo-id="${photo.id}"
              onclick="openGallery('${photo.id}')">
@@ -425,29 +610,15 @@ function createMultiPhotoPopup(photos, location) {
     `;
 }
 
-/**
- * Create EXIF info HTML
- */
-function createExifHtml(photo) {
-    if (!photo.camera_settings) return '';
-
-    const { iso, aperture, shutter } = photo.camera_settings;
-    return `
-        <div class="exif-info">
-            <span>ISO ${iso}</span>
-            <span>${aperture}</span>
-            <span>${shutter}</span>
-        </div>
-    `;
-}
 
 /**
  * Fit map to show currently-visible trips' content
  */
 function fitMapToBounds() {
     const bounds = L.latLngBounds([]);
-    Object.values(tripLayers).forEach(entry => {
-        if (!entry.visible) return;
+    allTrips.forEach(trip => {
+        if (!shouldDisplayTrip(trip)) return;
+        const entry = tripLayers[trip.id];
         try { bounds.extend(entry.route.getBounds()); } catch (e) {}
         if (entry.markers.getLayers().length > 0) {
             bounds.extend(entry.markers.getBounds());
@@ -468,18 +639,15 @@ function initLightbox() {
 function rebuildLightbox() {
     const galleryContainer = document.getElementById('gallery');
     galleryContainer.innerHTML = '';
+    const visibleTripIds = new Set(allTrips.filter(shouldDisplayTrip).map(t => t.id));
     allManifests.forEach(manifest => {
-        if (tripLayers[manifest.tripId] && !tripLayers[manifest.tripId].visible) return;
+        if (!visibleTripIds.has(manifest.tripId)) return;
         manifest.photos.forEach(photo => {
             const a = document.createElement('a');
-            a.href = `${manifest.tripPath}/${photo.display}`;
+            a.href = resolveUrl(manifest.tripPath, photo.display);
             a.className = 'glightbox';
             a.dataset.photoId = photo.id;
             a.dataset.gallery = 'trip-photos';
-            if (showExif && photo.camera_settings) {
-                const { iso, aperture, shutter } = photo.camera_settings;
-                a.dataset.description = `ISO ${iso} | ${aperture} | ${shutter}`;
-            }
             galleryContainer.appendChild(a);
         });
     });
@@ -513,21 +681,6 @@ function openGallery(photoId) {
     if (found) {
         lightbox.openAt(photoIndex);
     }
-}
-
-/**
- * Initialize EXIF toggle button
- */
-function initExifToggle() {
-    const toggle = document.getElementById('exif-toggle');
-
-    toggle.addEventListener('click', () => {
-        showExif = !showExif;
-        toggle.classList.toggle('active', showExif);
-
-        // Reinitialize lightbox with/without EXIF descriptions
-        reinitLightbox();
-    });
 }
 
 function reinitLightbox() {

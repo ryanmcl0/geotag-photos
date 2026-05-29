@@ -481,6 +481,125 @@ html, body {
     }
 }
 
+/* See All section at sidebar bottom */
+.see-all-section {
+    padding: 12px 20px 20px;
+    border-top: 1px solid #e5e5e5;
+    margin-top: 8px;
+}
+
+.see-all-btn {
+    width: 100%;
+    padding: 9px 14px;
+    background: transparent;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    color: #888;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s;
+}
+
+.see-all-btn:hover {
+    background: #f5f5f5;
+    border-color: #ccc;
+    color: #333;
+}
+
+.see-all-form {
+    display: none;
+    margin-top: 8px;
+}
+
+.see-all-form input[type="password"] {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+    outline: none;
+    transition: border-color 0.15s;
+    color: #1a1a1a;
+}
+
+.see-all-form input[type="password"]:focus {
+    border-color: #e11d48;
+}
+
+.see-all-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.see-all-submit {
+    flex: 1;
+    padding: 8px;
+    background: #e11d48;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.see-all-submit:hover { background: #be123c; }
+
+.see-all-submit:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+.see-all-cancel {
+    padding: 8px 12px;
+    background: transparent;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    color: #888;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.see-all-cancel:hover { background: #f5f5f5; }
+
+.see-all-error {
+    font-size: 0.75rem;
+    color: #e11d48;
+    margin-top: 6px;
+    min-height: 1em;
+}
+
+.see-all-unlocked {
+    font-size: 0.8rem;
+    color: #16a34a;
+    padding: 6px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.see-all-lock-btn {
+    font-size: 0.75rem;
+    color: #888;
+    background: transparent;
+    border: 1px solid #e5e5e5;
+    border-radius: 5px;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.see-all-lock-btn:hover {
+    background: #f5f5f5;
+    color: #333;
+}
+
 /* Route line styling */
 .route-line {
     stroke: #e11d48;

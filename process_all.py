@@ -77,13 +77,15 @@ def merge_gpx_to_temp(gpx_files: list[Path]) -> Path:
     return Path(tmp.name)
 
 
-def build_command(trip: dict, gpx_path: Path | None) -> list[str]:
+def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool = False) -> list[str]:
     cmd = [sys.executable, 'process_trip.py',
            '--name', trip['name'],
            '--photos', trip['edits']]
 
     if gpx_path:
         cmd += ['--gpx', str(gpx_path)]
+    if skip_existing_images:
+        cmd += ['--skip-existing-images']
 
     opts = trip.get('options', {})
     if opts.get('geosync'):
@@ -94,6 +96,24 @@ def build_command(trip: dict, gpx_path: Path | None) -> list[str]:
         cmd += ['--fallback-location', opts['fallback_location']]
     if opts.get('cluster_radius'):
         cmd += ['--cluster-radius', str(opts['cluster_radius'])]
+    if trip.get('kmz'):
+        cmd += ['--kmz', trip['kmz']]
+    if trip.get('raws'):
+        cmd += ['--raws-root', trip['raws']]
+    if opts.get('split_offroute_private'):
+        cmd += ['--split-offroute-private']
+    if opts.get('private_cluster_radius'):
+        cmd += ['--private-cluster-radius', str(opts['private_cluster_radius'])]
+    if opts.get('gpx_route_subdir'):
+        cmd += ['--gpx-route-subdir', opts['gpx_route_subdir']]
+    if opts.get('route_snap_public_hours') is not None:
+        cmd += ['--route-snap-public-hours', str(opts['route_snap_public_hours'])]
+
+    # Always provide the building-coords file when present; process_trip ignores
+    # it if there's no raw tree to derive building names from.
+    locations = PROJECT_ROOT / 'locations.json'
+    if locations.exists():
+        cmd += ['--locations-file', str(locations)]
 
     return cmd
 
@@ -103,7 +123,9 @@ def build_command(trip: dict, gpx_path: Path | None) -> list[str]:
 @click.option('--trip', 'trip_filter', default=None, metavar='NAME',
               help='Process only trips whose name contains NAME (case-insensitive)')
 @click.option('--dry-run', is_flag=True, help='Show what would run without executing')
-def process_all(force: bool, trip_filter: str | None, dry_run: bool):
+@click.option('--skip-existing-images', is_flag=True,
+              help='Reuse already-generated thumbnails/display images (only recompute placement/clusters/manifest)')
+def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool):
     """Process all trips listed in trips.json."""
     if not TRIPS_CONFIG.exists():
         click.echo("Error: trips.json not found. Copy trips.example.json to trips.json and fill it in.", err=True)
@@ -166,7 +188,7 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool):
                     tmp_gpx = merge_gpx_to_temp(gpx_files)
                     gpx_path = tmp_gpx
 
-            cmd = build_command(trip, gpx_path)
+            cmd = build_command(trip, gpx_path, skip_existing_images=skip_existing_images)
             result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
             if result.returncode != 0:
                 click.echo(f"\n  ✗ Failed (exit {result.returncode})", err=True)

@@ -15,6 +15,9 @@ scripts/trip_inventory.json
 public.json
 trips.json
 
+# Curated building/location coordinates (reveals private trip locations)
+locations.json
+
 # Generated year/trip HTML pages
 web/20*/
 
@@ -24,6 +27,8 @@ wrangler.toml
 
 # ── Local docs ───────────────────────────────────────────────────────────────
 docs/
+
+safety-check/
 
 # ── OS / tooling ─────────────────────────────────────────────────────────────
 .DS_Store

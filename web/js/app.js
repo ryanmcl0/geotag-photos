@@ -60,6 +60,35 @@ async function init() {
     initExifToggle();
 }
 
+// Base layer definitions
+const BASE_LAYERS = {
+    satellite: {
+        label: 'Satellite',
+        icon: '🛰',
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        options: { attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics' },
+        labels: true
+    },
+    streets: {
+        label: 'Streets',
+        icon: '🗺',
+        url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+        options: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+        labels: false
+    },
+    topo: {
+        label: 'Topo',
+        icon: '⛰',
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        options: { maxZoom: 17, attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, <a href="http://viewfinderpanoramas.org">SRTM</a> &bull; Style &copy; <a href="https://opentopomap.org">OpenTopoMap</a>' },
+        labels: false
+    }
+};
+
+const BASE_LAYER_KEY = 'geotagPhotos.baseLayer';
+let currentBaseLayer = null;
+let labelsLayer = null;
+
 /**
  * Initialize Leaflet map
  */
@@ -70,18 +99,43 @@ function initMap() {
         zoomControl: true
     });
 
-    // Esri World Imagery (satellite) base layer
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: CONFIG.maxZoom,
-        attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-    }).addTo(map);
+    const saved = localStorage.getItem(BASE_LAYER_KEY) || 'satellite';
+    setBaseLayer(saved in BASE_LAYERS ? saved : 'satellite');
+    initMapStyleControl();
+}
 
-    // Place/road labels on top of satellite (CartoDB labels-only overlay)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
-        maxZoom: CONFIG.maxZoom,
-        attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
-        pane: 'overlayPane'
-    }).addTo(map);
+function setBaseLayer(key) {
+    const def = BASE_LAYERS[key];
+    if (!def) return;
+    if (currentBaseLayer) map.removeLayer(currentBaseLayer);
+    if (labelsLayer) { map.removeLayer(labelsLayer); labelsLayer = null; }
+    currentBaseLayer = L.tileLayer(def.url, { ...def.options, maxZoom: CONFIG.maxZoom }).addTo(map);
+    if (def.labels) {
+        labelsLayer = L.tileLayer(
+            'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
+            { maxZoom: CONFIG.maxZoom, pane: 'overlayPane' }
+        ).addTo(map);
+    }
+    localStorage.setItem(BASE_LAYER_KEY, key);
+    document.querySelectorAll('.map-style-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.layer === key);
+    });
+}
+
+function initMapStyleControl() {
+    const ctrl = document.createElement('div');
+    ctrl.className = 'map-style-control';
+    const current = localStorage.getItem(BASE_LAYER_KEY) || 'satellite';
+    ctrl.innerHTML = Object.entries(BASE_LAYERS).map(([key, def]) => `
+        <button class="map-style-btn${current === key ? ' active' : ''}" data-layer="${key}" title="${def.label}">
+            <span class="map-style-icon">${def.icon}</span>
+            <span class="map-style-label">${def.label}</span>
+        </button>
+    `).join('');
+    ctrl.querySelectorAll('.map-style-btn').forEach(btn =>
+        btn.addEventListener('click', () => setBaseLayer(btn.dataset.layer))
+    );
+    document.getElementById('map').appendChild(ctrl);
 }
 
 function makeClusterGroup() {

@@ -627,3 +627,51 @@ html, body {
     font-size: 20px;
     padding: 8px 10px 0 0;
 }
+
+/* Map style switcher */
+.map-style-control {
+    position: absolute;
+    bottom: 32px;
+    right: 12px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: rgba(20, 20, 20, 0.85);
+    backdrop-filter: blur(6px);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.map-style-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+
+.map-style-btn:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+.map-style-btn.active {
+    background: rgba(255,255,255,0.18);
+    color: #fff;
+    font-weight: 600;
+}
+
+.map-style-icon {
+    font-size: 14px;
+    line-height: 1;
+}

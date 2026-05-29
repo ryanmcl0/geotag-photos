@@ -24,7 +24,6 @@ let map;
 let allTrips = [];        // trips currently loaded onto the map
 let allManifests = [];
 let allTripsMeta = [];    // full index — all trips including non-public
-let showExif = true; // always show EXIF in lightbox
 let lightbox;
 
 // Per-trip layers — so each trip can be toggled on/off independently.
@@ -538,8 +537,6 @@ function createPhotoIcon(count, thumbnailUrl) {
  * Create popup for single photo
  */
 function createSinglePhotoPopup(photo, location) {
-    const exifHtml = showExif ? createExifHtml(photo) : '';
-
     return `
         <div class="photo-popup">
             <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
@@ -547,7 +544,6 @@ function createSinglePhotoPopup(photo, location) {
                  class="popup-thumbnail"
                  data-photo-id="${photo.id}"
                  onclick="openGallery('${photo.id}')">
-            ${exifHtml ? `<div class="popup-info">${exifHtml}</div>` : ''}
         </div>
     `;
 }
@@ -572,21 +568,6 @@ function createMultiPhotoPopup(photos, location) {
     `;
 }
 
-/**
- * Create EXIF info HTML
- */
-function createExifHtml(photo) {
-    if (!photo.camera_settings) return '';
-
-    const { iso, aperture, shutter } = photo.camera_settings;
-    return `
-        <div class="exif-info">
-            <span>ISO ${iso}</span>
-            <span>${aperture}</span>
-            <span>${shutter}</span>
-        </div>
-    `;
-}
 
 /**
  * Fit map to show currently-visible trips' content
@@ -623,10 +604,6 @@ function rebuildLightbox() {
             a.className = 'glightbox';
             a.dataset.photoId = photo.id;
             a.dataset.gallery = 'trip-photos';
-            if (showExif && photo.camera_settings) {
-                const { iso, aperture, shutter } = photo.camera_settings;
-                a.dataset.description = `ISO ${iso} | ${aperture} | ${shutter}`;
-            }
             galleryContainer.appendChild(a);
         });
     });
@@ -662,9 +639,6 @@ function openGallery(photoId) {
     }
 }
 
-/**
- * Initialize EXIF toggle button
- */
 function reinitLightbox() {
     rebuildLightbox();
 }

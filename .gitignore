@@ -22,11 +22,15 @@ web/20*/
 .env.deploy
 wrangler.toml
 
+# ── Local docs ───────────────────────────────────────────────────────────────
+docs/
+
 # ── OS / tooling ─────────────────────────────────────────────────────────────
 .DS_Store
 __pycache__/
 *.pyc
 venv/
 .venv/
+.wrangler/
 
 notes.txt

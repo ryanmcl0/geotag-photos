@@ -110,21 +110,23 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool):
         sys.exit(1)
 
     config = json.loads(TRIPS_CONFIG.read_text())
-    trips = config.get('trips', [])
+    public_trips = [(t, True) for t in config.get('public', [])]
+    private_trips = [(t, False) for t in config.get('private', [])]
+    all_trips = public_trips + private_trips
 
     if trip_filter:
-        trips = [t for t in trips if trip_filter.lower() in t['name'].lower()]
-        if not trips:
+        all_trips = [(t, p) for t, p in all_trips if trip_filter.lower() in t['name'].lower()]
+        if not all_trips:
             click.echo(f"No trips matching '{trip_filter}'", err=True)
             sys.exit(1)
 
     to_process, already_done = [], []
-    for trip in trips:
+    for trip, is_public in all_trips:
         slug = slugify(trip['name'])
         if not force and is_processed(slug):
             already_done.append(trip['name'])
         else:
-            to_process.append(trip)
+            to_process.append((trip, is_public))
 
     if already_done:
         click.echo(f"Skipping {len(already_done)} already-processed trip(s) (--force to reprocess)")
@@ -134,9 +136,9 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool):
         return
 
     click.echo(f"\nWill process {len(to_process)} trip(s):")
-    for t in to_process:
+    for t, is_public in to_process:
         tag = 'GPX' if t.get('gpx') else 'no GPX'
-        vis = 'public' if t.get('public') else 'private'
+        vis = 'public' if is_public else 'private'
         click.echo(f"  [{tag}] [{vis}] {t['name']}")
 
     if dry_run:
@@ -145,7 +147,7 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool):
 
     click.echo()
     failed = []
-    for trip in to_process:
+    for trip, is_public in to_process:
         click.echo(f"{'='*60}")
         click.echo(f"  {trip['name']}")
         click.echo(f"{'='*60}")

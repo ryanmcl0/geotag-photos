@@ -67,8 +67,8 @@ def sync_public_flags(dry_run: bool = False):
         print("    ⚠️  trips.json not found, skipping")
         return
 
-    trips_config = json.loads(trips_config_path.read_text()).get('trips', [])
-    public_edits_paths = set(t['edits'] for t in trips_config if t.get('public'))
+    trips_config = json.loads(trips_config_path.read_text())
+    public_edits_paths = set(t['edits'] for t in trips_config.get('public', []))
 
     # Build slug → source Edits path from each trip's manifest
     slug_to_source: dict[str, str] = {}

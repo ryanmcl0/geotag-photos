@@ -470,7 +470,7 @@ function buildMarkerLayer(manifest) {
 
     manifest.clusters.forEach(cluster => {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
-        const thumbnailUrl = `${manifest.tripPath}/${photos[0].thumbnail}`;
+        const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
         const marker = L.marker([cluster.lat, cluster.lon], {
             icon: createPhotoIcon(photos.length, thumbnailUrl)
         });
@@ -510,6 +510,10 @@ function setTripVisibility(tripId, visible) {
 }
 window.setTripVisibility = setTripVisibility;
 
+function resolveUrl(tripPath, photoPath) {
+    return photoPath.startsWith('http') ? photoPath : `${tripPath}/${photoPath}`;
+}
+
 /**
  * Create icon for photo marker with thumbnail preview
  */
@@ -538,7 +542,7 @@ function createSinglePhotoPopup(photo, location) {
 
     return `
         <div class="photo-popup">
-            <img src="${photo.tripPath}/${photo.thumbnail}"
+            <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
                  alt=""
                  class="popup-thumbnail"
                  data-photo-id="${photo.id}"
@@ -553,7 +557,7 @@ function createSinglePhotoPopup(photo, location) {
  */
 function createMultiPhotoPopup(photos, location) {
     const thumbnails = photos.map(photo => `
-        <img src="${photo.tripPath}/${photo.thumbnail}"
+        <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
              alt=""
              data-photo-id="${photo.id}"
              onclick="openGallery('${photo.id}')">
@@ -615,7 +619,7 @@ function rebuildLightbox() {
         if (tripLayers[manifest.tripId] && !tripLayers[manifest.tripId].visible) return;
         manifest.photos.forEach(photo => {
             const a = document.createElement('a');
-            a.href = `${manifest.tripPath}/${photo.display}`;
+            a.href = resolveUrl(manifest.tripPath, photo.display);
             a.className = 'glightbox';
             a.dataset.photoId = photo.id;
             a.dataset.gallery = 'trip-photos';

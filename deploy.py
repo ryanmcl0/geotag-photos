@@ -249,7 +249,7 @@ class PagesDeployer:
             print(f"    [dry-run] would set Pages secret: {name}")
             return True
         result = subprocess.run(
-            ['wrangler', 'pages', 'secret', 'put', name,
+            ['npx', 'wrangler', 'pages', 'secret', 'put', name,
              '--project-name', self.config.pages_project],
             input=value, text=True, capture_output=True
         )
@@ -463,24 +463,33 @@ def main():
         print()
 
     # Step 6: Deploy to Pages
+    success = True
     if not args.skip_pages:
         if config.git_repo:
             print("🌐 Syncing to Git repository...")
             syncer = GitSyncer(config)
             success = syncer.sync(dry_run=args.dry_run)
+            if success and not args.dry_run:
+                # Push to remote so CF Pages auto-deploys
+                import subprocess as _sp
+                _sp.run(['git', 'push', 'origin', 'main'],
+                        cwd=config.git_repo, check=False, capture_output=True)
+                print("    ✓ Pushed to origin/main — CF Pages will auto-deploy")
         else:
             print("🌐 Deploying to Cloudflare Pages (Direct)...")
             success = deployer.deploy(dry_run=args.dry_run)
 
-        # Restore local manifests regardless of deploy outcome
-        if not args.dry_run:
-            print("\n♻️  Restoring local manifests...")
-            patcher.restore_all()
+    # Always restore local manifests — even on --skip-pages or failure,
+    # so local paths are never left in CDN-patched state.
+    if not args.dry_run:
+        print("\n♻️  Restoring local manifests...")
+        patcher.restore_all()
 
+    if not args.skip_pages:
         if success:
             print()
             if config.git_repo:
-                print(f"✅ Synced! Remember to push/merge in {config.git_repo}")
+                print(f"✅ Done! https://{config.pages_project}.pages.dev")
             else:
                 print(f"✅ Done! https://{config.pages_project}.pages.dev")
         else:

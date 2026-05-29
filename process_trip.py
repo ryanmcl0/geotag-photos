@@ -1345,8 +1345,22 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     if filter_by_raws_in:
         before = len(photo_files)
-        photo_files = [p for p in photo_files if find_raw(p.stem) is not None]
-        click.echo(f"  Kept {len(photo_files)} of {before} photos that have a matching raw")
+        _TIMESTAMP_COLLISION_DAYS = 30  # if raw timestamp differs from edit by >30 days, it's a stem collision
+
+        def _raw_matches_edit(edit_path: Path) -> bool:
+            raw = find_raw(edit_path.stem)
+            if raw is None:
+                return False
+            raw_ts = get_exif_datetime_via_exiftool(raw)
+            if raw_ts is None:
+                return True  # can't verify, assume match
+            edit_ts = get_exif_datetime(edit_path) or get_exif_datetime_via_exiftool(edit_path)
+            if edit_ts is None:
+                return True  # can't verify, assume match
+            return abs((raw_ts - edit_ts).days) <= _TIMESTAMP_COLLISION_DAYS
+
+        photo_files = [p for p in photo_files if _raw_matches_edit(p)]
+        click.echo(f"  Kept {len(photo_files)} of {before} photos with matching raw (timestamp-verified)")
         click.echo(f"  Will read DateTimeOriginal from the raw file when available")
 
     if not photo_files:

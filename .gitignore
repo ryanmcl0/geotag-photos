@@ -41,3 +41,4 @@ venv/
 .wrangler/
 
 notes.txt
+pipeline-bugs-and-context.md

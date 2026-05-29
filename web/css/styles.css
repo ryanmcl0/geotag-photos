@@ -240,7 +240,7 @@ html, body {
 
 /* Photo marker with thumbnail - Instagram style */
 .photo-marker-icon {
-    position: relative;
+    position: absolute;
     cursor: pointer;
 }
 
@@ -288,6 +288,7 @@ html, body {
 
 /* Custom cluster markers - clean minimal style */
 .marker-cluster {
+    position: absolute;
     background: rgba(255, 255, 255, 0.95) !important;
     border: 2px solid #e11d48 !important;
     border-radius: 50% !important;

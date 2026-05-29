@@ -9,9 +9,11 @@ const CONFIG = {
     defaultZoom: 6,
     maxZoom: 18,
 
-    // Clustering settings — keep markers separated until the map is dense
+    // Cluster for readability once the map is regional enough. At world/continent
+    // zooms, pixel clustering can merge unrelated places into a synthetic marker.
     clusterRadius: 35,
     disableClusteringAtZoom: 13,
+    minClusteringZoom: 5,
 
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
@@ -228,7 +230,7 @@ function initMapStyleControl() {
 
 function makeClusterGroup() {
     return L.markerClusterGroup({
-        maxClusterRadius: CONFIG.clusterRadius,
+        maxClusterRadius: zoom => zoom < CONFIG.minClusteringZoom ? 1 : CONFIG.clusterRadius,
         disableClusteringAtZoom: CONFIG.disableClusteringAtZoom,
         spiderfyOnMaxZoom: false,
         showCoverageOnHover: false,

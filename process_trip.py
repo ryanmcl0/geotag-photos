@@ -774,6 +774,40 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 
+def cluster_anchor_point(cluster_photos: list[dict]) -> tuple[float, float]:
+    """
+    Return an actual photo coordinate for the marker anchor.
+
+    Averaging works for tight GPS clusters, but for approximate/fallback groups it
+    can create a synthetic point between real places. A medoid keeps the marker
+    pinned to one of the concrete coordinates produced by the placement pipeline.
+    """
+    if len(cluster_photos) == 1:
+        photo = cluster_photos[0]
+        return photo['lat'], photo['lon']
+
+    # If a fallback/building/city placement produced identical coordinates for a
+    # whole group, keep that exact coordinate instead of doing floating math.
+    coord_counts: dict[tuple[float, float], int] = {}
+    for photo in cluster_photos:
+        key = (round(photo['lat'], 7), round(photo['lon'], 7))
+        coord_counts[key] = coord_counts.get(key, 0) + 1
+    most_common_key, most_common_count = max(coord_counts.items(), key=lambda item: item[1])
+    if most_common_count > 1:
+        for photo in cluster_photos:
+            if (round(photo['lat'], 7), round(photo['lon'], 7)) == most_common_key:
+                return photo['lat'], photo['lon']
+
+    def total_distance(photo: dict) -> float:
+        return sum(
+            haversine_distance(photo['lat'], photo['lon'], other['lat'], other['lon'])
+            for other in cluster_photos
+        )
+
+    anchor = min(cluster_photos, key=total_distance)
+    return anchor['lat'], anchor['lon']
+
+
 def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
     """
     Group photos into clusters based on proximity.
@@ -805,9 +839,7 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
                 cluster_photos.append(other)
                 used.add(other['id'])
 
-        # Calculate cluster center
-        avg_lat = sum(p['lat'] for p in cluster_photos) / len(cluster_photos)
-        avg_lon = sum(p['lon'] for p in cluster_photos) / len(cluster_photos)
+        anchor_lat, anchor_lon = cluster_anchor_point(cluster_photos)
 
         # Name the cluster after the most common building among its photos, if any
         building_names = [p['building'] for p in cluster_photos if p.get('building')]
@@ -818,8 +850,8 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
 
         clusters.append({
             'location': location,
-            'lat': avg_lat,
-            'lon': avg_lon,
+            'lat': anchor_lat,
+            'lon': anchor_lon,
             'photo_ids': [p['id'] for p in cluster_photos]
         })
 

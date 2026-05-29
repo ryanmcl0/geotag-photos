@@ -592,6 +592,87 @@ html, body {
     padding: 8px 10px 0 0;
 }
 
+/* Year filter dropdown */
+.year-filter-wrapper {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    font-family: inherit;
+}
+
+.year-filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: rgba(20, 20, 20, 0.88);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 500;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.year-filter-btn:hover { background: rgba(35,35,35,0.95); }
+
+.year-filter-chevron { flex-shrink: 0; color: #aaa; }
+
+.year-filter-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 180px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.year-filter-menu.open { display: block; }
+
+.year-filter-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.12s, color 0.12s;
+}
+
+.year-filter-option:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+.year-filter-option--active { color: #fff; font-weight: 600; }
+
+.year-filter-check {
+    width: 14px;
+    flex-shrink: 0;
+    color: #fff;
+    font-size: 11px;
+}
+
+.year-filter-count {
+    margin-left: auto;
+    color: #666;
+    font-size: 12px;
+}
+
 /* Map style switcher */
 .map-style-control {
     position: absolute;

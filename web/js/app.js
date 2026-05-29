@@ -53,11 +53,100 @@ function saveHiddenTripIds(hiddenSet) {
 /**
  * Initialize the application
  */
+let activeYearFilter = null; // null = all years
+
 async function init() {
     initMap();
     await loadTripData();
     initLightbox();
+    initYearFilter();
+}
 
+function initYearFilter() {
+    const years = [...new Set(allTrips.map(t => {
+        const m = (t.name || '').match(/^(\d{4})/);
+        return m ? parseInt(m[1]) : t.year;
+    }))].filter(Boolean).sort((a, b) => b - a);
+
+    if (years.length < 2) return; // not worth showing for 1 year
+
+    const countByYear = {};
+    allTrips.forEach(t => {
+        const m = (t.name || '').match(/^(\d{4})/);
+        const y = m ? parseInt(m[1]) : t.year;
+        if (y) countByYear[y] = (countByYear[y] || 0) + 1;
+    });
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'year-filter-wrapper';
+    wrapper.innerHTML = `
+        <button class="year-filter-btn" id="yearFilterBtn">
+            <span id="yearFilterLabel">All years</span>
+            <svg class="year-filter-chevron" viewBox="0 0 10 6" width="10" height="6">
+                <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            </svg>
+        </button>
+        <div class="year-filter-menu" id="yearFilterMenu">
+            <div class="year-filter-option year-filter-option--active" data-year="">
+                <span class="year-filter-check">✓</span>All years
+            </div>
+            ${years.map(y => `
+                <div class="year-filter-option" data-year="${y}">
+                    <span class="year-filter-check"></span>${y}
+                    <span class="year-filter-count">${countByYear[y]} trip${countByYear[y] !== 1 ? 's' : ''}</span>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    document.getElementById('map').appendChild(wrapper);
+
+    const btn = wrapper.querySelector('#yearFilterBtn');
+    const menu = wrapper.querySelector('#yearFilterMenu');
+
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        menu.classList.toggle('open');
+    });
+    document.addEventListener('click', () => menu.classList.remove('open'));
+    menu.addEventListener('click', e => e.stopPropagation());
+
+    wrapper.querySelectorAll('.year-filter-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+            const year = opt.dataset.year ? parseInt(opt.dataset.year) : null;
+            setYearFilter(year, wrapper);
+            menu.classList.remove('open');
+        });
+    });
+}
+
+function setYearFilter(year, wrapper) {
+    activeYearFilter = year;
+    const label = wrapper.querySelector('#yearFilterLabel');
+    label.textContent = year ? String(year) : 'All years';
+
+    wrapper.querySelectorAll('.year-filter-option').forEach(opt => {
+        const optYear = opt.dataset.year ? parseInt(opt.dataset.year) : null;
+        const active = optYear === year;
+        opt.classList.toggle('year-filter-option--active', active);
+        opt.querySelector('.year-filter-check').textContent = active ? '✓' : '';
+    });
+
+    allTrips.forEach(t => {
+        const layer = tripLayers[t.id];
+        if (!layer || !layer.visible) return;
+        const m = (t.name || '').match(/^(\d{4})/);
+        const tripYear = m ? parseInt(m[1]) : t.year;
+        const show = !year || tripYear === year;
+        if (show) {
+            if (!map.hasLayer(layer.route)) layer.route.addTo(map);
+            if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
+        } else {
+            map.removeLayer(layer.route);
+            map.removeLayer(layer.markers);
+        }
+    });
+
+    if (!year) fitMapToBounds();
 }
 
 // Base layer definitions

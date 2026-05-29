@@ -25,8 +25,10 @@ web/20*/
 .env.deploy
 wrangler.toml
 
-# ── Local docs ───────────────────────────────────────────────────────────────
+# ── Local docs & agent context (personal paths/data, never public) ───────────
 docs/
+CLAUDE.md
+scripts/
 
 safety-check/
 
@@ -39,3 +41,4 @@ venv/
 .wrangler/
 
 notes.txt
+pipeline-bugs-and-context.md

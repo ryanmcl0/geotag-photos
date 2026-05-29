@@ -14,10 +14,18 @@
         return document.cookie.split(';').some(c => c.trim() === 'all_access=1');
     }
 
+    // Strip leading "YYYY:MM " or "YYYY " prefix from trip names — these are
+    // internal folder naming conventions, not display labels.
+    function formatTripName(name) {
+        return name.replace(/^\d{4}[:\d]*\s+/, '');
+    }
+
     function buildYearGroups(trips) {
         const groups = {};
         trips.forEach(trip => {
-            const year = trip.year || new Date(trip.dates.start).getFullYear();
+            // Prefer year from trip name (immune to corrupted EXIF start dates)
+            const nameYear = trip.name && trip.name.match(/^(\d{4})/);
+            const year = nameYear ? parseInt(nameYear[1]) : (trip.year || new Date(trip.dates.start).getFullYear());
             if (!groups[year]) groups[year] = [];
             groups[year].push(trip);
         });
@@ -91,7 +99,7 @@
                     ? `<input type="checkbox" class="trip-toggle"
                               data-trip-id="${trip.id}"
                               ${isHidden ? '' : 'checked'}
-                              aria-label="Toggle ${trip.name}">`
+                              aria-label="Toggle ${formatTripName(trip.name)}">`
                     : '';
                 return `
                     <li class="trip-item">
@@ -99,7 +107,7 @@
                         <a href="${basePath}${year}/${tripSlug}/index.html"
                            class="nav-link"
                            data-trip-id="${trip.id}">
-                            ${trip.name}
+                            ${formatTripName(trip.name)}
                         </a>
                     </li>
                 `;

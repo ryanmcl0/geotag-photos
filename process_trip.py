@@ -669,6 +669,14 @@ def interpolate_gps_clamped(trackpoints: list[dict], photo_time: datetime) -> Op
         t0 = prev_point['time'] if prev_point['time'].tzinfo else prev_point['time'].replace(tzinfo=timezone.utc)
         t1 = next_point['time'] if next_point['time'].tzinfo else next_point['time'].replace(tzinfo=timezone.utc)
         span = (t1 - t0).total_seconds()
+        # Clamp to nearest endpoint across large gaps rather than interpolating to a
+        # wrong intermediate position (e.g. a 7-day gap where the route is unknown).
+        _MAX_INTERP_GAP = 6 * 3600  # 6 hours — beyond this, snap to nearest endpoint
+        if span > _MAX_INTERP_GAP:
+            gap_to_prev = (photo_time - t0).total_seconds()
+            gap_to_next = (t1 - photo_time).total_seconds()
+            ep = prev_point if gap_to_prev <= gap_to_next else next_point
+            return {'lat': ep['lat'], 'lon': ep['lon']}
         f = (photo_time - t0).total_seconds() / span if span > 0 else 0
         return {'lat': prev_point['lat'] + f * (next_point['lat'] - prev_point['lat']),
                 'lon': prev_point['lon'] + f * (next_point['lon'] - prev_point['lon'])}
@@ -766,6 +774,40 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 
+def cluster_anchor_point(cluster_photos: list[dict]) -> tuple[float, float]:
+    """
+    Return an actual photo coordinate for the marker anchor.
+
+    Averaging works for tight GPS clusters, but for approximate/fallback groups it
+    can create a synthetic point between real places. A medoid keeps the marker
+    pinned to one of the concrete coordinates produced by the placement pipeline.
+    """
+    if len(cluster_photos) == 1:
+        photo = cluster_photos[0]
+        return photo['lat'], photo['lon']
+
+    # If a fallback/building/city placement produced identical coordinates for a
+    # whole group, keep that exact coordinate instead of doing floating math.
+    coord_counts: dict[tuple[float, float], int] = {}
+    for photo in cluster_photos:
+        key = (round(photo['lat'], 7), round(photo['lon'], 7))
+        coord_counts[key] = coord_counts.get(key, 0) + 1
+    most_common_key, most_common_count = max(coord_counts.items(), key=lambda item: item[1])
+    if most_common_count > 1:
+        for photo in cluster_photos:
+            if (round(photo['lat'], 7), round(photo['lon'], 7)) == most_common_key:
+                return photo['lat'], photo['lon']
+
+    def total_distance(photo: dict) -> float:
+        return sum(
+            haversine_distance(photo['lat'], photo['lon'], other['lat'], other['lon'])
+            for other in cluster_photos
+        )
+
+    anchor = min(cluster_photos, key=total_distance)
+    return anchor['lat'], anchor['lon']
+
+
 def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
     """
     Group photos into clusters based on proximity.
@@ -797,9 +839,7 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
                 cluster_photos.append(other)
                 used.add(other['id'])
 
-        # Calculate cluster center
-        avg_lat = sum(p['lat'] for p in cluster_photos) / len(cluster_photos)
-        avg_lon = sum(p['lon'] for p in cluster_photos) / len(cluster_photos)
+        anchor_lat, anchor_lon = cluster_anchor_point(cluster_photos)
 
         # Name the cluster after the most common building among its photos, if any
         building_names = [p['building'] for p in cluster_photos if p.get('building')]
@@ -810,8 +850,8 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
 
         clusters.append({
             'location': location,
-            'lat': avg_lat,
-            'lon': avg_lon,
+            'lat': anchor_lat,
+            'lon': anchor_lon,
             'photo_ids': [p['id'] for p in cluster_photos]
         })
 
@@ -1345,8 +1385,22 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     if filter_by_raws_in:
         before = len(photo_files)
-        photo_files = [p for p in photo_files if find_raw(p.stem) is not None]
-        click.echo(f"  Kept {len(photo_files)} of {before} photos that have a matching raw")
+        _TIMESTAMP_COLLISION_DAYS = 30  # if raw timestamp differs from edit by >30 days, it's a stem collision
+
+        def _raw_matches_edit(edit_path: Path) -> bool:
+            raw = find_raw(edit_path.stem)
+            if raw is None:
+                return False
+            raw_ts = get_exif_datetime_via_exiftool(raw)
+            if raw_ts is None:
+                return True  # can't verify, assume match
+            edit_ts = get_exif_datetime(edit_path) or get_exif_datetime_via_exiftool(edit_path)
+            if edit_ts is None:
+                return True  # can't verify, assume match
+            return abs((raw_ts - edit_ts).days) <= _TIMESTAMP_COLLISION_DAYS
+
+        photo_files = [p for p in photo_files if _raw_matches_edit(p)]
+        click.echo(f"  Kept {len(photo_files)} of {before} photos with matching raw (timestamp-verified)")
         click.echo(f"  Will read DateTimeOriginal from the raw file when available")
 
     if not photo_files:
@@ -1524,10 +1578,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         on_route = bool(gpx_route_subdir) and raw_match is not None and \
             any(part.lower() == gpx_route_subdir.lower() for part in raw_match.parts)
         if on_route and trackpoints:
-            if gps is None:
-                gps = interpolate_gps_clamped(trackpoints, photo_time)
-                if gps:
-                    gps_source = 'gpx'
+            # Always use clamped interpolation for route-subdir photos, even if
+            # interpolate_gps already set a position — it may have interpolated
+            # across a multi-day GPX gap to a wrong intermediate location.
+            clamped = interpolate_gps_clamped(trackpoints, photo_time)
+            if clamped:
+                gps = clamped
+                gps_source = 'gpx'
 
         # No real GPS yet — place at the building's coords derived from the raw folder.
         building_name = None

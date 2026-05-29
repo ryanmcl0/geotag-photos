@@ -392,7 +392,7 @@ bucket_name = "{self.config.r2_bucket}"
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Deploy travel map to Cloudflare Pages + R2')
-    parser.add_argument('--skip-images', action='store_true', help='Skip R2 image upload')
+    parser.add_argument('--upload-images', action='store_true', help='Upload images to R2 (skipped by default)')
     parser.add_argument('--skip-pages', action='store_true', help='Skip Pages deployment')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument('--trip', help='Upload only a specific trip slug')
@@ -422,7 +422,7 @@ def main():
     print()
 
     # Step 2: Upload images to R2
-    if not args.skip_images:
+    if args.upload_images:
         print("📤 Uploading images to R2...")
         uploader = R2Uploader(config)
         if args.trip:

@@ -10,6 +10,14 @@ web/trips/*/display
 # Generated trip metadata (manifests, routes, index)
 web/trips/
 
+# Personal trip config (drive paths, public/private trip lists)
+scripts/trip_inventory.json
+public.json
+trips.json
+
+# Curated building/location coordinates (reveals private trip locations)
+locations.json
+
 # Generated year/trip HTML pages
 web/20*/
 
@@ -17,9 +25,17 @@ web/20*/
 .env.deploy
 wrangler.toml
 
+# ── Local docs ───────────────────────────────────────────────────────────────
+docs/
+
+safety-check/
+
 # ── OS / tooling ─────────────────────────────────────────────────────────────
 .DS_Store
 __pycache__/
 *.pyc
 venv/
 .venv/
+.wrangler/
+
+notes.txt

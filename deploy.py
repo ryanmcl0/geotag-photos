@@ -15,6 +15,8 @@ Environment variables (set in .env.deploy):
   CF_PAGES_PROJECT   Pages project name
   CF_R2_ENDPOINT     S3-compatible endpoint for uploads
   CF_SITE_PASSWORD   Password to protect the site (optional)
+  CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional)
+  CF_PAGES_GIT_REPO  Path to the local git repo for the site (optional)
 
 CF_CDN_BASE_URL is auto-derived as https://<pages-project>.pages.dev/photos
 """
@@ -42,6 +44,7 @@ class DeployConfig:
         self.r2_endpoint = os.getenv('CF_R2_ENDPOINT')
         self.r2_access_key_id = os.getenv('CF_R2_ACCESS_KEY_ID')
         self.r2_secret_key = os.getenv('CF_R2_SECRET_KEY')
+        self.git_repo = os.getenv('CF_PAGES_GIT_REPO')
 
         missing = [f"CF_{n.upper()}" for n in ['account_id', 'api_token', 'r2_bucket', 'pages_project', 'r2_endpoint', 'r2_access_key_id', 'r2_secret_key']
                    if not getattr(self, n)]
@@ -51,6 +54,76 @@ class DeployConfig:
 
         # CDN base URL: images are served through Pages proxy, not directly from R2
         self.cdn_base_url = f"https://{self.pages_project}.pages.dev/photos"
+
+
+def sync_public_flags(dry_run: bool = False):
+    """Sync public flags into web/trips/index.json.
+
+    Reads trips.json and matches each processed trip by manifest source.photos_path
+    against the trip's edits path. Sets public=True/False accordingly.
+    """
+    trips_config_path = Path('trips.json')
+    index_path = Path('web/trips/index.json')
+
+    if not trips_config_path.exists():
+        print("    ⚠️  trips.json not found, skipping")
+        return
+
+    import re as _re
+
+    def _slugify(name: str) -> str:
+        s = name.lower()
+        s = _re.sub(r'[^a-z0-9]+', '-', s)
+        return s.strip('-')
+
+    trips_config = json.loads(trips_config_path.read_text())
+    public_edits_paths = set(t['edits'] for t in trips_config.get('public', []))
+
+    # Explicit private slugs — trips in the private block, keyed by slug.
+    # These always win over path matching (handles shared edits paths like
+    # "2024 China (March)" sharing /Edits/2024 China with the public Xinjiang trip).
+    explicit_private_slugs = {_slugify(t['name']) for t in trips_config.get('private', [])}
+
+    # Build slug → source Edits path from each trip's manifest
+    slug_to_source: dict[str, str] = {}
+    for manifest_file in sorted(Path('web/trips').rglob('manifest.json')):
+        slug = manifest_file.parent.name
+        try:
+            manifest = json.loads(manifest_file.read_text())
+            source_path = manifest.get('source', {}).get('photos_path', '')
+            if source_path:
+                slug_to_source[slug] = source_path
+        except Exception:
+            pass
+
+    index = json.loads(index_path.read_text())
+    changed = 0
+    for trip in index.get('trips', []):
+        source_path = slug_to_source.get(trip['id'], '')
+        # Priority order:
+        # 1. Slugs ending in '-private' → always private (off-route splits)
+        # 2. Slug appears in trips.json private block → private
+        # 3. source.photos_path matches a public edits path → public
+        # 4. Otherwise → private
+        if trip['id'].endswith('-private'):
+            is_public = False
+        elif trip['id'] in explicit_private_slugs:
+            is_public = False
+        else:
+            is_public = source_path in public_edits_paths
+        if trip.get('public') != is_public:
+            trip['public'] = is_public
+            changed += 1
+
+    if dry_run:
+        print(f"    [dry-run] would update public flags ({changed} changes)")
+        return
+
+    index_path.write_text(json.dumps(index, indent=2) + '\n')
+    if changed:
+        print(f"    ✓ Updated public flags for {changed} trips")
+    else:
+        print(f"    ✓ Public flags up to date")
 
 
 def write_wrangler_toml(config: DeployConfig):
@@ -210,6 +283,100 @@ class PagesDeployer:
             return False
 
 
+class GitSyncer:
+    """Sync site files to a local git repository for deployment via GitHub."""
+
+    def __init__(self, config: DeployConfig):
+        self.config = config
+        self.target_path = Path(config.git_repo) if config.git_repo else None
+
+    def sync(self, dry_run: bool = False):
+        if not self.target_path:
+            print("  ⚠️  CF_PAGES_GIT_REPO not set, skipping git sync")
+            return
+
+        if not self.target_path.exists():
+            print(f"  ✗ Target repo path does not exist: {self.target_path}")
+            return
+
+        print(f"📂 Syncing to git repo: {self.target_path}")
+
+        # 1. Copy web contents to root of target repo
+        # Use rsync to handle deletions and avoid .git/.gitignore
+        # We exclude thumbnails/display because they live in R2 now.
+        web_src = Path('web')
+        if dry_run:
+            print(f"    [dry-run] would rsync {web_src}/* to {self.target_path}/")
+        else:
+            try:
+                subprocess.run([
+                    'rsync', '-av', '--delete',
+                    '--exclude', '.git',
+                    '--exclude', '.gitignore',
+                    '--exclude', '.DS_Store',
+                    '--exclude', 'functions',
+                    '--exclude', 'wrangler.toml',
+                    '--exclude', 'trips/*/thumbnails',
+                    '--exclude', 'trips/*/display',
+                    str(web_src) + '/', str(self.target_path) + '/'
+                ], check=True, capture_output=True)
+                print("    ✓ Synced web/ contents")
+            except subprocess.CalledProcessError as e:
+                print(f"    ✗ Sync failed: {e.stderr.decode()}")
+                return False
+
+        # 2. Copy functions
+        func_src = Path('functions')
+        if func_src.exists():
+            if dry_run:
+                print(f"    [dry-run] would rsync {func_src}/ to {self.target_path}/functions/")
+            else:
+                try:
+                    subprocess.run([
+                        'rsync', '-av', '--delete',
+                        '--exclude', '.git',
+                        str(func_src) + '/', str(self.target_path / 'functions') + '/'
+                    ], check=True, capture_output=True)
+                    print("    ✓ Synced functions/")
+                except subprocess.CalledProcessError as e:
+                    print(f"    ✗ Functions sync failed: {e.stderr.decode()}")
+                    return False
+
+        # 3. Write wrangler.toml for the git repo (pages_build_output_dir = ".")
+        if dry_run:
+            print(f"    [dry-run] would update {self.target_path}/wrangler.toml")
+        else:
+            wrangler_content = f"""name = "{self.config.pages_project}"
+pages_build_output_dir = "."
+
+[[r2_buckets]]
+binding = "PHOTOS_BUCKET"
+bucket_name = "{self.config.r2_bucket}"
+"""
+            (self.target_path / 'wrangler.toml').write_text(wrangler_content)
+            print("    ✓ Updated wrangler.toml in target repo")
+
+        # 4. Git add and commit
+        if dry_run:
+            print(f"    [dry-run] would git commit in {self.target_path}")
+        else:
+            try:
+                # Check if there are changes
+                status = subprocess.run(['git', 'status', '--porcelain'], cwd=str(self.target_path), capture_output=True, text=True)
+                if not status.stdout.strip():
+                    print("    ✓ No changes to commit in target repo")
+                    return True
+
+                subprocess.run(['git', 'add', '.'], cwd=str(self.target_path), check=True, capture_output=True)
+                subprocess.run(['git', 'commit', '-m', 'Sync site from geotag-photos'], cwd=str(self.target_path), check=True, capture_output=True)
+                print("    ✓ Committed changes in target repo (remember to push!)")
+            except subprocess.CalledProcessError as e:
+                print(f"    ✗ Git commit failed: {e.stderr.decode()}")
+                return False
+
+        return True
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Deploy travel map to Cloudflare Pages + R2')
@@ -221,6 +388,7 @@ def main():
 
     config = DeployConfig()
     password = os.getenv('CF_SITE_PASSWORD')
+    all_password = os.getenv('CF_ALL_PASSWORD')
 
     print(f"🚀 Deploying to Cloudflare")
     print(f"   Account:  {config.account_id[:8]}...")
@@ -228,12 +396,20 @@ def main():
     print(f"   Project:  {config.pages_project}")
     print(f"   Site URL: https://{config.pages_project}.pages.dev")
     print(f"   Photos:   {config.cdn_base_url}")
+    if config.git_repo:
+        print(f"   Git Repo: {config.git_repo}")
     print(f"   Auth:     {'password protected' if password else 'none'}")
+    print(f"   All-access: {'password protected' if all_password else 'none'}")
     if args.dry_run:
         print(f"   Mode:     DRY RUN")
     print()
 
-    # Step 1: Upload images to R2
+    # Step 1: Sync public flags from public.json → index.json
+    print("🏷️  Syncing public flags...")
+    sync_public_flags(dry_run=args.dry_run)
+    print()
+
+    # Step 2: Upload images to R2
     if not args.skip_images:
         print("📤 Uploading images to R2...")
         uploader = R2Uploader(config)
@@ -265,16 +441,24 @@ def main():
 
     deployer = PagesDeployer(config)
 
-    # Step 4: Set password secret
-    if password and not args.skip_pages:
-        print("🔐 Setting site password...")
-        deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
+    # Step 5: Set password secrets
+    if (password or all_password) and not args.skip_pages:
+        print("🔐 Setting password secrets...")
+        if password:
+            deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
+        if all_password:
+            deployer.set_secret('CF_ALL_PASSWORD', all_password, dry_run=args.dry_run)
         print()
 
-    # Step 5: Deploy to Pages
+    # Step 6: Deploy to Pages
     if not args.skip_pages:
-        print("🌐 Deploying to Cloudflare Pages...")
-        success = deployer.deploy(dry_run=args.dry_run)
+        if config.git_repo:
+            print("🌐 Syncing to Git repository...")
+            syncer = GitSyncer(config)
+            success = syncer.sync(dry_run=args.dry_run)
+        else:
+            print("🌐 Deploying to Cloudflare Pages (Direct)...")
+            success = deployer.deploy(dry_run=args.dry_run)
 
         # Restore local manifests regardless of deploy outcome
         if not args.dry_run:
@@ -283,10 +467,13 @@ def main():
 
         if success:
             print()
-            print(f"✅ Done! https://{config.pages_project}.pages.dev")
+            if config.git_repo:
+                print(f"✅ Synced! Remember to push/merge in {config.git_repo}")
+            else:
+                print(f"✅ Done! https://{config.pages_project}.pages.dev")
         else:
             print()
-            print("❌ Pages deployment failed")
+            print("❌ Deployment/Sync failed")
             sys.exit(1)
 
     if args.dry_run:

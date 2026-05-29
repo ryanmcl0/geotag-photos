@@ -83,13 +83,400 @@ def parse_gpx(gpx_path: Path) -> list[dict]:
     return trackpoints
 
 
-def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0) -> dict:
+def _simplify_coords(coords: list, tolerance: float) -> list:
+    """Douglas-Peucker simplification. Tolerance is in degrees (~0.00001 ≈ 1m)."""
+    if len(coords) <= 2:
+        return coords
+
+    def perp_dist(point, start, end):
+        if start == end:
+            return ((point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2) ** 0.5
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        norm = (dx * dx + dy * dy) ** 0.5
+        return abs(dy * point[0] - dx * point[1] + end[0] * start[1] - end[1] * start[0]) / norm
+
+    dmax, idx = 0.0, 0
+    for i in range(1, len(coords) - 1):
+        d = perp_dist(coords[i], coords[0], coords[-1])
+        if d > dmax:
+            dmax, idx = d, i
+
+    if dmax > tolerance:
+        left = _simplify_coords(coords[:idx + 1], tolerance)
+        right = _simplify_coords(coords[idx:], tolerance)
+        return left[:-1] + right
+    return [coords[0], coords[-1]]
+
+
+def parse_kmz_route(kmz_path: Path) -> list[dict]:
+    """
+    Extract ordered waypoints from a KMZ file as {lat, lon} dicts.
+    Skips 'Directions from...' routing artefacts and deduplicates adjacent
+    identical coordinates.
+    """
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    with zipfile.ZipFile(kmz_path, 'r') as z:
+        kml_names = [n for n in z.namelist() if n.lower().endswith('.kml')]
+        if not kml_names:
+            raise ValueError(f"No KML file found in {kmz_path.name}")
+        content = z.open(kml_names[0]).read().decode('utf-8')
+
+    # Strip XML namespaces for simpler iteration
+    content = re.sub(r' xmlns[^=]*="[^"]*"', '', content)
+    root = ET.fromstring(content)
+
+    points = []
+    for pm in root.iter('Placemark'):
+        name = (pm.findtext('name') or '').strip()
+        if name.lower().startswith('directions from'):
+            continue
+        coord_text = pm.findtext('.//coordinates') or ''
+        tokens = coord_text.strip().split()
+        for token in tokens:
+            parts = token.split(',')
+            if len(parts) >= 2:
+                try:
+                    lon, lat = float(parts[0]), float(parts[1])
+                    # Skip if identical to previous point
+                    if not points or (abs(lat - points[-1]['lat']) > 1e-6 or
+                                      abs(lon - points[-1]['lon']) > 1e-6):
+                        points.append({'lat': lat, 'lon': lon})
+                except ValueError:
+                    pass
+
+    return points
+
+
+# Raw-directory names that are containers, not building/location names.
+# Used to find the building name by walking up from a raw file's path.
+GENERIC_RAW_DIRS = {
+    'pictures', 'photos', 'photo', 'videos', 'video', 'edits', 'edit',
+    'compressed', 'raw', 'raws', 'jpg', 'jpeg', 'me', 'phone', 'tourism', 'dcim', 'misc',
+}
+
+# Camera-card dumps and backup folders that aren't real locations
+# (e.g. "100MSDCF", "100CANON", "4", "Ryan Cam SD Backup 3", "Ricyky Backup").
+_GENERIC_DIR_RE = re.compile(
+    r'^\d+$|^\d+(msdcf|canon|nikon|olymp|_pana|nz\d*)$|backup|^ryan cam|sd card',
+    re.I,
+)
+
+
+def _is_generic_component(comp: str) -> bool:
+    c = comp.strip().lower()
+    return c in GENERIC_RAW_DIRS or bool(_GENERIC_DIR_RE.search(c))
+
+
+def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
+    """
+    Derive a building/location name from a raw file's path relative to the
+    trip's raw root: the deepest directory component that isn't a generic
+    container (Pictures/Photos/Edits, camera-card dumps, backups, etc.).
+
+    e.g. <root>/50 West Street/Pictures/_RM12642.ARW -> "50 West Street"
+         <root>/Philippines/Manila - Gramercy Residence/x.ARW -> "Manila - Gramercy Residence"
+    Returns None for flat folders or photos that live only under generic dirs.
+    """
+    try:
+        rel = raw_path.relative_to(raw_root)
+    except ValueError:
+        return None
+    for comp in reversed(rel.parts[:-1]):  # skip the filename itself
+        if not _is_generic_component(comp):
+            return comp
+    return None
+
+
+def load_locations_file(path: Path) -> dict:
+    """
+    Load a building-name -> {lat, lon} map. Keys are normalised (lowercased,
+    stripped) for case-insensitive lookup. Entries missing coords are skipped.
+    """
+    with open(path) as f:
+        data = json.load(f)
+    out = {}
+    for name, info in data.items():
+        if isinstance(info, dict) and info.get('lat') is not None and info.get('lon') is not None:
+            out[name.strip().lower()] = {'lat': float(info['lat']), 'lon': float(info['lon'])}
+    return out
+
+
+def parse_location_names(trip_name: str) -> list[str]:
+    """Extract individual location names from a trip name string."""
+    loc = re.sub(r'^\d{4}[:\d]*\s+', '', trip_name).strip()
+    if ' - ' in loc:
+        loc = loc.split(' - ', 1)[1]
+    return [p.strip() for p in loc.split(',') if p.strip()]
+
+
+def geocode_single(query: str) -> Optional[dict]:
+    """Geocode one location string via Nominatim. Returns {lat, lon} or None."""
+    import urllib.request
+    import urllib.parse
+    import time
+    url = 'https://nominatim.openstreetmap.org/search?' + urllib.parse.urlencode({
+        'q': query, 'format': 'json', 'limit': 1
+    })
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'geotag-photos/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            results = json.loads(resp.read())
+            if results:
+                return {'lat': float(results[0]['lat']), 'lon': float(results[0]['lon'])}
+    except Exception:
+        pass
+    time.sleep(1.1)
+    return None
+
+
+def geocode_from_name(trip_name: str) -> Optional[dict]:
+    """Geocode all location parts of a trip name and return their centroid."""
+    coords = [geocode_single(n) for n in parse_location_names(trip_name)[:5]]
+    coords = [c for c in coords if c]
+    if not coords:
+        return None
+    return {
+        'lat': sum(c['lat'] for c in coords) / len(coords),
+        'lon': sum(c['lon'] for c in coords) / len(coords),
+    }
+
+
+def apply_exif_interpolation(processed_photos: list[dict]) -> int:
+    """
+    For no-GPX trips that have some photos with EXIF GPS (e.g. drone shots),
+    use those as time-anchored control points to interpolate approximate positions
+    for the remaining fallback_centroid photos.
+
+    Photos between two EXIF anchors get a linearly interpolated position.
+    Photos before/after all anchors snap to the nearest anchor.
+
+    Returns count of photos updated.
+    """
+    import bisect
+
+    anchors = sorted(
+        [p for p in processed_photos if p['gps_source'] == 'exif'],
+        key=lambda p: p['timestamp']
+    )
+    if not anchors:
+        return 0
+
+    anchor_times = [
+        datetime.fromisoformat(p['timestamp'].replace('Z', '+00:00'))
+        for p in anchors
+    ]
+
+    updated = 0
+    for photo in processed_photos:
+        if photo['gps_source'] != 'fallback_centroid':
+            continue
+
+        pt = datetime.fromisoformat(photo['timestamp'].replace('Z', '+00:00'))
+        idx = bisect.bisect_left(anchor_times, pt)
+
+        if idx == 0:
+            photo['lat'] = anchors[0]['lat']
+            photo['lon'] = anchors[0]['lon']
+        elif idx >= len(anchors):
+            photo['lat'] = anchors[-1]['lat']
+            photo['lon'] = anchors[-1]['lon']
+        else:
+            before, after = anchors[idx - 1], anchors[idx]
+            t0, t1 = anchor_times[idx - 1], anchor_times[idx]
+            span = (t1 - t0).total_seconds()
+            f = (pt - t0).total_seconds() / span if span > 0 else 0
+            photo['lat'] = before['lat'] + f * (after['lat'] - before['lat'])
+            photo['lon'] = before['lon'] + f * (after['lon'] - before['lon'])
+
+        photo['gps_source'] = 'interpolated_from_exif'
+        photo['placement'] = 'approximate'
+        updated += 1
+
+    return updated
+
+
+FAKE_ROUTE_CLOSE_KM = 500
+
+
+def max_pairwise_distance_km(locations: list[dict]) -> float:
+    """Maximum haversine distance (km) between any pair of geocoded locations."""
+    max_dist = 0.0
+    for i in range(len(locations)):
+        for j in range(i + 1, len(locations)):
+            d = haversine_distance(
+                locations[i]['lat'], locations[i]['lon'],
+                locations[j]['lat'], locations[j]['lon']
+            ) / 1000
+            max_dist = max(max_dist, d)
+    return max_dist
+
+
+def interpolate_along_line(locations: list[dict], fraction: float) -> dict:
+    """Return lat/lon at `fraction` (0–1) along a polyline through locations."""
+    if len(locations) == 1:
+        return {'lat': locations[0]['lat'], 'lon': locations[0]['lon']}
+    segments, total = [], 0.0
+    for i in range(len(locations) - 1):
+        d = haversine_distance(locations[i]['lat'], locations[i]['lon'],
+                               locations[i + 1]['lat'], locations[i + 1]['lon'])
+        segments.append(d)
+        total += d
+    if total == 0:
+        return {'lat': locations[0]['lat'], 'lon': locations[0]['lon']}
+    target, cumulative = fraction * total, 0.0
+    for i, seg_len in enumerate(segments):
+        if cumulative + seg_len >= target or i == len(segments) - 1:
+            f = (target - cumulative) / seg_len if seg_len > 0 else 0
+            return {
+                'lat': locations[i]['lat'] + f * (locations[i + 1]['lat'] - locations[i]['lat']),
+                'lon': locations[i]['lon'] + f * (locations[i + 1]['lon'] - locations[i]['lon']),
+            }
+        cumulative += seg_len
+    return {'lat': locations[-1]['lat'], 'lon': locations[-1]['lon']}
+
+
+def apply_fake_route(processed_photos: list[dict], trip_name: str,
+                     explicit_locations: Optional[list[str]] = None) -> Optional[dict]:
+    """
+    For no-GPX trips with multiple locations in the name, assigns approximate
+    coordinates to photos that have no real GPS and generates a fake route line.
+
+    Close locations (< 500km): photos interpolated along the line by timestamp order.
+    Distant locations: photos split by the N-1 largest time gaps and pinned per segment.
+
+    Mutates processed_photos in place. Returns route GeoJSON or None if not applicable.
+    """
+    names = explicit_locations if explicit_locations else parse_location_names(trip_name)
+    if len(names) < 2:
+        return None
+
+    click.echo(f"\nMultiple locations detected: {', '.join(names)}")
+    click.echo("Geocoding for fake route...")
+    locations = []
+    for name in names[:6]:
+        coords = geocode_single(name)
+        if coords:
+            locations.append({'name': name, **coords})
+            click.echo(f"  {name} → {coords['lat']:.3f}, {coords['lon']:.3f}")
+
+    if len(locations) < 2:
+        return None
+
+    eligible = [p for p in processed_photos
+                if p['gps_source'] in ('fallback_centroid', 'pending_fallback', 'geocoded')]
+
+    max_dist = max_pairwise_distance_km(locations)
+    click.echo(f"Max span: {max_dist:.0f} km", nl=False)
+
+    click.echo(" — ", nl=False)
+    by_time = sorted(eligible, key=lambda p: p['timestamp']) if eligible else []
+
+    if max_dist < FAKE_ROUTE_CLOSE_KM:
+        # Close together: interpolate photos along route line and draw it
+        click.echo("interpolating along route")
+        n = len(by_time)
+        for i, photo in enumerate(by_time):
+            coords = interpolate_along_line(locations, i / (n - 1) if n > 1 else 0.5)
+            photo['lat'], photo['lon'] = coords['lat'], coords['lon']
+            photo['gps_source'] = 'fake_route_interpolated'
+            photo['placement'] = 'approximate'
+        line_coords = [[loc['lon'], loc['lat']] for loc in locations]
+        return {
+            'type': 'FeatureCollection',
+            'features': [{'type': 'Feature', 'properties': {'name': 'Estimated route'},
+                          'geometry': {'type': 'LineString', 'coordinates': line_coords}}]
+        }
+    else:
+        # Far apart: pin photos per segment, no connecting line (would cross oceans/continents)
+        n_locs = len(locations)
+        click.echo(f"splitting into {n_locs} segments by time gaps (no route line)")
+        if by_time:
+            gaps = []
+            for i in range(1, len(by_time)):
+                t0 = datetime.fromisoformat(by_time[i - 1]['timestamp'].replace('Z', '+00:00'))
+                t1 = datetime.fromisoformat(by_time[i]['timestamp'].replace('Z', '+00:00'))
+                gaps.append(((t1 - t0).total_seconds(), i))
+            gaps.sort(reverse=True)
+            split_at = sorted(idx for _, idx in gaps[:n_locs - 1])
+
+            segments, start = [], 0
+            for split_i in split_at + [len(by_time)]:
+                segments.append(by_time[start:split_i])
+                start = split_i
+
+            for seg_idx, (segment, loc) in enumerate(zip(segments, locations)):
+                click.echo(f"  Segment {seg_idx + 1}/{n_locs}: {loc['name']} ({len(segment)} photos)")
+                for photo in segment:
+                    photo['lat'], photo['lon'] = loc['lat'], loc['lon']
+                    photo['gps_source'] = 'fake_route_segment'
+                    photo['placement'] = 'approximate'
+
+        return {'type': 'FeatureCollection', 'features': []}
+
+
+def get_countries_from_photos(photos: list[dict]) -> list[str]:
+    """
+    Reverse-geocode countries from placed photos. Prefers real GPS (EXIF/DNG)
+    but falls back to building/approximate coords — all resolve to the right
+    country even if the within-city position is only approximate.
+    """
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return []
+    pts = [(p['lat'], p['lon']) for p in photos
+           if p.get('gps_source') in ('exif', 'dng')]
+    if not pts:  # no real GPS — use whatever placement we have
+        pts = [(p['lat'], p['lon']) for p in photos]
+    if not pts:
+        return []
+    step = max(1, len(pts) // 20)
+    results = rg.search(pts[::step][:20], verbose=False)
+    return sorted(set(r['cc'] for r in results if r.get('cc')))
+
+
+def get_countries_from_gpx(gpx_path: Path, n_samples: int = 20) -> list[str]:
+    """Sample points along the GPX track and reverse-geocode to unique country names."""
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return []
+
+    with open(gpx_path, 'r') as f:
+        gpx = gpxpy.parse(f)
+
+    all_points = [
+        (pt.latitude, pt.longitude)
+        for track in gpx.tracks
+        for segment in track.segments
+        for pt in segment.points
+    ]
+    if not all_points:
+        return []
+
+    # Sample evenly across the track
+    step = max(1, len(all_points) // n_samples)
+    samples = all_points[::step][:n_samples]
+
+    results = rg.search(samples, verbose=False)
+    countries = sorted(set(r['cc'] for r in results if r.get('cc')))
+    return countries
+
+
+def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0,
+                   simplify_tolerance: float = 0.0001) -> dict:
     """
     Convert GPX file to GeoJSON for web display.
 
     Splits into multiple LineString features whenever consecutive trackpoints
     are more than split_gap_km apart — avoids drawing huge teleport lines
     across the map (e.g. between days/flights or GPS dropouts).
+
+    simplify_tolerance: Douglas-Peucker tolerance in degrees (default 0.0001 ≈ 10m).
+    Reduces file size by ~95% with no visible difference at map zoom levels.
+    Pass 0 to disable.
     """
     with open(gpx_path, 'r') as f:
         gpx = gpxpy.parse(f)
@@ -110,6 +497,8 @@ def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0) -> dict:
 
         sub_segments = [s for s in sub_segments if len(s) > 1]
         for i, coords in enumerate(sub_segments):
+            if simplify_tolerance > 0:
+                coords = _simplify_coords(coords, simplify_tolerance)
             name = track_name if len(sub_segments) == 1 else f"{track_name} (seg {i+1})"
             features.append({
                 'type': 'Feature',
@@ -256,6 +645,37 @@ def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
     return {'lat': endpoint['lat'], 'lon': endpoint['lon']}
 
 
+def interpolate_gps_clamped(trackpoints: list[dict], photo_time: datetime) -> Optional[dict]:
+    """
+    Like interpolate_gps but NEVER returns None: interpolates across recording gaps
+    of any size and clamps to the first/last trackpoint when the photo is outside
+    the track's time window. Used to force 'route' photos onto the GPX track.
+    """
+    if not trackpoints:
+        return None
+    if photo_time.tzinfo is None:
+        photo_time = photo_time.replace(tzinfo=timezone.utc)
+
+    prev_point = next_point = None
+    for point in trackpoints:
+        pt = point['time'] if point['time'].tzinfo else point['time'].replace(tzinfo=timezone.utc)
+        if pt <= photo_time:
+            prev_point = point
+        elif next_point is None:
+            next_point = point
+            break
+
+    if prev_point and next_point:
+        t0 = prev_point['time'] if prev_point['time'].tzinfo else prev_point['time'].replace(tzinfo=timezone.utc)
+        t1 = next_point['time'] if next_point['time'].tzinfo else next_point['time'].replace(tzinfo=timezone.utc)
+        span = (t1 - t0).total_seconds()
+        f = (photo_time - t0).total_seconds() / span if span > 0 else 0
+        return {'lat': prev_point['lat'] + f * (next_point['lat'] - prev_point['lat']),
+                'lon': prev_point['lon'] + f * (next_point['lon'] - prev_point['lon'])}
+    ep = prev_point or next_point
+    return {'lat': ep['lat'], 'lon': ep['lon']}
+
+
 def geotag_photo(photo_path: Path, lat: float, lon: float) -> bool:
     """
     Write GPS coordinates to photo EXIF using ExifTool.
@@ -381,8 +801,15 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
         avg_lat = sum(p['lat'] for p in cluster_photos) / len(cluster_photos)
         avg_lon = sum(p['lon'] for p in cluster_photos) / len(cluster_photos)
 
+        # Name the cluster after the most common building among its photos, if any
+        building_names = [p['building'] for p in cluster_photos if p.get('building')]
+        if building_names:
+            location = max(set(building_names), key=building_names.count)
+        else:
+            location = f'Location {len(clusters) + 1}'
+
         clusters.append({
-            'location': f'Location {len(clusters) + 1}',
+            'location': location,
             'lat': avg_lat,
             'lon': avg_lon,
             'photo_ids': [p['id'] for p in cluster_photos]
@@ -468,7 +895,7 @@ def find_dji_raw(photo_path: Path, raws_dir: Path) -> Optional[Path]:
     return None
 
 
-def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_count: int):
+def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_count: int, countries: list = None):
     """
     Update the trips index file with the new trip.
     """
@@ -479,8 +906,9 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     # Get trip folder name from output path
     trip_id = output_path.name
 
-    # Extract year from start date
-    year = int(dates['start'][:4])
+    # Prefer year from trip name (immune to corrupted EXIF dates)
+    name_year = re.match(r'^(\d{4})', trip_name)
+    year = int(name_year.group(1)) if name_year else int(dates['start'][:4])
 
     # Load existing index or create new one
     if index_path.exists():
@@ -493,14 +921,17 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     index['trips'] = [t for t in index['trips'] if t.get('id') != trip_id]
 
     # Add new trip entry
-    index['trips'].append({
+    entry = {
         'id': trip_id,
         'name': trip_name,
         'year': year,
         'dates': dates,
         'photo_count': photo_count,
         'path': f'trips/{trip_id}'
-    })
+    }
+    if countries:
+        entry['countries'] = countries
+    index['trips'].append(entry)
 
     # Sort by start date (most recent first)
     index['trips'].sort(key=lambda t: t['dates']['start'], reverse=True)
@@ -646,9 +1077,73 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     return year_index_path, trip_index_path
 
 
+def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext,
+                       cluster_radius, format_name, quality, display_longest, thumbnail_longest,
+                       base_name, photos_path):
+    """
+    Write off-route photos as a separate '<slug>-private' trip. Moves their
+    compressed images out of the public hosted dir into the private one (so the
+    public R2 prefix never holds them), then builds manifest/clusters/index/pages.
+    Returns (private_slug, n_photos, n_clusters, countries) or None.
+    """
+    if not off_photos:
+        return None
+    private_slug = base_output_path.name + '-private'
+    private_name = base_name + ' — private'
+    priv_output = base_output_path.parent / private_slug
+    priv_hosted = base_hosted_path.parent / private_slug
+    priv_output.mkdir(parents=True, exist_ok=True)
+    (priv_hosted / 'thumbnails').mkdir(parents=True, exist_ok=True)
+    (priv_hosted / 'display').mkdir(parents=True, exist_ok=True)
+
+    for sub in ('thumbnails', 'display'):
+        link = priv_output / sub
+        target = priv_hosted / sub
+        if link.is_symlink() or link.exists():
+            if link.is_symlink() or link.is_file():
+                link.unlink()
+            else:
+                shutil.rmtree(link)
+        link.symlink_to(os.path.relpath(target, priv_output))
+
+    # Move images from the public hosted dir into the private one
+    for p in off_photos:
+        for sub in ('thumbnails', 'display'):
+            src = base_hosted_path / sub / f"{p['id']}.{image_ext}"
+            dst = priv_hosted / sub / f"{p['id']}.{image_ext}"
+            if src.exists():
+                shutil.move(str(src), str(dst))
+
+    clusters = cluster_photos(off_photos, cluster_radius)
+    countries = get_countries_from_photos(off_photos)
+    ts = sorted(p['timestamp'] for p in off_photos)
+    dates = {'start': ts[0][:10], 'end': ts[-1][:10]}
+    manifest = {
+        'trip_name': private_name,
+        'dates': dates,
+        'countries': countries,
+        'source': {'photos_path': str(photos_path), 'gpx_path': None},
+        'compression': {'format': format_name, 'quality': quality,
+                        'display_longest': display_longest, 'thumbnail_longest': thumbnail_longest},
+        'route': 'route.geojson',
+        'photos': off_photos,
+        'clusters': clusters,
+        'skipped': [],
+    }
+    (priv_output / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+    (priv_output / 'route.geojson').write_text(
+        json.dumps({'type': 'FeatureCollection', 'features': []}, indent=2))
+    update_trips_index(priv_output, private_name, dates, len(off_photos), countries=countries)
+    m = re.match(r'^(\d{4})', private_name)
+    year = int(m.group(1)) if m else int(dates['start'][:4])
+    generate_html_pages(priv_output, private_name, private_slug, year)
+    return private_slug, len(off_photos), len(clusters), countries
+
+
 @click.command()
 @click.option('--name', required=True, help='Trip name for display')
-@click.option('--gpx', required=True, type=click.Path(exists=True), help='Path to GPX file')
+@click.option('--gpx', required=False, default=None, type=click.Path(), help='Path to GPX file (omit for no-GPX trips — uses EXIF GPS + geocoded fallback)')
+@click.option('--kmz', 'kmz_path_str', default=None, type=click.Path(), help='KMZ/KML route file — used for route display and photo placement in no-GPX mode')
 @click.option('--photos', required=True, type=click.Path(exists=True), help='Path to photos directory')
 @click.option('--output', default=None, type=click.Path(),
               help='Metadata output dir (default: web/trips/<slug>)')
@@ -664,6 +1159,29 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
 @click.option('--filter-by-raws-in', 'filter_by_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Only process edited photos whose stem exists somewhere under this folder. '
                    'Used to scope an Edits folder that bundles multiple trips.')
+@click.option('--raws-root', 'raws_root', default=None, type=click.Path(exists=True, path_type=Path),
+              help='Index raw files under this folder (stem→path) for building-name lookup and '
+                   'accurate timestamps, WITHOUT filtering out edits that have no matching raw. '
+                   'The raw directory names become building/location names via --locations-file.')
+@click.option('--locations-file', 'locations_file', default=None, type=click.Path(exists=True, path_type=Path),
+              help='JSON map of building/location name → {lat, lon}. Photos with no EXIF GPS are '
+                   'placed at their raw-folder building coords when found here (gps_source=building).')
+@click.option('--dump-buildings', is_flag=True,
+              help='Discovery mode: list the building/location names derived from --raws-root for '
+                   'the edited photos, with photo counts, then exit without processing.')
+@click.option('--split-offroute-private', is_flag=True,
+              help='Split a GPX trip in two: photos placed by the GPX track (on-route) stay in this '
+                   'trip (public); all other photos (off-route building/drone/fallback shots) are '
+                   'written to a separate "<slug>-private" trip at building level.')
+@click.option('--private-cluster-radius', default=150, type=float,
+              help='Cluster radius (m) for the off-route private split (default: 150, building-level)')
+@click.option('--gpx-route-subdir', default=None,
+              help='Raw-path folder name marking on-route photos (e.g. "Xinjiang"). These are forced '
+                   'onto the GPX track (real GPS kept, else interpolated/clamped) and treated as public '
+                   'in --split-offroute-private, regardless of GPS-recording gaps.')
+@click.option('--route-snap-public-hours', default=3.0, type=float,
+              help='In --split-offroute-private, route-snapped (gpx_nearest_time) photos within this '
+                   'many hours of the track count as public/on-route (default: 3)')
 @click.option('--fallback-location', default=None, metavar='LAT,LON',
               help='Lat,lon to pin photos with no GPS that are outside the GPX window. '
                    'Defaults to nearest-by-time placed photo (or GPX centroid if none in range). '
@@ -681,6 +1199,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
               help=f'Max length of longer side for display images (default: {DEFAULT_DISPLAY_LONGEST}px)')
 @click.option('--thumbnail-longest', default=DEFAULT_THUMBNAIL_LONGEST, type=int,
               help=f'Max length of longer side for thumbnails (default: {DEFAULT_THUMBNAIL_LONGEST}px)')
+@click.option('--fake-route-locations', default=None, metavar='LOC1,LOC2,...',
+              help='Explicitly set location names for fake route (overrides name parsing). E.g. "Iceland,Italy"')
 @click.option('--skip-existing-images', is_flag=True,
               help='Reuse already-generated thumbnails/display images. Only recomputes GPS placement, clusters, and manifest. Fast re-run after logic changes.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
@@ -690,9 +1210,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float,
                  filter_by_raws_in: Optional[Path],
+                 raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
+                 split_offroute_private: bool, private_cluster_radius: float,
+                 gpx_route_subdir: Optional[str], route_snap_public_hours: float,
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
                  cluster_radius: float, raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
+                 fake_route_locations: Optional[str], kmz_path_str: Optional[str],
                  skip_existing_images: bool, test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
@@ -701,8 +1225,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     Metadata (manifest.json, route.geojson) goes to web/trips/<slug>/.
     Symlinks at web/trips/<slug>/{thumbnails,display} point to hosted-photos/<slug>/.
     """
-    gpx_path = Path(gpx)
+    gpx_path = Path(gpx) if gpx else None
+    no_gpx_mode = gpx_path is None
     photos_path = Path(photos)
+
+    if gpx_path and not gpx_path.exists():
+        click.echo(f"Error: GPX file not found: {gpx_path}", err=True)
+        sys.exit(1)
 
     slug = slugify(name)
     if output:
@@ -717,8 +1246,26 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     format_name = format_name.lower()
     image_ext = FORMAT_TO_EXT[format_name]
 
+    # Reprocessing a split trip: pull any previously-quarantined private images
+    # back into the public hosted dir so the split re-partitions cleanly (idempotent).
+    if split_offroute_private and not dry_run:
+        prev_priv = hosted_root / (trip_id + '-private')
+        if prev_priv.exists():
+            hosted_photos_path.mkdir(parents=True, exist_ok=True)
+            for sub in ('thumbnails', 'display'):
+                src_dir = prev_priv / sub
+                if src_dir.is_dir():
+                    (hosted_photos_path / sub).mkdir(parents=True, exist_ok=True)
+                    for img in src_dir.iterdir():
+                        shutil.move(str(img), str(hosted_photos_path / sub / img.name))
+            shutil.rmtree(prev_priv, ignore_errors=True)
+            for stale in (output_path.parent / (trip_id + '-private'),):
+                if stale.exists():
+                    shutil.rmtree(stale, ignore_errors=True)
+            click.echo(f"Consolidated previous '{trip_id}-private' images back for re-split")
+
     click.echo(f"Processing trip: {name}")
-    click.echo(f"GPX file: {gpx_path}")
+    click.echo(f"GPX file: {gpx_path or 'none (no-GPX mode — EXIF GPS + geocoded fallback)'}")
     click.echo(f"Photos directory: {photos_path}")
     click.echo(f"Output directory: {output_path}")
     click.echo(f"Hosted photos directory: {hosted_photos_path}")
@@ -731,18 +1278,20 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     if raws:
         click.echo(f"DJI raws directory: {raws}")
 
-    # Parse GPX
-    click.echo("\nParsing GPX file...")
-    trackpoints = parse_gpx(gpx_path)
-    click.echo(f"Found {len(trackpoints)} trackpoints")
-
-    if not trackpoints:
-        click.echo("Error: No trackpoints found in GPX file", err=True)
-        sys.exit(1)
-
-    # Get trip date range
-    trip_start = trackpoints[0]['time'].date().isoformat()
-    trip_end = trackpoints[-1]['time'].date().isoformat()
+    # Parse GPX (or skip in no-GPX mode)
+    if not no_gpx_mode:
+        click.echo("\nParsing GPX file...")
+        trackpoints = parse_gpx(gpx_path)
+        click.echo(f"Found {len(trackpoints)} trackpoints")
+        if not trackpoints:
+            click.echo("Error: No trackpoints found in GPX file", err=True)
+            sys.exit(1)
+        trip_start = trackpoints[0]['time'].date().isoformat()
+        trip_end = trackpoints[-1]['time'].date().isoformat()
+    else:
+        click.echo("\nNo-GPX mode — dates will be derived from EXIF timestamps")
+        trackpoints = []
+        trip_start = trip_end = None  # filled in after processing photos
 
     # Find photos
     click.echo("\nFinding photos...")
@@ -752,21 +1301,94 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Optionally filter by stems present somewhere under a raws root, and build
     # a stem→raw-path index so we can re-read DateTimeOriginal from the raw
     # (Lightroom JPG exports sometimes carry corrupted dates).
+    # Trailing suffixes Lightroom/edit exports add that the raw file lacks.
+    _edit_suffix_re = re.compile(r'-(Enhanced-NR|Enhanced|Edit|Pano|HDR|NR|copy|\d+)$', re.I)
+
+    def base_stem(stem: str) -> str:
+        prev = None
+        while prev != stem:
+            prev = stem
+            stem = _edit_suffix_re.sub('', stem)
+        return stem
+
+    # Lower rank = preferred. Real raws beat JPGs; a path that yields a building
+    # name beats one under a generic dir (the raw tree often has an Edits/ mirror
+    # of JPGs sharing the same stems as the building-folder raws).
+    _ext_rank = {'.arw': 0, '.dng': 1, '.cr2': 2, '.nef': 3, '.raf': 4,
+                 '.tif': 5, '.tiff': 5, '.png': 6, '.jpeg': 7, '.jpg': 8}
+
     raw_index: dict = {}
-    if filter_by_raws_in:
-        click.echo(f"Filtering by raws under: {filter_by_raws_in}")
+    raw_base_index: dict = {}  # base_stem → raw path, for suffix-tolerant matching
+    raw_scan_root = raws_root or filter_by_raws_in
+    if raw_scan_root:
+        root_p = Path(raw_scan_root)
+        label = "Filtering by raws under" if filter_by_raws_in else "Indexing raws under"
+        click.echo(f"{label}: {raw_scan_root}")
+
+        def rank(p: Path) -> tuple:
+            has_building = building_from_raw(p, root_p) is not None
+            return (0 if has_building else 1, _ext_rank.get(p.suffix.lower(), 9), str(p))
+
+        def consider(idx: dict, key: str, p: Path):
+            cur = idx.get(key)
+            if cur is None or rank(p) < rank(cur):
+                idx[key] = p
+
         for ext in SUPPORTED_EXTENSIONS | {'.arw', '.dng', '.cr2', '.nef', '.raf'}:
             for pat in (f'*{ext}', f'*{ext.upper()}'):
-                for p in Path(filter_by_raws_in).rglob(pat):
-                    raw_index.setdefault(p.stem, p)
+                for p in Path(raw_scan_root).rglob(pat):
+                    consider(raw_index, p.stem, p)
+                    consider(raw_base_index, base_stem(p.stem), p)
+
+    def find_raw(stem: str) -> Optional[Path]:
+        return raw_index.get(stem) or raw_base_index.get(base_stem(stem))
+
+    if filter_by_raws_in:
         before = len(photo_files)
-        photo_files = [p for p in photo_files if p.stem in raw_index]
+        photo_files = [p for p in photo_files if find_raw(p.stem) is not None]
         click.echo(f"  Kept {len(photo_files)} of {before} photos that have a matching raw")
         click.echo(f"  Will read DateTimeOriginal from the raw file when available")
 
     if not photo_files:
         click.echo("Error: No photos found in directory", err=True)
         sys.exit(1)
+
+    # Load building/location coordinate map (KML + web-search derived)
+    building_coords: dict = {}
+    if locations_file:
+        building_coords = load_locations_file(locations_file)
+        click.echo(f"Loaded {len(building_coords)} building locations from {locations_file.name}")
+
+    # Discovery mode: report building names derived from the raw folders, then exit.
+    if dump_buildings:
+        if not raw_scan_root:
+            click.echo("Error: --dump-buildings requires --raws-root", err=True)
+            sys.exit(1)
+        counts: dict = {}
+        no_building = 0
+        no_raw = 0
+        for pf in photo_files:
+            raw = find_raw(pf.stem)
+            if raw is None:
+                no_raw += 1
+                continue
+            bname = building_from_raw(raw, Path(raw_scan_root))
+            if bname:
+                counts[bname] = counts.get(bname, 0) + 1
+            else:
+                no_building += 1
+        click.echo(f"\n=== Buildings for: {name} ===")
+        click.echo(f"raw root: {raw_scan_root}")
+        click.echo(f"edits: {len(photo_files)} | matched raw: {len(photo_files) - no_raw} | "
+                   f"no raw: {no_raw} | under generic dir only: {no_building}")
+        for bname in sorted(counts):
+            in_kml = building_coords.get(bname.strip().lower()) is not None
+            mark = '✓' if in_kml else ' '
+            click.echo(f"  [{mark}] {counts[bname]:4d}  {bname}")
+        # Machine-readable line for tooling
+        click.echo("BUILDINGS_JSON=" + json.dumps({'trip': name, 'raw_root': str(raw_scan_root),
+                                                    'buildings': counts}))
+        return
 
     # Apply test mode sampling if enabled
     if test_mode:
@@ -806,15 +1428,18 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     gpx_tolerance_seconds = gpx_tolerance_hours * 3600
 
     # GPX window in UTC, used to compute "how far out of range" deltas
-    _t0 = trackpoints[0]['time']
-    _t1 = trackpoints[-1]['time']
-    if _t0.tzinfo is None: _t0 = _t0.replace(tzinfo=timezone.utc)
-    if _t1.tzinfo is None: _t1 = _t1.replace(tzinfo=timezone.utc)
-    gpx_window_start, gpx_window_end = _t0, _t1
+    if trackpoints:
+        _t0 = trackpoints[0]['time']
+        _t1 = trackpoints[-1]['time']
+        if _t0.tzinfo is None: _t0 = _t0.replace(tzinfo=timezone.utc)
+        if _t1.tzinfo is None: _t1 = _t1.replace(tzinfo=timezone.utc)
+        gpx_window_start, gpx_window_end = _t0, _t1
+    else:
+        gpx_window_start = gpx_window_end = None
 
-    # Decide fallback location for photos with no GPS + outside GPX window.
-    # Default chain: nearest placed photo → nearest GPX endpoint → centroid.
-    # User can override with an explicit lat,lon, or disable with "none".
+    # Decide fallback location for photos with no GPS.
+    # With GPX: default chain → nearest placed photo → nearest trackpoint → centroid.
+    # Without GPX: auto-geocode from trip name (or --fallback-location override).
     fallback_gps: Optional[dict] = None
     fallback_source = None
     if fallback_location and fallback_location.lower() == 'none':
@@ -827,13 +1452,23 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         except ValueError:
             click.echo(f"Error: --fallback-location must be 'lat,lon' or 'none'", err=True)
             sys.exit(1)
+    elif no_gpx_mode:
+        click.echo("Auto-geocoding fallback location from trip name...")
+        geocoded = geocode_from_name(name)
+        if geocoded:
+            fallback_gps = geocoded
+            fallback_source = 'geocoded'
+            click.echo(f"  → {fallback_gps['lat']:.4f}, {fallback_gps['lon']:.4f}")
+        else:
+            click.echo("  ⚠ Geocoding failed — photos without EXIF GPS will be dropped")
     else:
-        # Sentinel — actual placement chosen per-photo in second pass.
+        # GPX mode: sentinel centroid, real placement chosen per-photo in second pass
         fallback_gps = {
             'lat': sum(p['lat'] for p in trackpoints) / len(trackpoints),
             'lon': sum(p['lon'] for p in trackpoints) / len(trackpoints),
         }
         fallback_source = 'default_chain'
+
     if fallback_source == 'default_chain':
         click.echo(f"Fallback chain: nearest placed photo (≤{nearest_photo_max_hours}h) "
                    f"→ nearest GPX trackpoint by time → GPX centroid")
@@ -846,7 +1481,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     for photo_file in tqdm(photo_files, desc="Processing"):
         # Get photo timestamp — prefer the raw file's timestamp when available,
         # since edited JPGs sometimes carry corrupted DateTimeOriginal.
-        raw_match = raw_index.get(photo_file.stem)
+        raw_match = find_raw(photo_file.stem)
         photo_time = None
         if raw_match is not None:
             photo_time = get_exif_datetime_via_exiftool(raw_match)
@@ -883,9 +1518,33 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             if gps:
                 gps_source = 'gpx'
 
+        # Route-subdir photos belong to the documented GPX journey → force them
+        # on-route (public): keep real GPS if present, else interpolate/clamp onto
+        # the track across any recording gap. Skips building lookup below.
+        on_route = bool(gpx_route_subdir) and raw_match is not None and \
+            any(part.lower() == gpx_route_subdir.lower() for part in raw_match.parts)
+        if on_route and trackpoints:
+            if gps is None:
+                gps = interpolate_gps_clamped(trackpoints, photo_time)
+                if gps:
+                    gps_source = 'gpx'
+
+        # No real GPS yet — place at the building's coords derived from the raw folder.
+        building_name = None
+        if not on_route and not gps and building_coords and raw_match is not None:
+            building_name = building_from_raw(raw_match, Path(raw_scan_root))
+            if building_name:
+                bc = building_coords.get(building_name.strip().lower())
+                if bc:
+                    gps = {'lat': bc['lat'], 'lon': bc['lon']}
+                    gps_source = 'building'
+
         # Compute how far out of the GPX window the photo is (for diagnostics either way)
         pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
-        if pt < gpx_window_start:
+        if gpx_window_start is None:
+            delta_h = 0.0
+            direction = 'no_gpx'
+        elif pt < gpx_window_start:
             delta_h = (gpx_window_start - pt).total_seconds() / 3600
             direction = 'before'
         elif pt > gpx_window_end:
@@ -895,7 +1554,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             delta_h = 0.0
             direction = 'inside'
 
-        placement = 'exact'
+        # Building-derived coords are folder-level, not real GPS — mark approximate.
+        placement = 'approximate' if gps_source == 'building' else 'exact'
         pending_fallback = False
         if not gps:
             if fallback_gps is None:
@@ -942,7 +1602,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         camera_settings = get_camera_settings(photo_file)
 
         # Add to processed list
-        processed_photos.append({
+        photo_entry = {
             'id': photo_id,
             'source_filename': photo_file.name,
             'lat': gps['lat'],
@@ -953,7 +1613,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             'thumbnail': f'thumbnails/{photo_id}.{image_ext}',
             'display': f'display/{photo_id}.{image_ext}',
             'camera_settings': camera_settings
-        })
+        }
+        if building_name:
+            photo_entry['building'] = building_name
+        if on_route:
+            photo_entry['on_route'] = True
+        processed_photos.append(photo_entry)
 
     # Build a time-sorted index of GPX trackpoints for "nearest trackpoint by time"
     tp_times = []
@@ -974,7 +1639,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 gap = abs((tp_times[cand] - pt).total_seconds())
                 if best is None or gap < best[0]:
                     best = (gap, tp_coords[cand])
-        return best[1] if best else None
+        return best  # (gap_seconds, (lat, lon)) or None
 
     # Second pass: resolve "pending_fallback" photos using nearest placed photo by time
     placed_photos = [p for p in processed_photos if p['gps_source'] != 'pending_fallback']
@@ -1015,11 +1680,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 # the last known position, not a straight-line interpolation.
                 near = nearest_trackpoint_by_time(pt)
                 if near is not None:
-                    p['lat'], p['lon'] = near
+                    gap_s, coords = near
+                    p['lat'], p['lon'] = coords
                     p['gps_source'] = 'gpx_nearest_time'
+                    p['snap_gap_hours'] = round(gap_s / 3600, 2)
                     sk = skipped_by_id.get(p['id'])
                     if sk is not None:
-                        sk['placed_at'] = {'lat': near[0], 'lon': near[1]}
+                        sk['placed_at'] = {'lat': coords[0], 'lon': coords[1]}
                         sk['fallback_source'] = 'gpx_nearest_time'
                 else:
                     p['lat'] = fallback_gps['lat']
@@ -1049,6 +1716,80 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if gps_source_counts.get('pending_fallback'):
             gps_source_counts['fallback_centroid'] = gps_source_counts.pop('pending_fallback')
 
+    # No-GPX: apply all position refinements BEFORE clustering so clusters are correct
+    fake_route_geojson = None
+    if no_gpx_mode:
+        # Pass 3: interpolate from EXIF GPS anchors (drone shots etc.)
+        exif_placed = apply_exif_interpolation(processed_photos)
+        if exif_placed:
+            gps_source_counts['interpolated_from_exif'] = exif_placed
+            gps_source_counts['fallback_centroid'] = gps_source_counts.get('fallback_centroid', 0) - exif_placed
+            if gps_source_counts['fallback_centroid'] <= 0:
+                gps_source_counts.pop('fallback_centroid', None)
+
+        # Pass 4a: KMZ route — distribute remaining fallback photos along real route geometry
+        if kmz_path_str:
+            kmz_path = Path(kmz_path_str)
+            click.echo(f"\nParsing KMZ route: {kmz_path.name}...")
+            kmz_points = parse_kmz_route(kmz_path)
+            click.echo(f"  {len(kmz_points)} waypoints")
+            # KMZ overrides EXIF interpolation — use actual route over drone-anchor guesses
+            eligible_kmz = [p for p in processed_photos
+                            if p['gps_source'] in ('fallback_centroid', 'interpolated_from_exif')]
+            if eligible_kmz and len(kmz_points) >= 2:
+                by_time = sorted(eligible_kmz, key=lambda p: p['timestamp'])
+                n = len(by_time)
+                for i, photo in enumerate(by_time):
+                    frac = i / (n - 1) if n > 1 else 0.5
+                    coords = interpolate_along_line(kmz_points, frac)
+                    photo['lat'], photo['lon'] = coords['lat'], coords['lon']
+                    photo['gps_source'] = 'kmz_route_interpolated'
+                    photo['placement'] = 'approximate'
+                click.echo(f"  Placed {n} photos along KMZ route")
+                for src in ('fallback_centroid', 'interpolated_from_exif'):
+                    gps_source_counts.pop(src, None)
+                gps_source_counts['kmz_route_interpolated'] = n
+            line_coords = [[p['lon'], p['lat']] for p in kmz_points]
+            fake_route_geojson = {
+                'type': 'FeatureCollection',
+                'features': [{'type': 'Feature', 'properties': {'name': 'Planned route'},
+                              'geometry': {'type': 'LineString', 'coordinates': line_coords}}]
+            }
+        else:
+            # Pass 4b: fake route — place remaining photos at geocoded locations + build route line
+            explicit = [l.strip() for l in fake_route_locations.split(',')] \
+                       if fake_route_locations else None
+            fake_route_geojson = apply_fake_route(processed_photos, name, explicit) \
+                                 or {'type': 'FeatureCollection', 'features': []}
+
+    # Split off-route photos into a separate private trip (GPX trips only).
+    # Public/on-route = GPX-interpolated, OR in the --gpx-route-subdir, OR snapped
+    # to the track within --route-snap-public-hours. Everything else is off-route.
+    off_route_photos = []
+    if split_offroute_private and not no_gpx_mode:
+        def _is_public(p):
+            if p.get('on_route'):
+                return True
+            if p['gps_source'] == 'gpx':
+                return True
+            if p['gps_source'] == 'gpx_nearest_time' and \
+                    p.get('snap_gap_hours', 1e9) <= route_snap_public_hours:
+                return True
+            return False
+        public_photos = [p for p in processed_photos if _is_public(p)]
+        off_route_photos = [p for p in processed_photos if not _is_public(p)]
+        processed_photos = public_photos
+        click.echo(f"\nSplit: {len(processed_photos)} on-route (public), "
+                   f"{len(off_route_photos)} off-route (private)")
+        from collections import Counter as _Counter
+        gps_source_counts = dict(_Counter(p['gps_source'] for p in processed_photos))
+
+    # Derive date range from EXIF when no GPX
+    if trip_start is None:
+        timestamps = sorted(p['timestamp'] for p in processed_photos)
+        trip_start = timestamps[0][:10] if timestamps else datetime.now().date().isoformat()
+        trip_end = timestamps[-1][:10] if timestamps else trip_start
+
     # Report results
     click.echo(f"\nProcessed: {len(processed_photos)} photos")
     if gps_source_counts:
@@ -1063,10 +1804,19 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if len(failed_photos) > 10:
             click.echo(f"  ... and {len(failed_photos) - 10} more")
 
-    # Generate clusters
+    # Generate clusters (after all position refinements)
     click.echo("\nGenerating clusters...")
     clusters = cluster_photos(processed_photos, cluster_radius)
     click.echo(f"Created {len(clusters)} clusters")
+
+    # Detect countries
+    click.echo("\nDetecting countries...")
+    if not no_gpx_mode:
+        countries = get_countries_from_gpx(gpx_path)
+    else:
+        countries = get_countries_from_photos(processed_photos)
+    if countries:
+        click.echo(f"Countries: {', '.join(countries)}")
 
     # Generate manifest
     manifest = {
@@ -1075,9 +1825,10 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             'start': trip_start,
             'end': trip_end
         },
+        'countries': countries,
         'source': {
             'photos_path': str(photos_path),
-            'gpx_path': str(gpx_path),
+            'gpx_path': str(gpx_path) if gpx_path else None,
         },
         'compression': {
             'format': format_name,
@@ -1098,8 +1849,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             json.dump(manifest, f, indent=2)
         click.echo(f"\nSaved manifest: {manifest_path}")
 
-        # Convert GPX to GeoJSON (splits on big jumps to avoid teleport lines)
-        geojson_data = gpx_to_geojson(gpx_path, split_gap_km=gpx_split_gap_km)
+        # Convert GPX to GeoJSON (fake_route_geojson already built above for no-GPX trips)
+        if not no_gpx_mode:
+            geojson_data = gpx_to_geojson(gpx_path, split_gap_km=gpx_split_gap_km)
+        else:
+            geojson_data = fake_route_geojson
         geojson_path = output_path / 'route.geojson'
         with open(geojson_path, 'w') as f:
             json.dump(geojson_data, f, indent=2)
@@ -1110,16 +1864,29 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             output_path,
             name,
             manifest['dates'],
-            len(processed_photos)
+            len(processed_photos),
+            countries=countries,
         )
         click.echo(f"Updated trips index: {index_path}")
 
-        # Generate year and trip HTML pages
-        year = int(manifest['dates']['start'][:4])
+        # Generate year and trip HTML pages — prefer year from name over EXIF
+        name_year_m = re.match(r'^(\d{4})', name)
+        year = int(name_year_m.group(1)) if name_year_m else int(manifest['dates']['start'][:4])
         trip_id = output_path.name
         year_page, trip_page = generate_html_pages(output_path, name, trip_id, year)
         click.echo(f"Generated year page: {year_page}")
         click.echo(f"Generated trip page: {trip_page}")
+
+        # Write the off-route photos as a separate private trip
+        if split_offroute_private and off_route_photos:
+            result = write_private_trip(
+                off_route_photos, output_path, hosted_photos_path, image_ext,
+                private_cluster_radius, format_name, quality, display_longest, thumbnail_longest,
+                name, photos_path)
+            if result:
+                ps, pn_photos, pn_clusters, pcc = result
+                click.echo(f"Wrote private split: {ps} "
+                           f"({pn_photos} photos, {pn_clusters} clusters, countries={pcc})")
 
     click.echo("\nDone!")
 

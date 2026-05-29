@@ -6,8 +6,23 @@
 (function() {
     'use strict';
 
-    let tripsData = [];
+    let tripsData = [];       // trips shown in sidebar (public, or all if unlocked)
+    let allSidebarTrips = []; // full index including non-public trips
     let yearGroups = {};
+
+    function hasAllAccess() {
+        return document.cookie.split(';').some(c => c.trim() === 'all_access=1');
+    }
+
+    function buildYearGroups(trips) {
+        const groups = {};
+        trips.forEach(trip => {
+            const year = trip.year || new Date(trip.dates.start).getFullYear();
+            if (!groups[year]) groups[year] = [];
+            groups[year].push(trip);
+        });
+        return groups;
+    }
 
     /**
      * Initialize sidebar
@@ -15,6 +30,7 @@
     async function initSidebar() {
         await loadTripsData();
         renderNavigation();
+        renderSeeAllSection();
         initMobileToggle();
         highlightCurrentPage();
     }
@@ -27,17 +43,16 @@
             const basePath = VIEW_CONFIG.basePath || '';
             const response = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
             const data = await response.json();
-            tripsData = data.trips || [];
+            allSidebarTrips = data.trips || [];
 
-            // Group trips by year
-            yearGroups = {};
-            tripsData.forEach(trip => {
-                const year = trip.year || new Date(trip.dates.start).getFullYear();
-                if (!yearGroups[year]) {
-                    yearGroups[year] = [];
-                }
-                yearGroups[year].push(trip);
-            });
+            const viewMode = (window.VIEW_CONFIG && VIEW_CONFIG.mode) || 'all';
+            if (viewMode === 'all' && !hasAllAccess()) {
+                tripsData = allSidebarTrips.filter(t => t.public !== false);
+            } else {
+                tripsData = allSidebarTrips;
+            }
+
+            yearGroups = buildYearGroups(tripsData);
         } catch (error) {
             console.error('Failed to load trips data for sidebar:', error);
         }
@@ -165,6 +180,116 @@
                 const yearSection = tripLink.closest('.year-section');
                 if (yearSection) yearSection.classList.add('expanded');
             }
+        }
+    }
+
+    /**
+     * Render the "See All" button at the bottom of the sidebar.
+     * Only shown in 'all' mode when non-public trips exist.
+     */
+    function renderSeeAllSection() {
+        const existing = document.getElementById('see-all-section');
+        if (existing) existing.remove();
+
+        const viewMode = (window.VIEW_CONFIG && VIEW_CONFIG.mode) || 'all';
+        if (viewMode !== 'all') return;
+
+        const hasNonPublic = allSidebarTrips.some(t => t.public === false);
+        if (!hasNonPublic) return;
+
+        const sidebar = document.getElementById('sidebar');
+        const section = document.createElement('div');
+        section.id = 'see-all-section';
+        section.className = 'see-all-section';
+
+        if (hasAllAccess()) {
+            section.innerHTML = `
+                <div class="see-all-unlocked">
+                    &#10003; All trips visible
+                    <button class="see-all-lock-btn" id="see-all-lock-btn">Public only</button>
+                </div>
+            `;
+        } else {
+            section.innerHTML = `
+                <button class="see-all-btn" id="see-all-btn">&#128274; See All Trips</button>
+                <div class="see-all-form" id="see-all-form">
+                    <input type="password" id="all-password" placeholder="Password" autocomplete="current-password">
+                    <div class="see-all-actions">
+                        <button class="see-all-submit" id="all-submit">Unlock</button>
+                        <button class="see-all-cancel" id="all-cancel">Cancel</button>
+                    </div>
+                    <p class="see-all-error" id="see-all-error"></p>
+                </div>
+            `;
+        }
+
+        sidebar.appendChild(section);
+
+        if (hasAllAccess()) {
+            document.getElementById('see-all-lock-btn').addEventListener('click', () => {
+                document.cookie = 'all_access=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                if (typeof window.lockAllAccess === 'function') window.lockAllAccess();
+                tripsData = allSidebarTrips.filter(t => t.public !== false);
+                yearGroups = buildYearGroups(tripsData);
+                renderNavigation();
+                renderSeeAllSection();
+                highlightCurrentPage();
+            });
+        } else {
+            document.getElementById('see-all-btn').addEventListener('click', () => {
+                document.getElementById('see-all-btn').style.display = 'none';
+                document.getElementById('see-all-form').style.display = 'block';
+                document.getElementById('all-password').focus();
+            });
+
+            document.getElementById('all-cancel').addEventListener('click', () => {
+                document.getElementById('see-all-btn').style.display = '';
+                document.getElementById('see-all-form').style.display = 'none';
+                document.getElementById('all-password').value = '';
+                document.getElementById('see-all-error').textContent = '';
+            });
+
+            document.getElementById('all-submit').addEventListener('click', submitAllPassword);
+            document.getElementById('all-password').addEventListener('keydown', e => {
+                if (e.key === 'Enter') submitAllPassword();
+            });
+        }
+    }
+
+    async function submitAllPassword() {
+        const input = document.getElementById('all-password');
+        const errorEl = document.getElementById('see-all-error');
+        const btn = document.getElementById('all-submit');
+        const password = input.value;
+        if (!password) return;
+
+        btn.textContent = 'Unlocking...';
+        btn.disabled = true;
+
+        try {
+            const formData = new FormData();
+            formData.append('password', password);
+            const res = await fetch('/auth-all', { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (data.ok) {
+                if (typeof window.unlockAllAccess === 'function') {
+                    await window.unlockAllAccess();
+                }
+                tripsData = allSidebarTrips;
+                yearGroups = buildYearGroups(tripsData);
+                renderNavigation();
+                renderSeeAllSection();
+                highlightCurrentPage();
+            } else {
+                errorEl.textContent = 'Incorrect password.';
+                btn.textContent = 'Unlock';
+                btn.disabled = false;
+            }
+        } catch (e) {
+            errorEl.textContent = 'Error — try again.';
+            btn.textContent = 'Unlock';
+            btn.disabled = false;
         }
     }
 

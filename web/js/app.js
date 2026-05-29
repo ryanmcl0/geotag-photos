@@ -21,14 +21,20 @@ const CONFIG = {
 
 // Global state
 let map;
-let allTrips = [];
+let allTrips = [];        // trips currently loaded onto the map
 let allManifests = [];
+let allTripsMeta = [];    // full index — all trips including non-public
 let showExif = false;
 let lightbox;
 
 // Per-trip layers — so each trip can be toggled on/off independently.
 // tripLayers[tripId] = { route: L.GeoJSON, markers: L.MarkerClusterGroup, visible: bool }
 const tripLayers = {};
+const loadedTripIds = new Set();
+
+function checkAllAccess() {
+    return document.cookie.split(';').some(c => c.trim() === 'all_access=1');
+}
 
 const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
 
@@ -113,66 +119,36 @@ function createClusterIcon(cluster) {
  */
 async function loadTripData() {
     try {
-        // Get base path from VIEW_CONFIG
         const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
 
-        // Load trips index
         const indexResponse = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
         const index = await indexResponse.json();
-        let trips = index.trips;
+        allTripsMeta = index.trips;
+
+        let trips = [...allTripsMeta];
+
+        // Filter by VIEW_CONFIG (year/trip pages)
+        if (typeof VIEW_CONFIG !== 'undefined') {
+            if (VIEW_CONFIG.mode === 'year' && VIEW_CONFIG.year) {
+                trips = trips.filter(t => (t.year || new Date(t.dates.start).getFullYear()) === VIEW_CONFIG.year);
+            } else if (VIEW_CONFIG.mode === 'trip' && VIEW_CONFIG.tripId) {
+                trips = trips.filter(t => t.id === VIEW_CONFIG.tripId);
+            }
+        }
+
+        // On 'all' view: show only public trips unless user has all_access cookie
+        const viewMode = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.mode) || 'all';
+        if (viewMode === 'all' && !checkAllAccess()) {
+            trips = trips.filter(t => t.public !== false);
+        }
 
         if (trips.length === 0) {
             document.getElementById('trip-name').textContent = 'No trips found';
             return;
         }
 
-        // Filter trips based on VIEW_CONFIG
-        if (typeof VIEW_CONFIG !== 'undefined') {
-            if (VIEW_CONFIG.mode === 'year' && VIEW_CONFIG.year) {
-                trips = trips.filter(t => {
-                    const tripYear = t.year || new Date(t.dates.start).getFullYear();
-                    return tripYear === VIEW_CONFIG.year;
-                });
-            } else if (VIEW_CONFIG.mode === 'trip' && VIEW_CONFIG.tripId) {
-                trips = trips.filter(t => t.id === VIEW_CONFIG.tripId);
-            }
-        }
-
-        allTrips = trips;
-
-        if (allTrips.length === 0) {
-            document.getElementById('trip-name').textContent = 'No trips found';
-            return;
-        }
-
-        const hidden = loadHiddenTripIds();
-
-        // Load each trip into its own route + marker cluster layer
-        for (let i = 0; i < allTrips.length; i++) {
-            const trip = allTrips[i];
-            const tripPath = `${basePath}${trip.path}`;
-            const color = CONFIG.routeColors[i % CONFIG.routeColors.length];
-
-            const manifestResponse = await fetch(`${tripPath}/manifest.json?t=${Date.now()}`);
-            const manifest = await manifestResponse.json();
-            manifest.tripId = trip.id;
-            manifest.tripIndex = i;
-            manifest.tripPath = tripPath;
-            allManifests.push(manifest);
-
-            const routeResponse = await fetch(`${tripPath}/route.geojson?t=${Date.now()}`);
-            const routeData = await routeResponse.json();
-
-            tripLayers[trip.id] = {
-                route: buildRouteLayer(routeData, color, trip.name),
-                markers: buildMarkerLayer(manifest),
-                color,
-                visible: !hidden.has(trip.id),
-            };
-            if (tripLayers[trip.id].visible) {
-                tripLayers[trip.id].route.addTo(map);
-                tripLayers[trip.id].markers.addTo(map);
-            }
+        for (const trip of trips) {
+            await loadSingleTrip(trip, basePath);
         }
 
         updateTripInfo();
@@ -185,6 +161,89 @@ async function loadTripData() {
 }
 
 /**
+ * Fetch and render a single trip's manifest + route onto the map.
+ */
+async function loadSingleTrip(trip, basePath) {
+    basePath = basePath !== undefined ? basePath : ((typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '');
+    const colorIndex = allTrips.length;
+    const tripPath = `${basePath}${trip.path}`;
+    const color = CONFIG.routeColors[colorIndex % CONFIG.routeColors.length];
+
+    const [manifestRes, routeRes] = await Promise.all([
+        fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
+        fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
+    ]);
+    const manifest = await manifestRes.json();
+    const routeData = await routeRes.json();
+
+    manifest.tripId = trip.id;
+    manifest.tripIndex = colorIndex;
+    manifest.tripPath = tripPath;
+
+    const hidden = loadHiddenTripIds();
+    tripLayers[trip.id] = {
+        route: buildRouteLayer(routeData, color, trip.name),
+        markers: buildMarkerLayer(manifest),
+        color,
+        visible: !hidden.has(trip.id),
+    };
+    if (tripLayers[trip.id].visible) {
+        tripLayers[trip.id].route.addTo(map);
+        tripLayers[trip.id].markers.addTo(map);
+    }
+
+    allTrips.push(trip);
+    allManifests.push(manifest);
+    loadedTripIds.add(trip.id);
+}
+
+/**
+ * Load non-public trips after the user has unlocked all-access.
+ * Called by sidebar after successful /auth-all.
+ */
+async function unlockAllAccess() {
+    const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+    const unloaded = allTripsMeta.filter(t => !loadedTripIds.has(t.id));
+    if (unloaded.length === 0) return;
+
+    for (const trip of unloaded) {
+        await loadSingleTrip(trip, basePath);
+    }
+
+    updateTripInfo();
+    reinitLightbox();
+    fitMapToBounds();
+}
+window.unlockAllAccess = unlockAllAccess;
+
+/**
+ * Remove non-public trips from the map when user returns to public-only view.
+ */
+function lockAllAccess() {
+    const nonPublicIds = new Set(
+        allTripsMeta.filter(t => t.public === false).map(t => t.id)
+    );
+    if (nonPublicIds.size === 0) return;
+
+    for (const tripId of nonPublicIds) {
+        if (tripLayers[tripId]) {
+            map.removeLayer(tripLayers[tripId].route);
+            map.removeLayer(tripLayers[tripId].markers);
+            delete tripLayers[tripId];
+        }
+        loadedTripIds.delete(tripId);
+    }
+
+    allTrips = allTrips.filter(t => !nonPublicIds.has(t.id));
+    allManifests = allManifests.filter(m => !nonPublicIds.has(m.tripId));
+
+    updateTripInfo();
+    reinitLightbox();
+    fitMapToBounds();
+}
+window.lockAllAccess = lockAllAccess;
+
+/**
  * Update trip info overlay (reflects only currently-visible trips)
  */
 function updateTripInfo() {
@@ -192,27 +251,37 @@ function updateTripInfo() {
     const visibleManifests = allManifests.filter(m =>
         !tripLayers[m.tripId] || tripLayers[m.tripId].visible);
     const totalPhotos = visibleManifests.reduce((sum, m) => sum + m.photos.length, 0);
+    const uniqueCountries = new Set(visibleTrips.flatMap(t => t.countries || []));
+    const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
     const viewConfig = typeof VIEW_CONFIG !== 'undefined' ? VIEW_CONFIG : { mode: 'all' };
 
     let titleText = '';
     let subtitleText = '';
 
     if (visibleTrips.length === 1) {
-        // Single trip (either single-trip page or only one toggled on) — show its dates
         titleText = visibleTrips[0].name;
-        subtitleText = `${formatDate(visibleTrips[0].dates.start)} - ${formatDate(visibleTrips[0].dates.end)}`;
+        subtitleText = `${formatDate(visibleTrips[0].dates.start)} – ${formatDate(visibleTrips[0].dates.end)}`;
     } else if (viewConfig.mode === 'year' && viewConfig.year) {
         titleText = `${viewConfig.year}`;
         subtitleText = `${visibleTrips.length} trips`;
     } else {
-        // All / multi-trip view — just the counts
         titleText = `${visibleTrips.length} Trips`;
         subtitleText = '';
     }
 
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
-    document.getElementById('photo-count').textContent = `${totalPhotos.toLocaleString()} photos`;
+
+    const countryText = uniqueCountries.size > 0 ? ` · ${uniqueCountries.size} countries` : '';
+    document.getElementById('photo-count').textContent =
+        `${totalPhotos.toLocaleString()} photos${countryText}`;
+
+    const countryListEl = document.getElementById('country-list');
+    if (countryListEl) {
+        countryListEl.textContent = uniqueCountries.size > 0
+            ? [...uniqueCountries].map(cc => { try { return countryNames.of(cc); } catch { return cc; } }).sort().join(', ')
+            : '';
+    }
 }
 
 /**
@@ -327,15 +396,11 @@ function createSinglePhotoPopup(photo, location) {
     return `
         <div class="photo-popup">
             <img src="${photo.tripPath}/${photo.thumbnail}"
-                 alt="${location}"
+                 alt=""
                  class="popup-thumbnail"
                  data-photo-id="${photo.id}"
                  onclick="openGallery('${photo.id}')">
-            <div class="popup-info">
-                <strong>${location}</strong>
-                <div style="font-size: 0.85em; color: #666;">${photo.tripName}</div>
-                ${exifHtml}
-            </div>
+            ${exifHtml ? `<div class="popup-info">${exifHtml}</div>` : ''}
         </div>
     `;
 }
@@ -346,15 +411,13 @@ function createSinglePhotoPopup(photo, location) {
 function createMultiPhotoPopup(photos, location) {
     const thumbnails = photos.map(photo => `
         <img src="${photo.tripPath}/${photo.thumbnail}"
-             alt="${photo.id}"
+             alt=""
              data-photo-id="${photo.id}"
              onclick="openGallery('${photo.id}')">
     `).join('');
 
     return `
         <div class="cluster-popup">
-            <h3>${location} (${photos.length} photos)</h3>
-            <div style="font-size: 0.85em; color: #666; margin-bottom: 8px;">${photos[0].tripName}</div>
             <div class="photo-grid">
                 ${thumbnails}
             </div>

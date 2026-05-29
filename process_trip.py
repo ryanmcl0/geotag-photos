@@ -669,6 +669,14 @@ def interpolate_gps_clamped(trackpoints: list[dict], photo_time: datetime) -> Op
         t0 = prev_point['time'] if prev_point['time'].tzinfo else prev_point['time'].replace(tzinfo=timezone.utc)
         t1 = next_point['time'] if next_point['time'].tzinfo else next_point['time'].replace(tzinfo=timezone.utc)
         span = (t1 - t0).total_seconds()
+        # Clamp to nearest endpoint across large gaps rather than interpolating to a
+        # wrong intermediate position (e.g. a 7-day gap where the route is unknown).
+        _MAX_INTERP_GAP = 6 * 3600  # 6 hours — beyond this, snap to nearest endpoint
+        if span > _MAX_INTERP_GAP:
+            gap_to_prev = (photo_time - t0).total_seconds()
+            gap_to_next = (t1 - photo_time).total_seconds()
+            ep = prev_point if gap_to_prev <= gap_to_next else next_point
+            return {'lat': ep['lat'], 'lon': ep['lon']}
         f = (photo_time - t0).total_seconds() / span if span > 0 else 0
         return {'lat': prev_point['lat'] + f * (next_point['lat'] - prev_point['lat']),
                 'lon': prev_point['lon'] + f * (next_point['lon'] - prev_point['lon'])}
@@ -1538,10 +1546,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         on_route = bool(gpx_route_subdir) and raw_match is not None and \
             any(part.lower() == gpx_route_subdir.lower() for part in raw_match.parts)
         if on_route and trackpoints:
-            if gps is None:
-                gps = interpolate_gps_clamped(trackpoints, photo_time)
-                if gps:
-                    gps_source = 'gpx'
+            # Always use clamped interpolation for route-subdir photos, even if
+            # interpolate_gps already set a position — it may have interpolated
+            # across a multi-day GPX gap to a wrong intermediate location.
+            clamped = interpolate_gps_clamped(trackpoints, photo_time)
+            if clamped:
+                gps = clamped
+                gps_source = 'gpx'
 
         # No real GPS yet — place at the building's coords derived from the raw folder.
         building_name = None

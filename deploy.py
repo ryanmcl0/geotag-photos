@@ -301,9 +301,10 @@ class GitSyncer:
 
         print(f"📂 Syncing to git repo: {self.target_path}")
 
-        # 1. Copy web contents to root of target repo
-        # Use rsync to handle deletions and avoid .git/.gitignore
-        # We exclude thumbnails/display because they live in R2 now.
+        # 1. Copy web contents to root of target repo.
+        # _middleware.ts must NOT be copied to the repo root — CF Pages only
+        # executes middleware from inside functions/, not from the static output root.
+        # It's handled explicitly in step 2 below.
         web_src = Path('web')
         if dry_run:
             print(f"    [dry-run] would rsync {web_src}/* to {self.target_path}/")
@@ -314,6 +315,7 @@ class GitSyncer:
                     '--exclude', '.git',
                     '--exclude', '.gitignore',
                     '--exclude', '.DS_Store',
+                    '--exclude', '_middleware.ts',
                     '--exclude', 'functions',
                     '--exclude', 'wrangler.toml',
                     '--exclude', 'trips/*/thumbnails',
@@ -325,22 +327,32 @@ class GitSyncer:
                 print(f"    ✗ Sync failed: {e.stderr.decode()}")
                 return False
 
-        # 2. Copy functions
+        # 2. Copy functions (including _middleware.ts mapped from web/ root)
         func_src = Path('functions')
-        if func_src.exists():
-            if dry_run:
-                print(f"    [dry-run] would rsync {func_src}/ to {self.target_path}/functions/")
-            else:
+        target_functions = self.target_path / 'functions'
+        if dry_run:
+            print(f"    [dry-run] would rsync {func_src}/ to {target_functions}/")
+            print(f"    [dry-run] would copy web/_middleware.ts → functions/_middleware.ts")
+        else:
+            target_functions.mkdir(parents=True, exist_ok=True)
+            if func_src.exists():
                 try:
                     subprocess.run([
                         'rsync', '-av', '--delete',
                         '--exclude', '.git',
-                        str(func_src) + '/', str(self.target_path / 'functions') + '/'
+                        str(func_src) + '/', str(target_functions) + '/'
                     ], check=True, capture_output=True)
                     print("    ✓ Synced functions/")
                 except subprocess.CalledProcessError as e:
                     print(f"    ✗ Functions sync failed: {e.stderr.decode()}")
                     return False
+            # web/_middleware.ts → functions/_middleware.ts (CF Pages only runs
+            # middleware from inside the functions/ directory, not from the static root)
+            middleware_src = web_src / '_middleware.ts'
+            if middleware_src.exists():
+                import shutil as _shutil
+                _shutil.copy2(str(middleware_src), str(target_functions / '_middleware.ts'))
+                print("    ✓ Copied _middleware.ts → functions/_middleware.ts")
 
         # 3. Write wrangler.toml for the git repo (pages_build_output_dir = ".")
         if dry_run:

@@ -24,7 +24,7 @@ let map;
 let allTrips = [];        // trips currently loaded onto the map
 let allManifests = [];
 let allTripsMeta = [];    // full index — all trips including non-public
-let showExif = false;
+let showExif = true; // always show EXIF in lightbox
 let lightbox;
 
 // Per-trip layers — so each trip can be toggled on/off independently.
@@ -57,7 +57,7 @@ async function init() {
     initMap();
     await loadTripData();
     initLightbox();
-    initExifToggle();
+
 }
 
 // Base layer definitions
@@ -572,18 +572,6 @@ function openGallery(photoId) {
 /**
  * Initialize EXIF toggle button
  */
-function initExifToggle() {
-    const toggle = document.getElementById('exif-toggle');
-
-    toggle.addEventListener('click', () => {
-        showExif = !showExif;
-        toggle.classList.toggle('active', showExif);
-
-        // Reinitialize lightbox with/without EXIF descriptions
-        reinitLightbox();
-    });
-}
-
 function reinitLightbox() {
     rebuildLightbox();
 }

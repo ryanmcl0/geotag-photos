@@ -232,37 +232,6 @@ html, body {
     margin-top: 4px;
 }
 
-/* EXIF toggle button - modern style */
-.exif-toggle {
-    position: absolute;
-    bottom: 30px;
-    right: 20px;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-    cursor: pointer;
-    z-index: 1000;
-    font-size: 1.1rem;
-    font-weight: bold;
-    color: #666;
-    transition: all 0.2s ease;
-}
-
-.exif-toggle:hover {
-    background: rgba(255, 255, 255, 1);
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
-}
-
-.exif-toggle.active {
-    background: #1a1a1a;
-    color: white;
-    border-color: #1a1a1a;
-}
 
 /* Hidden gallery container */
 .gallery-hidden {
@@ -449,11 +418,6 @@ html, body {
 
     .sidebar-toggle {
         display: flex;
-    }
-
-    .exif-toggle {
-        bottom: 80px;
-        right: 10px;
     }
 
     .cluster-popup {

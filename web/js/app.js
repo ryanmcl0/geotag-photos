@@ -278,9 +278,8 @@ async function loadTripData() {
             }
         }
 
-        // On 'all' view: show only public trips unless user has all_access cookie
-        const viewMode = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.mode) || 'all';
-        if (viewMode === 'all' && !checkAllAccess()) {
+        // Always hide private trips unless user has all_access cookie
+        if (!checkAllAccess()) {
             trips = trips.filter(t => t.public !== false);
         }
 

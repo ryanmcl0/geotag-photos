@@ -39,6 +39,22 @@ html, body {
     color: #1a1a1a;
 }
 
+.sidebar-header h2 a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.sidebar-header h2 a:hover {
+    color: #e11d48;
+}
+
+.sidebar-note {
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: #888;
+    line-height: 1.5;
+}
+
 .nav-list {
     list-style: none;
     padding: 12px 0;

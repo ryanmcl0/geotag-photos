@@ -668,10 +668,11 @@ function createMultiPhotoPopup(photos, location) {
     const container = document.createElement('div');
     container.className = 'cluster-popup';
 
-    if (location) {
+    const tripName = photos[0] && photos[0].tripName;
+    if (tripName) {
         const header = document.createElement('div');
         header.className = 'cluster-popup-header';
-        header.textContent = location;
+        header.textContent = tripName;
         container.appendChild(header);
     }
 

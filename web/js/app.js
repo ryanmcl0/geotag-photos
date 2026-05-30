@@ -642,8 +642,14 @@ function createPhotoIcon(count, thumbnailUrl) {
  * Create popup for single photo
  */
 function createSinglePhotoPopup(photo, location) {
+    const title = location || photo.tripName;
+    const sub = (location && photo.tripName && photo.tripName !== location)
+        ? `<div class="cluster-popup-subheader">${photo.tripName}</div>` : '';
+    const header = title
+        ? `<div class="cluster-popup-header">${title}</div>${sub}` : '';
     return `
         <div class="photo-popup">
+            ${header}
             <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
                  alt=""
                  class="popup-thumbnail"
@@ -669,11 +675,20 @@ function createMultiPhotoPopup(photos, location) {
     container.className = 'cluster-popup';
 
     const tripName = photos[0] && photos[0].tripName;
-    if (tripName) {
+    const title = location || tripName;
+    if (title) {
         const header = document.createElement('div');
         header.className = 'cluster-popup-header';
-        header.textContent = tripName;
+        header.textContent = title;
         container.appendChild(header);
+        // Show which trip the photos are from as a subtitle when we have a
+        // specific place name for the title.
+        if (location && tripName && tripName !== location) {
+            const sub = document.createElement('div');
+            sub.className = 'cluster-popup-subheader';
+            sub.textContent = tripName;
+            container.appendChild(sub);
+        }
     }
 
     const grid = document.createElement('div');

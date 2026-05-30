@@ -49,6 +49,8 @@ def gather_gpx_files(gpx_entry) -> list[Path]:
             files.append(path)
         else:
             found = sorted(path.glob('*.gpx')) + sorted(path.glob('*.GPX'))
+            # Skip macOS AppleDouble sidecar files (._foo.gpx) — not real GPX.
+            found = [f for f in found if not f.name.startswith('._')]
             if not found:
                 click.echo(f"  ⚠ No .gpx files in: {path}", err=True)
             files.extend(found)
@@ -64,10 +66,26 @@ def merge_gpx_to_temp(gpx_files: list[Path]) -> Path:
         click.echo("Error: gpxpy not installed", err=True)
         sys.exit(1)
 
+    def read_gpx_text(path: Path) -> str:
+        """Read a GPX file tolerant of non-UTF-8 encodings (some exporters emit
+        UTF-16 or leave stray bytes). Falls back progressively, never raising."""
+        raw = path.read_bytes()
+        if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+            return raw.decode('utf-16')
+        for enc in ('utf-8-sig', 'utf-8', 'latin-1'):
+            try:
+                return raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode('utf-8', errors='replace')
+
     combined = gpxpy.gpx.GPX()
     for f in gpx_files:
-        with open(f) as fh:
-            gpx = gpxpy.parse(fh)
+        try:
+            gpx = gpxpy.parse(read_gpx_text(f))
+        except Exception as e:
+            click.echo(f"  ⚠ Skipping unreadable GPX {f.name}: {e}", err=True)
+            continue
         for track in gpx.tracks:
             combined.tracks.append(track)
 
@@ -193,6 +211,10 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
             if result.returncode != 0:
                 click.echo(f"\n  ✗ Failed (exit {result.returncode})", err=True)
                 failed.append(trip['name'])
+        except Exception as e:
+            # One bad trip shouldn't abort the whole batch.
+            click.echo(f"\n  ✗ Error: {e}", err=True)
+            failed.append(trip['name'])
         finally:
             if tmp_gpx and tmp_gpx.exists():
                 tmp_gpx.unlink()

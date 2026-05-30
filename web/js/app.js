@@ -63,6 +63,7 @@ async function init() {
     initLightbox();
     initYearFilter();
     initRouteFilter();
+    initMobileControls();
 }
 
 function tripMatchesYearFilter(trip) {
@@ -238,7 +239,65 @@ function initMap() {
 
     const saved = localStorage.getItem(BASE_LAYER_KEY) || 'satellite';
     setBaseLayer(saved in BASE_LAYERS ? saved : 'satellite');
+
+    // Relocate the floating controls INTO #map so they share the Leaflet
+    // container's compositing layer. Body/map-container-level elements get
+    // dropped by iOS Safari when the map re-tiles after a zoom; elements
+    // inside #map (like the year/route filters) do not.
+    const mapEl = document.getElementById('map');
+    ['sidebar-toggle', 'mobile-see-all-trigger'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) mapEl.appendChild(el);
+    });
+
     initMapStyleControl();
+    initDoubleTapZoom();
+
+    // Re-measure the map whenever iOS changes the viewport (rotation, address
+    // bar show/hide, keyboard). Without this Leaflet keeps a stale size and the
+    // tiles render at the wrong offset.
+    let resizeRAF;
+    const remeasure = () => {
+        cancelAnimationFrame(resizeRAF);
+        resizeRAF = requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+    };
+    window.addEventListener('resize', remeasure);
+    window.addEventListener('orientationchange', remeasure);
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', remeasure);
+    }
+}
+
+function initDoubleTapZoom() {
+    let lastTap = 0;
+    let lastPoint = null;
+
+    map.getContainer().addEventListener('touchend', function(e) {
+        if (e.touches.length > 0) return;
+        if (e.changedTouches.length !== 1) return;
+
+        const touch = e.changedTouches[0];
+        const now = Date.now();
+        const timeDiff = now - lastTap;
+        const point = L.point(touch.clientX, touch.clientY);
+        const isClose = lastPoint && point.distanceTo(lastPoint) < 40;
+        const isDoubleTap = timeDiff > 30 && timeDiff < 350 && isClose;
+
+        // Don't zoom when tapping markers, popups, or buttons
+        const isInteractive = !!e.target.closest('.photo-marker-icon, .leaflet-popup, button, a, input');
+
+        if (isDoubleTap && !isInteractive) {
+            const rect = map.getContainer().getBoundingClientRect();
+            const containerPoint = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
+            map.setZoomAround(containerPoint, map.getZoom() + 1);
+            e.preventDefault();
+            lastTap = 0;
+            lastPoint = null;
+        } else {
+            lastTap = now;
+            lastPoint = point;
+        }
+    }, { passive: false });
 }
 
 function setBaseLayer(key) {
@@ -272,6 +331,8 @@ function initMapStyleControl() {
     ctrl.querySelectorAll('.map-style-btn').forEach(btn =>
         btn.addEventListener('click', () => setBaseLayer(btn.dataset.layer))
     );
+    // Append inside #map so it shares the Leaflet container's compositing
+    // layer and survives iOS re-tiling repaints.
     document.getElementById('map').appendChild(ctrl);
 }
 
@@ -405,6 +466,7 @@ async function unlockAllAccess() {
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
+    updateMobileSeeAll();
 }
 window.unlockAllAccess = unlockAllAccess;
 
@@ -432,6 +494,7 @@ function lockAllAccess() {
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
+    updateMobileSeeAll();
 }
 window.lockAllAccess = lockAllAccess;
 
@@ -615,6 +678,7 @@ function createMultiPhotoPopup(photos, location) {
  * Fit map to show currently-visible trips' content
  */
 function fitMapToBounds() {
+    if (window.matchMedia('(max-width: 768px)').matches) map.invalidateSize();
     const bounds = L.latLngBounds([]);
     allTrips.forEach(trip => {
         if (!shouldDisplayTrip(trip)) return;
@@ -625,8 +689,133 @@ function fitMapToBounds() {
         }
     });
     if (bounds.isValid()) {
-        map.fitBounds(bounds, { padding: [50, 50] });
+        const isMobile = window.matchMedia('(max-width: 768px)').matches;
+        map.fitBounds(bounds, { padding: [50, 50], animate: !isMobile });
     }
+}
+
+/**
+ * Mobile: floating See All button + inline password modal.
+ * Only rendered if non-public trips exist; hidden on desktop via CSS.
+ */
+function initMobileControls() {
+    const hasNonPublic = allTripsMeta.some(t => t.public === false);
+    const trigger = document.getElementById('mobile-see-all-trigger');
+    if (!trigger || !hasNonPublic) return;
+
+    updateMobileSeeAll();
+
+    trigger.addEventListener('click', () => {
+        if (checkAllAccess()) {
+            document.getElementById('mobile-pw-overlay').dataset.mode = 'lock';
+            document.querySelector('.mobile-pw-title').textContent = 'Return to public trips only?';
+            document.getElementById('mobile-pw-input').style.display = 'none';
+            document.getElementById('mobile-pw-submit').textContent = 'Yes, lock';
+            document.getElementById('mobile-pw-error').textContent = '';
+            document.getElementById('mobile-pw-overlay').classList.add('visible');
+        } else {
+            document.getElementById('mobile-pw-overlay').dataset.mode = 'unlock';
+            document.querySelector('.mobile-pw-title').textContent = '🔒 Unlock All Trips';
+            document.getElementById('mobile-pw-input').style.display = '';
+            document.getElementById('mobile-pw-submit').textContent = 'Unlock';
+            document.getElementById('mobile-pw-error').textContent = '';
+            document.getElementById('mobile-pw-overlay').classList.add('visible');
+            document.getElementById('mobile-pw-input').focus();
+        }
+    });
+
+    document.getElementById('mobile-pw-cancel').addEventListener('click', closeMobilePwModal);
+
+    document.getElementById('mobile-pw-submit').addEventListener('click', async () => {
+        const mode = document.getElementById('mobile-pw-overlay').dataset.mode;
+        if (mode === 'lock') {
+            document.cookie = 'all_access=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            lockAllAccess();
+            window.SidebarNav && window.SidebarNav.refresh();
+            closeMobilePwModal();
+        } else {
+            await mobileSubmitPassword();
+        }
+    });
+
+    document.getElementById('mobile-pw-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') mobileSubmitPassword();
+        if (e.key === 'Escape') closeMobilePwModal();
+    });
+
+    document.getElementById('mobile-pw-overlay').addEventListener('click', e => {
+        if (e.target === document.getElementById('mobile-pw-overlay')) closeMobilePwModal();
+    });
+}
+
+function closeMobilePwModal() {
+    const overlay = document.getElementById('mobile-pw-overlay');
+    overlay.classList.remove('visible');
+    const input = document.getElementById('mobile-pw-input');
+    input.value = '';
+    input.style.display = '';
+    document.getElementById('mobile-pw-error').textContent = '';
+    document.getElementById('mobile-pw-submit').textContent = 'Unlock';
+}
+
+async function mobileSubmitPassword() {
+    const input = document.getElementById('mobile-pw-input');
+    const errorEl = document.getElementById('mobile-pw-error');
+    const btn = document.getElementById('mobile-pw-submit');
+    const password = input.value.trim();
+    if (!password) return;
+    btn.disabled = true;
+    btn.textContent = 'Unlocking…';
+    errorEl.textContent = '';
+    try {
+        const fd = new FormData();
+        fd.append('password', password);
+        const res = await fetch('/auth-all', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.ok) {
+            closeMobilePwModal();
+            // Blur first so iOS keyboard dismisses before we touch the viewport
+            document.getElementById('mobile-pw-input').blur();
+            // Wait for keyboard to fully retract and iOS to restore compositing
+            await new Promise(r => setTimeout(r, 450));
+            map.invalidateSize();
+            await unlockAllAccess();
+            window.SidebarNav && window.SidebarNav.refresh();
+            // Force-repaint fixed controls after all viewport changes settle
+            requestAnimationFrame(() => repaintFixedControls());
+        } else {
+            errorEl.textContent = 'Incorrect password';
+            input.value = '';
+            input.focus();
+            btn.disabled = false;
+            btn.textContent = 'Unlock';
+        }
+    } catch {
+        errorEl.textContent = 'Connection error';
+        btn.disabled = false;
+        btn.textContent = 'Unlock';
+    }
+}
+
+function repaintFixedControls() {
+    ['sidebar-toggle', 'mobile-see-all-trigger'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.display = 'none';
+        void el.offsetHeight;
+        el.style.display = '';
+    });
+    const mc = document.querySelector('.map-style-control');
+    if (mc) { mc.style.display = 'none'; void mc.offsetHeight; mc.style.display = ''; }
+}
+window.repaintFixedControls = repaintFixedControls;
+
+function updateMobileSeeAll() {
+    const trigger = document.getElementById('mobile-see-all-trigger');
+    if (!trigger) return;
+    const unlocked = checkAllAccess();
+    trigger.textContent = unlocked ? '✓ All trips' : '🔒 See All';
+    trigger.classList.toggle('mobile-see-all-trigger--unlocked', unlocked);
 }
 
 /**

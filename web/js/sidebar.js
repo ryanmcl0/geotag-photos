@@ -231,7 +231,9 @@
             `;
         }
 
-        sidebar.appendChild(section);
+        const tripInfo = document.getElementById('trip-info');
+        if (tripInfo) tripInfo.appendChild(section);
+        else sidebar.appendChild(section);
 
         if (hasAllAccess()) {
             document.getElementById('see-all-lock-btn').addEventListener('click', () => {
@@ -242,6 +244,9 @@
                 renderNavigation();
                 renderSeeAllSection();
                 highlightCurrentPage();
+                if (typeof window.repaintFixedControls === 'function') {
+                    requestAnimationFrame(window.repaintFixedControls);
+                }
             });
         } else {
             document.getElementById('see-all-btn').addEventListener('click', () => {
@@ -281,6 +286,10 @@
             const data = await res.json();
 
             if (data.ok) {
+                // Dismiss iOS keyboard and let the viewport restore BEFORE any
+                // map resize/zoom, otherwise Leaflet measures a short container.
+                input.blur();
+                await new Promise(r => setTimeout(r, 450));
                 if (typeof window.unlockAllAccess === 'function') {
                     await window.unlockAllAccess();
                 }
@@ -289,6 +298,9 @@
                 renderNavigation();
                 renderSeeAllSection();
                 highlightCurrentPage();
+                if (typeof window.repaintFixedControls === 'function') {
+                    requestAnimationFrame(window.repaintFixedControls);
+                }
             } else {
                 errorEl.textContent = 'Incorrect password.';
                 btn.textContent = 'Unlock';
@@ -310,22 +322,62 @@
 
         if (!toggle || !sidebar) return;
 
+        const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
         // Create overlay element
         const overlay = document.createElement('div');
         overlay.className = 'sidebar-overlay';
         document.body.appendChild(overlay);
 
-        toggle.addEventListener('click', () => {
-            toggle.classList.toggle('active');
-            sidebar.classList.toggle('open');
-            overlay.classList.toggle('active');
-        });
+        let closeTimer = null;
 
-        overlay.addEventListener('click', () => {
+        function openSidebar() {
+            if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+            if (isMobile()) {
+                sidebar.style.display = 'flex';
+                // Two rAFs: first renders display:flex at left:-280px,
+                // second adds .open to start the CSS left transition
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    toggle.classList.add('active');
+                    sidebar.classList.add('open');
+                    overlay.classList.add('active');
+                }));
+            } else {
+                toggle.classList.add('active');
+                sidebar.classList.add('open');
+                overlay.classList.add('active');
+            }
+        }
+
+        function closeSidebar() {
             toggle.classList.remove('active');
             sidebar.classList.remove('open');
             overlay.classList.remove('active');
+            // After transition, remove from compositing stack so iOS doesn't
+            // invalidate other position:fixed elements
+            if (isMobile()) {
+                closeTimer = setTimeout(() => { sidebar.style.display = 'none'; }, 350);
+            }
+        }
+
+        // transitionend fires when the left transition finishes — clear the fallback timer
+        sidebar.addEventListener('transitionend', (e) => {
+            if (e.propertyName === 'left' && !sidebar.classList.contains('open') && isMobile()) {
+                if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+                sidebar.style.display = 'none';
+                // Force-repaint fixed controls in case iOS dropped them
+                if (typeof window.repaintFixedControls === 'function') {
+                    requestAnimationFrame(window.repaintFixedControls);
+                }
+            }
         });
+
+        toggle.addEventListener('click', () => {
+            if (sidebar.classList.contains('open')) closeSidebar();
+            else openSidebar();
+        });
+
+        overlay.addEventListener('click', closeSidebar);
     }
 
     // Initialize on DOM ready

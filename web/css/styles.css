@@ -10,10 +10,22 @@ html, body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
 }
 
+/* Lock the whole app to the visible viewport so the page can NEVER scroll.
+   iOS 100vh is the large (address-bar-hidden) height, which overflows the
+   visible area and causes the page to scroll — dragging controls off-screen
+   and offsetting the map tiles. Fixing the body to the viewport prevents it. */
+body {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
+}
+
 /* App container with sidebar */
 .app-container {
     display: flex;
-    height: 100vh;
+    height: 100%;
     width: 100%;
 }
 
@@ -179,7 +191,7 @@ html, body {
 /* Mobile sidebar toggle */
 .sidebar-toggle {
     display: none;
-    position: fixed;
+    position: absolute;
     top: 16px;
     left: 16px;
     z-index: 2001;
@@ -187,9 +199,7 @@ html, body {
     height: 40px;
     border: none;
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.97);
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
     cursor: pointer;
     flex-direction: column;
@@ -233,6 +243,7 @@ html, body {
     position: absolute;
     top: 0;
     left: 0;
+    background: #0d1b29;   /* deep-ocean tone for areas beyond the poles when zoomed out */
 }
 
 /* Trip info summary - sits inside the sidebar */
@@ -413,21 +424,38 @@ html, body {
 @media (max-width: 768px) {
     .sidebar {
         position: fixed;
-        left: 0;
+        left: -280px;
         top: 0;
         bottom: 0;
-        transform: translateX(-100%);
         z-index: 2000;
-        transition: transform 0.3s ease;
+        transition: left 0.3s ease;
         box-shadow: 4px 0 20px rgba(0, 0, 0, 0.1);
     }
 
     .sidebar.open {
-        transform: translateX(0);
+        left: 0;
+    }
+
+    /* Hamburger — always on top, solid bg for visibility over any map tile */
+    /* Force persistent compositing layers so Leaflet/sidebar animations
+       can't inadvertently drop these elements on iOS Safari */
+    .sidebar-toggle,
+    .mobile-see-all-trigger,
+    .map-style-control {
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
     }
 
     .sidebar-toggle {
         display: flex;
+        z-index: 3000;
+        background: rgba(20, 20, 20, 0.85);
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+    }
+
+    .sidebar-toggle span {
+        background: #fff;
     }
 
     .cluster-popup {
@@ -436,6 +464,38 @@ html, body {
 
     .cluster-popup .photo-grid {
         grid-template-columns: repeat(3, 1fr);
+    }
+
+    /* Year filter — shift down slightly so it clears the hamburger */
+    .year-filter-wrapper {
+        top: 70px;
+    }
+
+    /* Map style control — icon-only, compact column at bottom-right */
+    .map-style-control {
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 130px);
+        top: auto;
+        right: 10px;
+        padding: 4px;
+        gap: 2px;
+        z-index: 1500;
+    }
+
+    .map-style-btn {
+        padding: 7px;
+        justify-content: center;
+        gap: 0;
+        width: 34px;
+        height: 34px;
+    }
+
+    .map-style-label {
+        display: none;
+    }
+
+    .map-style-icon {
+        font-size: 16px;
+        line-height: 1;
     }
 
     /* Overlay when sidebar is open */
@@ -453,13 +513,132 @@ html, body {
     .sidebar-overlay.active {
         display: block;
     }
+
+    /* Mobile See All floating button */
+    .mobile-see-all-trigger {
+        display: block;
+        position: absolute;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+        right: 10px;
+        z-index: 1500;
+        padding: 9px 14px;
+        background: rgba(20, 20, 20, 0.94);
+        border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 8px;
+        color: #fff;
+        font-size: 13px;
+        font-family: inherit;
+        font-weight: 500;
+        cursor: pointer;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+        white-space: nowrap;
+    }
+
+    .mobile-see-all-trigger--unlocked {
+        border-color: rgba(16, 185, 129, 0.5);
+        color: #6ee7b7;
+    }
+}
+
+/* Mobile See All — hidden on desktop */
+.mobile-see-all-trigger {
+    display: none;
+}
+
+/* Mobile password overlay */
+.mobile-pw-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 4000;
+    background: rgba(0, 0, 0, 0.7);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.mobile-pw-overlay.visible {
+    display: flex;
+}
+
+.mobile-pw-modal {
+    background: #1a1a1a;
+    border-radius: 16px;
+    padding: 24px;
+    width: 100%;
+    max-width: 320px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.mobile-pw-title {
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+}
+
+.mobile-pw-modal input[type="password"] {
+    width: 100%;
+    padding: 11px 14px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1rem;
+    font-family: inherit;
+    margin-bottom: 12px;
+    outline: none;
+}
+
+.mobile-pw-modal input[type="password"]:focus {
+    border-color: rgba(255,255,255,0.4);
+}
+
+.mobile-pw-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.mobile-pw-cancel {
+    flex: 1;
+    padding: 10px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    color: #ccc;
+    font-size: 0.9rem;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.mobile-pw-submit {
+    flex: 1;
+    padding: 10px;
+    background: #e11d48;
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.mobile-pw-submit:disabled {
+    opacity: 0.6;
+}
+
+.mobile-pw-error {
+    color: #f87171;
+    font-size: 0.8rem;
+    margin-top: 8px;
+    min-height: 18px;
 }
 
 /* See All section at sidebar bottom */
 .see-all-section {
-    padding: 12px 20px 20px;
-    border-top: 1px solid #e5e5e5;
-    margin-top: 8px;
+    padding-top: 10px;
 }
 
 .see-all-btn {
@@ -617,8 +796,7 @@ html, body {
     align-items: center;
     gap: 8px;
     padding: 8px 14px;
-    background: rgba(20, 20, 20, 0.88);
-    backdrop-filter: blur(8px);
+    background: rgba(20, 20, 20, 0.94);
     border: 1px solid rgba(255,255,255,0.15);
     border-radius: 8px;
     color: #fff;
@@ -641,8 +819,7 @@ html, body {
     top: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(20, 20, 20, 0.95);
-    backdrop-filter: blur(10px);
+    background: rgba(20, 20, 20, 0.97);
     border: 1px solid rgba(255,255,255,0.12);
     border-radius: 10px;
     padding: 6px;
@@ -692,8 +869,7 @@ html, body {
     display: flex;
     gap: 3px;
     padding: 4px;
-    background: rgba(20, 20, 20, 0.88);
-    backdrop-filter: blur(8px);
+    background: rgba(20, 20, 20, 0.94);
     border: 1px solid rgba(255,255,255,0.15);
     border-radius: 8px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.4);
@@ -733,11 +909,11 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    background: rgba(20, 20, 20, 0.85);
-    backdrop-filter: blur(6px);
+    background: rgba(20, 20, 20, 0.92);
     border-radius: 10px;
     padding: 6px;
     box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    width: max-content;
 }
 
 .map-style-btn {

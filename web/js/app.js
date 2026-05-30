@@ -654,23 +654,88 @@ function createSinglePhotoPopup(photo, location) {
 }
 
 /**
- * Create popup for multiple photos
+ * Create popup for multiple photos.
+ *
+ * Paginated: shows a fixed page of thumbnails with prev/next navigation rather
+ * than dumping every photo into one giant grid. A huge grid makes the popup very
+ * tall, which forces Leaflet to auto-pan the whole map (and on mobile it can't
+ * fit at all — the tap just shifts the map and nothing useful appears).
+ * Returns a DOM node so we can wire pagination without leaking global state.
  */
-function createMultiPhotoPopup(photos, location) {
-    const thumbnails = photos.map(photo => `
-        <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
-             alt=""
-             data-photo-id="${photo.id}"
-             onclick="openGallery('${photo.id}')">
-    `).join('');
+const CLUSTER_POPUP_PAGE_SIZE = 9; // 3×3 grid keeps the popup compact + stable
 
-    return `
-        <div class="cluster-popup">
-            <div class="photo-grid">
-                ${thumbnails}
-            </div>
-        </div>
-    `;
+function createMultiPhotoPopup(photos, location) {
+    const container = document.createElement('div');
+    container.className = 'cluster-popup';
+
+    if (location) {
+        const header = document.createElement('div');
+        header.className = 'cluster-popup-header';
+        header.textContent = location;
+        container.appendChild(header);
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'photo-grid';
+    container.appendChild(grid);
+
+    const totalPages = Math.ceil(photos.length / CLUSTER_POPUP_PAGE_SIZE);
+    let page = 0;
+
+    const renderPage = () => {
+        grid.innerHTML = '';
+        const start = page * CLUSTER_POPUP_PAGE_SIZE;
+        photos.slice(start, start + CLUSTER_POPUP_PAGE_SIZE).forEach(photo => {
+            const img = document.createElement('img');
+            img.src = resolveUrl(photo.tripPath, photo.thumbnail);
+            img.alt = '';
+            img.dataset.photoId = photo.id;
+            img.addEventListener('click', () => openGallery(photo.id));
+            grid.appendChild(img);
+        });
+    };
+
+    if (totalPages > 1) {
+        const nav = document.createElement('div');
+        nav.className = 'cluster-popup-nav';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.className = 'cluster-popup-navbtn';
+        prevBtn.innerHTML = '‹';
+
+        const counter = document.createElement('span');
+        counter.className = 'cluster-popup-counter';
+
+        const nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.className = 'cluster-popup-navbtn';
+        nextBtn.innerHTML = '›';
+
+        const updateNav = () => {
+            const start = page * CLUSTER_POPUP_PAGE_SIZE;
+            const end = Math.min(start + CLUSTER_POPUP_PAGE_SIZE, photos.length);
+            counter.textContent = `${start + 1}–${end} of ${photos.length}`;
+            prevBtn.disabled = page === 0;
+            nextBtn.disabled = page >= totalPages - 1;
+        };
+
+        prevBtn.addEventListener('click', () => {
+            if (page > 0) { page--; renderPage(); updateNav(); }
+        });
+        nextBtn.addEventListener('click', () => {
+            if (page < totalPages - 1) { page++; renderPage(); updateNav(); }
+        });
+
+        nav.append(prevBtn, counter, nextBtn);
+        container.appendChild(nav);
+        renderPage();
+        updateNav();
+    } else {
+        renderPage();
+    }
+
+    return container;
 }
 
 

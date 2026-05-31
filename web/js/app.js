@@ -26,7 +26,8 @@ let map;
 let allTrips = [];        // trips currently loaded onto the map
 let allManifests = [];
 let allTripsMeta = [];    // full index — all trips including non-public
-let lightbox;
+let pswpItems = [];
+let photoIndexMap = {}; // photoId → index in pswpItems
 
 // Per-trip layers — so each trip can be toggled on/off independently.
 // tripLayers[tripId] = { route: L.GeoJSON, markers: L.MarkerClusterGroup, visible: bool }
@@ -909,81 +910,123 @@ function updateMobileSeeAll() {
 }
 
 /**
- * Initialize GLightbox
+ * Initialize PhotoSwipe item list
  */
 function initLightbox() {
     rebuildLightbox();
 }
 
-// Maps slide index → thumbnail URL, built in rebuildLightbox
-let slideThumbnails = [];
-
 function rebuildLightbox() {
-    const galleryContainer = document.getElementById('gallery');
-    galleryContainer.innerHTML = '';
-    slideThumbnails = [];
+    pswpItems = [];
+    photoIndexMap = {};
     const visibleTripIds = new Set(allTrips.filter(shouldDisplayTrip).map(t => t.id));
     allManifests.forEach(manifest => {
         if (!visibleTripIds.has(manifest.tripId)) return;
         manifest.photos.forEach(photo => {
-            const a = document.createElement('a');
-            a.href = resolveUrl(manifest.tripPath, photo.display);
-            a.className = 'glightbox';
-            a.dataset.photoId = photo.id;
-            a.dataset.gallery = 'trip-photos';
-            galleryContainer.appendChild(a);
-            slideThumbnails.push(resolveUrl(manifest.tripPath, photo.thumbnail));
+            photoIndexMap[photo.id] = pswpItems.length;
+            const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);
+            // If the thumbnail is already in the browser cache (shown in map markers/popups),
+            // use its aspect ratio to size the slide so msrc shows immediately.
+            const probe = new Image();
+            probe.src = thumbUrl;
+            let w = 2160, h = 1440; // landscape fallback
+            if (probe.complete && probe.naturalWidth > 0) {
+                const ratio = probe.naturalWidth / probe.naturalHeight;
+                w = ratio >= 1 ? 2160 : Math.round(2160 * ratio);
+                h = ratio >= 1 ? Math.round(2160 / ratio) : 2160;
+            }
+            pswpItems.push({
+                src: resolveUrl(manifest.tripPath, photo.display),
+                msrc: thumbUrl,
+                w,
+                h
+            });
         });
     });
-    if (lightbox) lightbox.destroy();
-    lightbox = GLightbox({
-        selector: '.glightbox',
-        touchNavigation: true,
-        loop: true,
-        autoplayVideos: true,
-        afterSlideLoad: (slideEl, data) => {
-            applyThumbnailBg(slideEl, data.index);
-        }
-    });
-}
-
-function applyThumbnailBg(slideEl, index) {
-    const thumbUrl = slideThumbnails[index];
-    if (!thumbUrl) return;
-    const imgContainer = slideEl.querySelector('.gslide-image');
-    if (!imgContainer) return;
-    const img = imgContainer.querySelector('img');
-    if (!img || (img.complete && img.naturalWidth > 0)) return;
-    imgContainer.style.backgroundImage = `url('${thumbUrl}')`;
-    imgContainer.style.backgroundSize = 'contain';
-    imgContainer.style.backgroundRepeat = 'no-repeat';
-    imgContainer.style.backgroundPosition = 'center';
-    const clear = () => { imgContainer.style.backgroundImage = ''; };
-    img.addEventListener('load', clear, { once: true });
-    img.addEventListener('error', clear, { once: true });
 }
 
 /**
- * Open gallery at specific photo
+ * Double-tap + hold + drag up/down to continuously zoom.
+ * Standard PhotoSwipe only does discrete double-tap zoom levels;
+ * this adds the native-app gesture where you hold the second tap and drag.
+ */
+function addDoubleTapDragZoom(gallery, pswpEl) {
+    let lastTapTime = 0;
+    let dragActive = false;
+    let dragStartY = 0;
+    let dragStartZoom = 1;
+    const TAP_GAP = 300;     // ms window to recognise a double-tap
+    const MIN_ZOOM = 1;
+    const MAX_ZOOM = 4;
+
+    pswpEl.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) { dragActive = false; return; }
+        const now = Date.now();
+        const touch = e.touches[0];
+
+        if (now - lastTapTime < TAP_GAP) {
+            // Second tap within window — begin drag-zoom on hold
+            dragActive = true;
+            dragStartY = touch.clientY;
+            dragStartZoom = gallery.currItem
+                ? (gallery.currItem.currZoomLevel || gallery.currItem.initialZoomLevel || 1)
+                : 1;
+            lastTapTime = 0; // reset so a third tap isn't treated as another double
+            e.preventDefault();
+            e.stopPropagation();
+        } else {
+            lastTapTime = now;
+            dragActive = false;
+        }
+    }, { passive: false });
+
+    pswpEl.addEventListener('touchmove', (e) => {
+        if (!dragActive || e.touches.length !== 1) return;
+        e.preventDefault();
+        const dy = dragStartY - e.touches[0].clientY; // drag up = positive = zoom in
+        const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, dragStartZoom * Math.pow(1.004, dy)));
+        const center = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        gallery.zoomTo(newZoom, center, 0);
+    }, { passive: false });
+
+    pswpEl.addEventListener('touchend', () => { dragActive = false; });
+    pswpEl.addEventListener('touchcancel', () => { dragActive = false; });
+}
+
+/**
+ * Open PhotoSwipe gallery at a specific photo
  */
 function openGallery(photoId) {
-    // Find photo index across all manifests
-    let photoIndex = 0;
-    let found = false;
+    const index = photoIndexMap[photoId];
+    if (index === undefined) return;
 
-    for (const manifest of allManifests) {
-        const index = manifest.photos.findIndex(p => p.id === photoId);
-        if (index !== -1) {
-            photoIndex += index;
-            found = true;
-            break;
-        }
-        photoIndex += manifest.photos.length;
-    }
+    const pswpEl = document.querySelector('.pswp');
+    const gallery = new PhotoSwipe(pswpEl, PhotoSwipeUI_Default, pswpItems, {
+        index,
+        history: false,
+        loop: true,
+        shareEl: false,
+        fullscreenEl: false,
+        tapToClose: false,
+        bgOpacity: 0.95,
+        showHideOpacity: true
+    });
 
-    if (found) {
-        lightbox.openAt(photoIndex);
-    }
+    // Resolve real dimensions after load so PhotoSwipe sizes slides correctly
+    gallery.listen('gettingData', (idx, item) => {
+        if (item.w || item.h) return;
+        const img = new Image();
+        img.onload = () => {
+            item.w = img.naturalWidth;
+            item.h = img.naturalHeight;
+            gallery.invalidateCurrItems();
+            gallery.updateSize(true);
+        };
+        img.src = item.src;
+    });
+
+    gallery.init();
+    addDoubleTapDragZoom(gallery, pswpEl);
 }
 
 function reinitLightbox() {

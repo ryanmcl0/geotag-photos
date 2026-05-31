@@ -22,7 +22,7 @@ from pathlib import Path
 import click
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
-TRIPS_CONFIG = PROJECT_ROOT / 'trips.json'
+TRIPS_CONFIG = PROJECT_ROOT / 'config' / 'trips.json'
 WEB_TRIPS_DIR = PROJECT_ROOT / 'web' / 'trips'
 
 
@@ -129,7 +129,7 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 
     # Always provide the building-coords file when present; process_trip ignores
     # it if there's no raw tree to derive building names from.
-    locations = PROJECT_ROOT / 'locations.json'
+    locations = PROJECT_ROOT / 'config' / 'locations.json'
     if locations.exists():
         cmd += ['--locations-file', str(locations)]
 
@@ -146,7 +146,7 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool):
     """Process all trips listed in trips.json."""
     if not TRIPS_CONFIG.exists():
-        click.echo("Error: trips.json not found. Copy trips.example.json to trips.json and fill it in.", err=True)
+        click.echo("Error: config/trips.json not found. Copy config/trips.example.json to config/trips.json and fill it in.", err=True)
         sys.exit(1)
 
     config = json.loads(TRIPS_CONFIG.read_text())

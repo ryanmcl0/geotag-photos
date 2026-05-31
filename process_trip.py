@@ -548,6 +548,69 @@ def find_photos(photo_dir: Path) -> list[Path]:
     return sorted(set(photos))
 
 
+def batch_read_exif(paths: list[Path]) -> dict[str, dict]:
+    """Read DateTimeOriginal, GPS, and camera settings for many files in ONE
+    exiftool invocation. Returns {str(path): {field: value, ...}}.
+
+    Calling exiftool once per file has ~50-100ms startup overhead per call;
+    batching 1000 photos saves several minutes on a typical trip reprocess.
+    """
+    if not paths:
+        return {}
+    try:
+        cmd = [
+            'exiftool', '-n', '-json', '-DateTimeOriginal',
+            '-GPSLatitude', '-GPSLongitude',
+            '-ISOSpeedRatings', '-FNumber', '-ExposureTime',
+        ] + [str(p) for p in paths]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode not in (0, 1):  # 1 = some files had warnings, still ok
+            return {}
+        records = json.loads(result.stdout) if result.stdout.strip() else []
+        return {r.get('SourceFile', ''): r for r in records}
+    except Exception:
+        return {}
+
+
+def _parse_exif_datetime(dt_str: str) -> Optional[datetime]:
+    if not dt_str:
+        return None
+    try:
+        dt_str = dt_str.split('+')[0].split('Z')[0].strip()
+        return datetime.strptime(dt_str, '%Y:%m:%d %H:%M:%S')
+    except Exception:
+        return None
+
+
+def _parse_exif_gps(record: dict) -> Optional[dict]:
+    lat = record.get('GPSLatitude')
+    lon = record.get('GPSLongitude')
+    if lat is None or lon is None:
+        return None
+    lat, lon = float(lat), float(lon)
+    if abs(lat) < 0.001 and abs(lon) < 0.001:
+        return None
+    return {'lat': lat, 'lon': lon}
+
+
+def _parse_camera_settings(record: dict) -> dict:
+    settings = {}
+    iso = record.get('ISOSpeedRatings')
+    if iso is not None:
+        settings['iso'] = iso
+    fn = record.get('FNumber')
+    if fn is not None:
+        settings['aperture'] = f"f/{float(fn):.1f}"
+    et = record.get('ExposureTime')
+    if et is not None:
+        et = float(et)
+        if et > 0 and et < 1:
+            settings['shutter'] = f"1/{round(1/et)}"
+        else:
+            settings['shutter'] = str(et)
+    return settings
+
+
 def get_exif_datetime(photo_path: Path) -> Optional[datetime]:
     """
     Extract DateTimeOriginal from photo EXIF data.
@@ -1008,10 +1071,11 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     else:
         index = {'trips': []}
 
-    # Remove existing entry for this trip if it exists
+    # Preserve fields set externally (e.g. public/private flag stamped by deploy.py)
+    # before replacing the entry so a reprocess never wipes them.
+    existing = {t['id']: t for t in index['trips']}
     index['trips'] = [t for t in index['trips'] if t.get('id') != trip_id]
 
-    # Add new trip entry
     entry = {
         'id': trip_id,
         'name': trip_name,
@@ -1022,6 +1086,10 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     }
     if countries:
         entry['countries'] = countries
+    # Carry over any extra fields from the previous entry (public flag, etc.)
+    for k, v in existing.get(trip_id, {}).items():
+        if k not in entry:
+            entry[k] = v
     index['trips'].append(entry)
 
     # Sort by start date (most recent first)
@@ -1620,15 +1688,61 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     else:
         click.echo("Fallback location: disabled (--fallback-location=none)")
 
+    # Build raw-match index upfront (needed for cache keys).
+    raw_matches = {pf: find_raw(pf.stem, pf) for pf in photo_files}
+
+    # EXIF cache: persisted between runs as <output>/exif_cache.json so that
+    # location-only reprocesses don't re-read the external drive.
+    exif_cache_path = output_path / 'exif_cache.json'
+    exif_cache: dict = {}
+    if exif_cache_path.exists():
+        try:
+            exif_cache = json.loads(exif_cache_path.read_text())
+        except Exception:
+            exif_cache = {}
+
+    cache_hits = sum(1 for pf in photo_files if str(pf) in exif_cache)
+    uncached_edits = [pf for pf in photo_files if str(pf) not in exif_cache]
+    uncached_raws  = list({r for pf in uncached_edits
+                           if (r := raw_matches[pf]) is not None
+                           and str(r) not in exif_cache})
+
+    if cache_hits:
+        click.echo(f"EXIF cache: {cache_hits} hits, reading {len(uncached_edits)} new edits / {len(uncached_raws)} new raws from drive...")
+    else:
+        click.echo(f"Pre-reading EXIF (batch) for {len(uncached_edits)} edits + {len(uncached_raws)} raws...")
+
+    new_exif = {}
+    if uncached_edits:
+        new_exif.update(batch_read_exif(uncached_edits))
+    if uncached_raws:
+        new_exif.update(batch_read_exif(uncached_raws))
+
+    # Merge into cache and persist (so next run is even faster).
+    exif_cache.update(new_exif)
+    if not dry_run and new_exif:
+        try:
+            output_path.mkdir(parents=True, exist_ok=True)
+            exif_cache_path.write_text(json.dumps(exif_cache))
+        except Exception:
+            pass
+
+    exif_edits = exif_cache
+    exif_raws  = exif_cache
+
     for photo_file in tqdm(photo_files, desc="Processing"):
         # Get photo timestamp — prefer the raw file's timestamp when available,
         # since edited JPGs sometimes carry corrupted DateTimeOriginal.
-        raw_match = find_raw(photo_file.stem, photo_file)
+        raw_match = raw_matches[photo_file]
         photo_time = None
         if raw_match is not None:
-            photo_time = get_exif_datetime_via_exiftool(raw_match)
+            photo_time = _parse_exif_datetime(
+                exif_raws.get(str(raw_match), {}).get('DateTimeOriginal'))
         if photo_time is None:
-            photo_time = get_exif_datetime(photo_file)
+            photo_time = _parse_exif_datetime(
+                exif_edits.get(str(photo_file), {}).get('DateTimeOriginal'))
+        if photo_time is None:
+            photo_time = get_exif_datetime(photo_file)  # PIL fallback
 
         if not photo_time:
             failed_photos.append((photo_file, "No EXIF timestamp"))
@@ -1644,13 +1758,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             photo_time = apply_timezone_offset(photo_time, geosync)
 
         # Determine GPS source — priority: EXIF on the JPG, then DJI DNG, then GPX.
-        gps = get_exif_gps(photo_file)
+        gps = _parse_exif_gps(exif_edits.get(str(photo_file), {}))
         gps_source = 'exif' if gps else None
 
         if not gps and raws and photo_file.stem.startswith('DJI_'):
             raw_path = find_dji_raw(photo_file, Path(raws))
             if raw_path:
-                gps = get_exif_gps(raw_path)
+                gps = _parse_exif_gps(exif_raws.get(str(raw_path), {})) \
+                      or get_exif_gps(raw_path)  # fallback if not in batch (raws dir ≠ raw_scan_root)
                 if gps:
                     gps_source = 'dng'
 
@@ -1699,6 +1814,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # No real GPS yet — place at the building's coords derived from the raw folder.
         if not on_route and not gps and building_coords and building_name:
             bc = building_coords.get(building_name.strip().lower())
+            # Generic building names (Marriott, Hilton, …) collide across cities in
+            # locations.json. When the trip pins an explicit fallback location, treat
+            # a match that's implausibly far from it (>2000km — a different continent,
+            # not just another city in the same country) as a wrong-city collision and
+            # skip it; the photo then falls through to nearest-photo / fallback.
+            if bc and fallback_source == 'cli' and fallback_gps and \
+                    haversine_distance(bc['lat'], bc['lon'], fallback_gps['lat'], fallback_gps['lon']) > 2000:
+                bc = None
             if bc:
                 gps = {'lat': bc['lat'], 'lon': bc['lon']}
                 gps_source = 'building'
@@ -1763,7 +1886,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 generate_display_image(photo_file, display_path, display_longest, format_name, quality)
 
         # Get camera settings
-        camera_settings = get_camera_settings(photo_file)
+        camera_settings = _parse_camera_settings(exif_edits.get(str(photo_file), {})) \
+                          or get_camera_settings(photo_file)
 
         # Add to processed list
         photo_entry = {

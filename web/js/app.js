@@ -947,47 +947,54 @@ function rebuildLightbox() {
 
 /**
  * Double-tap + hold + drag up/down to continuously zoom.
- * Standard PhotoSwipe only does discrete double-tap zoom levels;
- * this adds the native-app gesture where you hold the second tap and drag.
+ *
+ * PhotoSwipe registers its own touch handlers during init() using the bubble
+ * phase. We use capture:true so our handler runs first in the capture phase,
+ * then stopImmediatePropagation() blocks PhotoSwipe from seeing the second tap.
  */
 function addDoubleTapDragZoom(gallery, pswpEl) {
     let lastTapTime = 0;
     let dragActive = false;
     let dragStartY = 0;
     let dragStartZoom = 1;
-    const TAP_GAP = 300;     // ms window to recognise a double-tap
-    const MIN_ZOOM = 1;
-    const MAX_ZOOM = 4;
+    const TAP_GAP = 300;
+    const MAX_ZOOM = 3;
+
+    function currentZoom() {
+        if (!gallery.currItem) return gallery.currItem && gallery.currItem.initialZoomLevel || 0.5;
+        return gallery.currItem.currZoomLevel || gallery.currItem.initialZoomLevel || 0.5;
+    }
+    function minZoom() {
+        return (gallery.currItem && gallery.currItem.initialZoomLevel) || 0.1;
+    }
 
     pswpEl.addEventListener('touchstart', (e) => {
-        if (e.touches.length !== 1) { dragActive = false; return; }
+        if (e.touches.length !== 1) { dragActive = false; lastTapTime = 0; return; }
         const now = Date.now();
         const touch = e.touches[0];
 
-        if (now - lastTapTime < TAP_GAP) {
-            // Second tap within window — begin drag-zoom on hold
+        if (lastTapTime > 0 && now - lastTapTime < TAP_GAP) {
+            // Second tap while first is still in window — start drag-zoom
             dragActive = true;
             dragStartY = touch.clientY;
-            dragStartZoom = gallery.currItem
-                ? (gallery.currItem.currZoomLevel || gallery.currItem.initialZoomLevel || 1)
-                : 1;
-            lastTapTime = 0; // reset so a third tap isn't treated as another double
+            dragStartZoom = currentZoom();
+            lastTapTime = 0;
+            e.stopImmediatePropagation(); // prevent PhotoSwipe's double-tap zoom
             e.preventDefault();
-            e.stopPropagation();
         } else {
             lastTapTime = now;
             dragActive = false;
         }
-    }, { passive: false });
+    }, { passive: false, capture: true });
 
     pswpEl.addEventListener('touchmove', (e) => {
         if (!dragActive || e.touches.length !== 1) return;
+        e.stopImmediatePropagation();
         e.preventDefault();
-        const dy = dragStartY - e.touches[0].clientY; // drag up = positive = zoom in
-        const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, dragStartZoom * Math.pow(1.004, dy)));
-        const center = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        gallery.zoomTo(newZoom, center, 0);
-    }, { passive: false });
+        const dy = dragStartY - e.touches[0].clientY; // up = positive = zoom in
+        const newZoom = Math.min(MAX_ZOOM, Math.max(minZoom(), dragStartZoom * Math.pow(1.004, dy)));
+        gallery.zoomTo(newZoom, { x: e.touches[0].clientX, y: e.touches[0].clientY }, 0);
+    }, { passive: false, capture: true });
 
     pswpEl.addEventListener('touchend', () => { dragActive = false; });
     pswpEl.addEventListener('touchcancel', () => { dragActive = false; });

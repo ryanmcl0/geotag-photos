@@ -236,14 +236,6 @@ class PagesDeployer:
     def __init__(self, config: DeployConfig):
         self.config = config
 
-    def _check_wrangler(self) -> bool:
-        try:
-            subprocess.run(['wrangler', '--version'], capture_output=True, check=True)
-            return True
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            print("  ✗ wrangler not found. Install: npm install -g wrangler")
-            return False
-
     def set_secret(self, name: str, value: str, dry_run: bool = False) -> bool:
         if dry_run:
             print(f"    [dry-run] would set Pages secret: {name}")
@@ -263,11 +255,9 @@ class PagesDeployer:
         if dry_run:
             print("    [dry-run] would run: wrangler pages deploy web/")
             return True
-        if not self._check_wrangler():
-            return False
         try:
             result = subprocess.run(
-                ['wrangler', 'pages', 'deploy', 'web/',
+                ['npx', 'wrangler', 'pages', 'deploy', 'web/',
                  '--project-name', self.config.pages_project],
                 capture_output=True, text=True, check=True
             )

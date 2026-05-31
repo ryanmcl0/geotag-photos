@@ -618,6 +618,11 @@ function resolveUrl(tripPath, photoPath) {
     return photoPath.startsWith('http') ? photoPath : `${tripPath}/${photoPath}`;
 }
 
+function preloadDisplay(url) {
+    const img = new Image();
+    img.src = url;
+}
+
 /**
  * Create icon for photo marker with thumbnail preview
  */
@@ -642,6 +647,7 @@ function createPhotoIcon(count, thumbnailUrl) {
  * Create popup for single photo
  */
 function createSinglePhotoPopup(photo, location) {
+    preloadDisplay(resolveUrl(photo.tripPath, photo.display));
     const title = location || photo.tripName;
     const sub = (location && photo.tripName && photo.tripName !== location)
         ? `<div class="cluster-popup-subheader">${photo.tripName}</div>` : '';
@@ -706,6 +712,9 @@ function createMultiPhotoPopup(photos, location) {
             img.src = resolveUrl(photo.tripPath, photo.thumbnail);
             img.alt = '';
             img.dataset.photoId = photo.id;
+            const displayUrl = resolveUrl(photo.tripPath, photo.display);
+            img.addEventListener('touchstart', () => preloadDisplay(displayUrl), { passive: true });
+            img.addEventListener('mousedown', () => preloadDisplay(displayUrl));
             img.addEventListener('click', () => openGallery(photo.id));
             grid.appendChild(img);
         });
@@ -906,9 +915,13 @@ function initLightbox() {
     rebuildLightbox();
 }
 
+// Maps slide index → thumbnail URL, built in rebuildLightbox
+let slideThumbnails = [];
+
 function rebuildLightbox() {
     const galleryContainer = document.getElementById('gallery');
     galleryContainer.innerHTML = '';
+    slideThumbnails = [];
     const visibleTripIds = new Set(allTrips.filter(shouldDisplayTrip).map(t => t.id));
     allManifests.forEach(manifest => {
         if (!visibleTripIds.has(manifest.tripId)) return;
@@ -919,6 +932,7 @@ function rebuildLightbox() {
             a.dataset.photoId = photo.id;
             a.dataset.gallery = 'trip-photos';
             galleryContainer.appendChild(a);
+            slideThumbnails.push(resolveUrl(manifest.tripPath, photo.thumbnail));
         });
     });
     if (lightbox) lightbox.destroy();
@@ -926,8 +940,27 @@ function rebuildLightbox() {
         selector: '.glightbox',
         touchNavigation: true,
         loop: true,
-        autoplayVideos: true
+        autoplayVideos: true,
+        afterSlideLoad: (slideEl, data) => {
+            applyThumbnailBg(slideEl, data.index);
+        }
     });
+}
+
+function applyThumbnailBg(slideEl, index) {
+    const thumbUrl = slideThumbnails[index];
+    if (!thumbUrl) return;
+    const imgContainer = slideEl.querySelector('.gslide-image');
+    if (!imgContainer) return;
+    const img = imgContainer.querySelector('img');
+    if (!img || (img.complete && img.naturalWidth > 0)) return;
+    imgContainer.style.backgroundImage = `url('${thumbUrl}')`;
+    imgContainer.style.backgroundSize = 'contain';
+    imgContainer.style.backgroundRepeat = 'no-repeat';
+    imgContainer.style.backgroundPosition = 'center';
+    const clear = () => { imgContainer.style.backgroundImage = ''; };
+    img.addEventListener('load', clear, { once: true });
+    img.addEventListener('error', clear, { once: true });
 }
 
 /**

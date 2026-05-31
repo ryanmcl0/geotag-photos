@@ -278,6 +278,26 @@ body {
     display: none;
 }
 
+/* Move PhotoSwipe's preloader to center of screen and make it more visible */
+.pswp__preloader {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    margin: -20px 0 0 -20px !important;
+    width: 40px !important;
+    height: 40px !important;
+}
+.pswp__preloader__icn {
+    width: 40px !important;
+    height: 40px !important;
+}
+.pswp__preloader__donut {
+    width: 30px !important;
+    height: 30px !important;
+    border-width: 3px !important;
+    margin: 5px !important;
+}
+
 /* Photo marker with thumbnail - Instagram style */
 .photo-marker-icon {
     position: absolute;

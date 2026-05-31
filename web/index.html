@@ -41,22 +41,40 @@
             </ul>
         </nav>
 
-        <!-- Mobile sidebar toggle -->
-        <button class="sidebar-toggle" id="sidebar-toggle">
-            <span></span>
-            <span></span>
-            <span></span>
-        </button>
-
         <!-- Main content -->
         <main class="map-container">
             <!-- Map container -->
             <div id="map"></div>
 
+            <!-- Controls live INSIDE .map-container so they share the map's
+                 compositing context — iOS Safari won't drop them when the map
+                 re-tiles after a zoom (body-level fixed elements get dropped). -->
+            <button class="sidebar-toggle" id="sidebar-toggle">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+
+            <!-- Mobile: See All floating button (managed by app.js) -->
+            <button id="mobile-see-all-trigger" class="mobile-see-all-trigger" aria-label="See All Trips"></button>
 
             <!-- Hidden gallery container for GLightbox -->
             <div id="gallery" class="gallery-hidden"></div>
         </main>
+    </div>
+
+    <!-- Mobile: password overlay modal — stays at body level so it covers
+         everything (including the sidebar) when shown -->
+    <div id="mobile-pw-overlay" class="mobile-pw-overlay">
+        <div class="mobile-pw-modal">
+            <p class="mobile-pw-title">🔒 Unlock All Trips</p>
+            <input type="password" id="mobile-pw-input" placeholder="Password" autocomplete="current-password">
+            <div class="mobile-pw-actions">
+                <button id="mobile-pw-cancel" class="mobile-pw-cancel">Cancel</button>
+                <button id="mobile-pw-submit" class="mobile-pw-submit">Unlock</button>
+            </div>
+            <p id="mobile-pw-error" class="mobile-pw-error"></p>
+        </div>
     </div>
 
     <!-- View configuration -->

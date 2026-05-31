@@ -841,12 +841,11 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
 
         anchor_lat, anchor_lon = cluster_anchor_point(cluster_photos)
 
-        # Name the cluster after the most common building among its photos, if any
+        # Name the cluster after the most common building among its photos, if any.
+        # Left as None here when no building is known — filled with a city name
+        # (or a generic label) by name_unlabeled_clusters() below.
         building_names = [p['building'] for p in cluster_photos if p.get('building')]
-        if building_names:
-            location = max(set(building_names), key=building_names.count)
-        else:
-            location = f'Location {len(clusters) + 1}'
+        location = max(set(building_names), key=building_names.count) if building_names else None
 
         clusters.append({
             'location': location,
@@ -855,7 +854,39 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
             'photo_ids': [p['id'] for p in cluster_photos]
         })
 
+    name_unlabeled_clusters(clusters)
     return clusters
+
+
+def name_unlabeled_clusters(clusters: list[dict]) -> None:
+    """
+    Fill in cluster names that have no building label, in place. Falls back to the
+    nearest city via offline reverse-geocoding (no network), then to a generic
+    "Location N" label if even that is unavailable.
+    """
+    unlabeled = [c for c in clusters if not c.get('location')]
+    cities: dict = {}
+    if unlabeled:
+        try:
+            import reverse_geocoder as rg
+            results = rg.search([(c['lat'], c['lon']) for c in unlabeled], verbose=False)
+            for c, r in zip(unlabeled, results):
+                name = (r.get('name') or '').strip()
+                if name:
+                    cities[id(c)] = name
+        except Exception:
+            pass
+
+    counter = 0
+    for c in clusters:
+        if c.get('location'):
+            continue
+        city = cities.get(id(c))
+        if city:
+            c['location'] = city
+        else:
+            counter += 1
+            c['location'] = f'Location {counter}'
 
 
 def apply_timezone_offset(dt: datetime, offset_str: str) -> datetime:
@@ -1586,15 +1617,21 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 gps = clamped
                 gps_source = 'gpx'
 
-        # No real GPS yet — place at the building's coords derived from the raw folder.
+        # Derive a building/location label from the raw folder whenever we can.
+        # This is used purely to NAME the cluster, independent of how GPS was
+        # resolved — so EXIF/DNG/GPX-placed photos (e.g. the DJI skyscraper
+        # shots) still inherit their building name instead of falling back to a
+        # generic "Location N".
         building_name = None
-        if not on_route and not gps and building_coords and raw_match is not None:
+        if raw_match is not None and raw_scan_root:
             building_name = building_from_raw(raw_match, Path(raw_scan_root))
-            if building_name:
-                bc = building_coords.get(building_name.strip().lower())
-                if bc:
-                    gps = {'lat': bc['lat'], 'lon': bc['lon']}
-                    gps_source = 'building'
+
+        # No real GPS yet — place at the building's coords derived from the raw folder.
+        if not on_route and not gps and building_coords and building_name:
+            bc = building_coords.get(building_name.strip().lower())
+            if bc:
+                gps = {'lat': bc['lat'], 'lon': bc['lon']}
+                gps_source = 'building'
 
         # Compute how far out of the GPX window the photo is (for diagnostics either way)
         pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)

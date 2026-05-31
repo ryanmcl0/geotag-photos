@@ -62,7 +62,7 @@ def sync_public_flags(dry_run: bool = False):
     Reads trips.json and matches each processed trip by manifest source.photos_path
     against the trip's edits path. Sets public=True/False accordingly.
     """
-    trips_config_path = Path('trips.json')
+    trips_config_path = Path('config/trips.json')
     index_path = Path('web/trips/index.json')
 
     if not trips_config_path.exists():

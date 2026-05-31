@@ -204,11 +204,31 @@ def load_locations_file(path: Path) -> dict:
 
 
 def parse_location_names(trip_name: str) -> list[str]:
-    """Extract individual location names from a trip name string."""
+    """Extract individual, country-qualified location names from a trip name.
+
+    Trip names follow "Country - Region, Region, Country - Region, ..." where a
+    bare comma segment (no ' - ') continues the most recently named country. Each
+    region is returned qualified with its country (e.g. "South Coast, Iceland") so
+    geocoding is unambiguous — without the country, "South Coast" geocodes to
+    South Coast Plaza in California, not Iceland's south coast.
+    """
     loc = re.sub(r'^\d{4}[:\d]*\s+', '', trip_name).strip()
-    if ' - ' in loc:
-        loc = loc.split(' - ', 1)[1]
-    return [p.strip() for p in loc.split(',') if p.strip()]
+    out = []
+    current_country = None
+    for seg in loc.split(','):
+        seg = seg.strip()
+        if not seg:
+            continue
+        if ' - ' in seg:
+            country, region = seg.split(' - ', 1)
+            current_country = country.strip()
+            region = region.strip()
+            out.append(f'{region}, {current_country}' if current_country else region)
+        elif current_country:
+            out.append(f'{seg}, {current_country}')
+        else:
+            out.append(seg)
+    return out
 
 
 def geocode_single(query: str) -> Optional[dict]:
@@ -1388,8 +1408,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     _ext_rank = {'.arw': 0, '.dng': 1, '.cr2': 2, '.nef': 3, '.raf': 4,
                  '.tif': 5, '.tiff': 5, '.png': 6, '.jpeg': 7, '.jpg': 8}
 
+    # stem → [all raw paths sharing that stem]. We keep every candidate (not just
+    # the best-ranked) so find_raw can disambiguate stem collisions using the
+    # edit's own folder — the camera counter rolls over, so the same stem
+    # (e.g. RM107445) can exist in several trip folders.
     raw_index: dict = {}
-    raw_base_index: dict = {}  # base_stem → raw path, for suffix-tolerant matching
+    raw_base_index: dict = {}  # base_stem → [raw paths], for suffix-tolerant matching
     raw_scan_root = raws_root or filter_by_raws_in
     if raw_scan_root:
         root_p = Path(raw_scan_root)
@@ -1400,26 +1424,43 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             has_building = building_from_raw(p, root_p) is not None
             return (0 if has_building else 1, _ext_rank.get(p.suffix.lower(), 9), str(p))
 
-        def consider(idx: dict, key: str, p: Path):
-            cur = idx.get(key)
-            if cur is None or rank(p) < rank(cur):
-                idx[key] = p
+        def add(idx: dict, key: str, p: Path):
+            idx.setdefault(key, []).append(p)
 
         for ext in SUPPORTED_EXTENSIONS | {'.arw', '.dng', '.cr2', '.nef', '.raf'}:
             for pat in (f'*{ext}', f'*{ext.upper()}'):
                 for p in Path(raw_scan_root).rglob(pat):
-                    consider(raw_index, p.stem, p)
-                    consider(raw_base_index, base_stem(p.stem), p)
+                    add(raw_index, p.stem, p)
+                    add(raw_base_index, base_stem(p.stem), p)
+    else:
+        root_p = None
+        def rank(p: Path) -> tuple:
+            return (1, _ext_rank.get(p.suffix.lower(), 9), str(p))
 
-    def find_raw(stem: str) -> Optional[Path]:
-        return raw_index.get(stem) or raw_base_index.get(base_stem(stem))
+    def _meaningful_tokens(path: Path) -> set:
+        """Lowercased, non-generic folder names along a path — used to match an
+        edit's folder to a candidate raw's folder."""
+        return {part.lower() for part in path.parent.parts
+                if not _is_generic_component(part)}
+
+    def find_raw(stem: str, edit_path: Optional[Path] = None) -> Optional[Path]:
+        cands = raw_index.get(stem) or raw_base_index.get(base_stem(stem))
+        if not cands:
+            return None
+        if len(cands) == 1:
+            return cands[0]
+        # Stem collision: prefer the raw whose folder shares a location name with
+        # the edit's folder (e.g. an edit under .../Wuhan/ should match the Wuhan
+        # raw, not a same-stem raw under .../Guangzhou/). Fall back to rank.
+        edit_tokens = _meaningful_tokens(edit_path) if edit_path else set()
+        return min(cands, key=lambda p: (-len(edit_tokens & _meaningful_tokens(p)), rank(p)))
 
     if filter_by_raws_in:
         before = len(photo_files)
         _TIMESTAMP_COLLISION_DAYS = 30  # if raw timestamp differs from edit by >30 days, it's a stem collision
 
         def _raw_matches_edit(edit_path: Path) -> bool:
-            raw = find_raw(edit_path.stem)
+            raw = find_raw(edit_path.stem, edit_path)
             if raw is None:
                 return False
             raw_ts = get_exif_datetime_via_exiftool(raw)
@@ -1453,7 +1494,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         no_building = 0
         no_raw = 0
         for pf in photo_files:
-            raw = find_raw(pf.stem)
+            raw = find_raw(pf.stem, pf)
             if raw is None:
                 no_raw += 1
                 continue
@@ -1510,6 +1551,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     failed_photos = []
     skipped_records: list = []  # structured records persisted to manifest
     gps_source_counts: dict = {}
+    clock_corrected_count = 0  # route photos whose wrong date we corrected via day folder
     gpx_tolerance_seconds = gpx_tolerance_hours * 3600
 
     # GPX window in UTC, used to compute "how far out of range" deltas
@@ -1521,6 +1563,21 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         gpx_window_start, gpx_window_end = _t0, _t1
     else:
         gpx_window_start = gpx_window_end = None
+
+    # Distinct calendar days covered by the track, in order. "Day N" route folders
+    # map to day_dates[N-1] — used to date-correct route photos whose camera clock
+    # was wrong (timestamp outside the track window) so they still interpolate onto
+    # the right segment.
+    day_dates = []
+    if trackpoints:
+        _seen = set()
+        for _p in trackpoints:
+            _t = _p['time']
+            _d = (_t if _t.tzinfo else _t.replace(tzinfo=timezone.utc)).date()
+            if _d not in _seen:
+                _seen.add(_d)
+                day_dates.append(_d)
+        day_dates.sort()
 
     # Decide fallback location for photos with no GPS.
     # With GPX: default chain → nearest placed photo → nearest trackpoint → centroid.
@@ -1566,7 +1623,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     for photo_file in tqdm(photo_files, desc="Processing"):
         # Get photo timestamp — prefer the raw file's timestamp when available,
         # since edited JPGs sometimes carry corrupted DateTimeOriginal.
-        raw_match = find_raw(photo_file.stem)
+        raw_match = find_raw(photo_file.stem, photo_file)
         photo_time = None
         if raw_match is not None:
             photo_time = get_exif_datetime_via_exiftool(raw_match)
@@ -1603,28 +1660,41 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             if gps:
                 gps_source = 'gpx'
 
+        # Derive a building/location label from the raw folder whenever we can.
+        # Used to NAME the cluster (independent of how GPS was resolved, so
+        # EXIF/DNG/GPX-placed photos still inherit their building name) and to read
+        # the "Day N" number for date-correcting route photos below.
+        building_name = None
+        if raw_match is not None and raw_scan_root:
+            building_name = building_from_raw(raw_match, Path(raw_scan_root))
+
         # Route-subdir photos belong to the documented GPX journey → force them
-        # on-route (public): keep real GPS if present, else interpolate/clamp onto
-        # the track across any recording gap. Skips building lookup below.
+        # on-route (public). Skips building-coord lookup below.
+        #
+        # Crucially we only FORCE photos that lack real GPS onto the track — a
+        # photo with its own EXIF/DNG GPS (e.g. a drone shot) is already at its
+        # true position, so clamping it onto the track would only make it worse
+        # (and wrong, if the camera clock was off).
         on_route = bool(gpx_route_subdir) and raw_match is not None and \
             any(part.lower() == gpx_route_subdir.lower() for part in raw_match.parts)
-        if on_route and trackpoints:
-            # Always use clamped interpolation for route-subdir photos, even if
-            # interpolate_gps already set a position — it may have interpolated
-            # across a multi-day GPX gap to a wrong intermediate location.
+        if on_route and trackpoints and gps_source not in ('exif', 'dng'):
+            # If the camera clock was wrong, the timestamp falls outside the GPX
+            # window even though the "Day N" folder says exactly which trip day this
+            # is. Correct the DATE to that day (keeping time-of-day) so the photo
+            # interpolates accurately onto the route instead of clamping to one end.
+            _pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
+            outside = gpx_window_start is None or not (gpx_window_start <= _pt <= gpx_window_end)
+            _m_day = re.match(r'\s*day\s*0*(\d+)', building_name or '', re.I)
+            _day_n = int(_m_day.group(1)) if _m_day else None
+            if outside and _day_n and 1 <= _day_n <= len(day_dates):
+                photo_time = datetime.combine(day_dates[_day_n - 1], photo_time.time())
+                clock_corrected_count += 1
+            # Force onto the track (clamp across recording gaps) using the
+            # possibly-corrected timestamp.
             clamped = interpolate_gps_clamped(trackpoints, photo_time)
             if clamped:
                 gps = clamped
                 gps_source = 'gpx'
-
-        # Derive a building/location label from the raw folder whenever we can.
-        # This is used purely to NAME the cluster, independent of how GPS was
-        # resolved — so EXIF/DNG/GPX-placed photos (e.g. the DJI skyscraper
-        # shots) still inherit their building name instead of falling back to a
-        # generic "Location N".
-        building_name = None
-        if raw_match is not None and raw_scan_root:
-            building_name = building_from_raw(raw_match, Path(raw_scan_root))
 
         # No real GPS yet — place at the building's coords derived from the raw folder.
         if not on_route and not gps and building_coords and building_name:
@@ -1889,6 +1959,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     if gps_source_counts:
         breakdown = ', '.join(f'{src}={n}' for src, n in sorted(gps_source_counts.items()))
         click.echo(f"GPS sources: {breakdown}")
+    if clock_corrected_count:
+        click.echo(f"Clock-corrected route photos (wrong camera date → day folder): {clock_corrected_count}")
     click.echo(f"Failed: {len(failed_photos)} photos")
 
     if failed_photos:

@@ -118,6 +118,11 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):
         cmd += ['--raws-root', trip['raws']]
+    if opts.get('exclude_buildings'):
+        buildings = opts['exclude_buildings']
+        if isinstance(buildings, list):
+            buildings = ','.join(buildings)
+        cmd += ['--exclude-buildings', buildings]
     if opts.get('split_offroute_private'):
         cmd += ['--split-offroute-private']
     if opts.get('private_cluster_radius'):
@@ -224,6 +229,12 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
     click.echo(f"Done — {done}/{len(to_process)} trips processed successfully")
     if failed:
         click.echo(f"Failed: {', '.join(failed)}", err=True)
+
+    try:
+        import deploy
+        deploy.sync_public_flags()
+    except Exception as e:
+        click.echo(f"⚠ sync_public_flags failed: {e}", err=True)
 
 
 if __name__ == '__main__':

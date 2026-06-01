@@ -1031,20 +1031,32 @@ def get_exif_datetime_via_exiftool(photo_path: Path) -> Optional[datetime]:
 
 def find_dji_raw(photo_path: Path, raws_dir: Path) -> Optional[Path]:
     """
-    Find matching DNG file for a DJI photo in raws directory.
+    Find the matching original DJI file for a DJI edit, to read embedded GPS.
+
+    The drone writes GPS into both its DNG and JPG originals; the JPG edit
+    exported from Lightroom usually has it stripped. Some drones shoot DNG,
+    others (Mini/Air) only JPG, so match both. Searches recursively because
+    drone originals often live in a 'Drone/' subfolder of the raws tree.
+    GPS-bearing extensions are preferred over JPG.
     """
     if not photo_path.stem.startswith('DJI_'):
         return None
 
-    # Check lowercase .dng
-    dng_path = raws_dir / f'{photo_path.stem}.dng'
-    if dng_path.exists():
-        return dng_path
+    stem = photo_path.stem
+    # Flat check first (fast path), preferring DNG over JPG.
+    for ext in ('.dng', '.DNG', '.jpg', '.JPG', '.jpeg', '.JPEG'):
+        cand = raws_dir / f'{stem}{ext}'
+        if cand.exists():
+            return cand
 
-    # Check uppercase .DNG
-    dng_path_upper = raws_dir / f'{photo_path.stem}.DNG'
-    if dng_path_upper.exists():
-        return dng_path_upper
+    # Recursive fallback — drone originals commonly sit under a subfolder.
+    matches = []
+    for ext in ('.dng', '.DNG', '.jpg', '.JPG', '.jpeg', '.JPEG'):
+        matches.extend(raws_dir.rglob(f'{stem}{ext}'))
+    if matches:
+        rank = {'.dng': 0, '.jpeg': 1, '.jpg': 1}
+        matches.sort(key=lambda p: rank.get(p.suffix.lower(), 2))
+        return matches[0]
 
     return None
 
@@ -1131,7 +1143,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css"/>
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/glightbox@3.2.0/dist/css/glightbox.min.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
     <link rel="stylesheet" href="../css/styles.css"/>
 </head>
 <body>
@@ -1153,7 +1166,27 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
         <main class="map-container">
             <div id="map"></div>
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info"><span>i</span></button>
-            <div id="gallery" class="gallery-hidden"></div>
+            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true" style="display:none">
+                <div class="pswp__bg"></div>
+                <div class="pswp__scroll-wrap">
+                    <div class="pswp__container">
+                        <div class="pswp__item"></div>
+                        <div class="pswp__item"></div>
+                        <div class="pswp__item"></div>
+                    </div>
+                    <div class="pswp__ui pswp__ui--hidden">
+                        <div class="pswp__top-bar">
+                            <div class="pswp__counter"></div>
+                            <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+                            <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+                            <div class="pswp__preloader"><div class="pswp__preloader__icn"><div class="pswp__preloader__cut"><div class="pswp__preloader__donut"></div></div></div></div>
+                        </div>
+                        <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)"></button>
+                        <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)"></button>
+                        <div class="pswp__caption"><div class="pswp__caption__center"></div></div>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
     <script>
@@ -1166,7 +1199,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     </script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.2.0/dist/js/glightbox.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
     <script src="../js/sidebar.js"></script>
     <script src="../js/app.js"></script>
 </body>
@@ -1187,7 +1221,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css"/>
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/glightbox@3.2.0/dist/css/glightbox.min.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
     <link rel="stylesheet" href="../../css/styles.css"/>
 </head>
 <body>
@@ -1209,7 +1244,27 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
         <main class="map-container">
             <div id="map"></div>
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info"><span>i</span></button>
-            <div id="gallery" class="gallery-hidden"></div>
+            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true" style="display:none">
+                <div class="pswp__bg"></div>
+                <div class="pswp__scroll-wrap">
+                    <div class="pswp__container">
+                        <div class="pswp__item"></div>
+                        <div class="pswp__item"></div>
+                        <div class="pswp__item"></div>
+                    </div>
+                    <div class="pswp__ui pswp__ui--hidden">
+                        <div class="pswp__top-bar">
+                            <div class="pswp__counter"></div>
+                            <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+                            <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+                            <div class="pswp__preloader"><div class="pswp__preloader__icn"><div class="pswp__preloader__cut"><div class="pswp__preloader__donut"></div></div></div></div>
+                        </div>
+                        <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)"></button>
+                        <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)"></button>
+                        <div class="pswp__caption"><div class="pswp__caption__center"></div></div>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
     <script>
@@ -1222,7 +1277,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     </script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/glightbox@3.2.0/dist/js/glightbox.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
     <script src="../../js/sidebar.js"></script>
     <script src="../../js/app.js"></script>
 </body>
@@ -1330,6 +1386,9 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
                    'the edited photos, with photo counts, then exit without processing.')
 @click.option('--exclude-buildings', 'exclude_buildings', default=None, metavar='NAME,NAME,...',
               help='Comma-separated building names to drop entirely (photos are not placed or included).')
+@click.option('--exclude-edits-under', 'exclude_edits_under', default=None, metavar='NAME,NAME,...',
+              help='Comma-separated edit-folder names; drop any edit whose path contains one as a '
+                   'component. Carves region subfolders out of a multi-region edits bundle.')
 @click.option('--split-offroute-private', is_flag=True,
               help='Split a GPX trip in two: photos placed by the GPX track (on-route) stay in this '
                    'trip (public); all other photos (off-route building/drone/fallback shots) are '
@@ -1372,7 +1431,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  max_interp_gap_hours: float,
                  filter_by_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
-                 exclude_buildings: Optional[str],
+                 exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
@@ -1521,8 +1580,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if len(cands) == 1:
             return cands[0]
         # Stem collision: prefer the raw whose folder shares a location name with
-        # the edit's folder (e.g. an edit under .../Wuhan/ should match the Wuhan
-        # raw, not a same-stem raw under .../Guangzhou/). Fall back to rank.
+        # the edit's folder. Fall back to rank.
         edit_tokens = _meaningful_tokens(edit_path) if edit_path else set()
         return min(cands, key=lambda p: (-len(edit_tokens & _meaningful_tokens(p)), rank(p)))
 
@@ -1546,13 +1604,26 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         click.echo(f"  Kept {len(photo_files)} of {before} photos with matching raw (timestamp-verified)")
         click.echo(f"  Will read DateTimeOriginal from the raw file when available")
 
+    # Drop edits that live under an excluded subfolder of the edits bundle — used to
+    # carve specific regions out of a multi-region edits bundle. Matches edit-path
+    # folder names (case-insensitive, exact component match) — deterministic
+    # regardless of raw stem collisions.
+    if exclude_edits_under:
+        excl = [e.strip().lower() for e in exclude_edits_under.split(';') if e.strip()]
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if not any(part.lower() in excl for part in p.parts)]
+        click.echo(f"  Excluded edits under {excl}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
+
     if not photo_files:
         click.echo("Error: No photos found in directory", err=True)
         sys.exit(1)
 
+    # Split on ';' (not ',') so building/folder names that contain commas
+    # (e.g. "Himachal Pradesh, Ladakh") survive intact.
     exclude_building_set: set = set()
     if exclude_buildings:
-        exclude_building_set = {b.strip().lower() for b in exclude_buildings.split(',') if b.strip()}
+        exclude_building_set = {b.strip().lower() for b in exclude_buildings.split(';') if b.strip()}
         click.echo(f"Excluding buildings: {sorted(exclude_building_set)}")
 
     # Load building/location coordinate map (KML + web-search derived)
@@ -1790,6 +1861,10 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         building_name = None
         if raw_match is not None and raw_scan_root:
             building_name = building_from_raw(raw_match, Path(raw_scan_root))
+        # Fall back to deriving the label from the edits directory structure
+        # (e.g. /Edits/2025 China CNY/Hubei - Sidu/IMG_001.jpg → "Hubei - Sidu").
+        if not building_name:
+            building_name = building_from_raw(photo_file, photos_path)
 
         if exclude_building_set and building_name and building_name.strip().lower() in exclude_building_set:
             continue

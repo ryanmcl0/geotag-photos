@@ -118,11 +118,20 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):
         cmd += ['--raws-root', trip['raws']]
+        # Same tree also serves DJI GPS lookup (drone originals carry embedded GPS).
+        cmd += ['--raws', trip['raws']]
     if opts.get('exclude_buildings'):
         buildings = opts['exclude_buildings']
         if isinstance(buildings, list):
-            buildings = ','.join(buildings)
+            buildings = ';'.join(buildings)
         cmd += ['--exclude-buildings', buildings]
+    if opts.get('exclude_edits_under'):
+        excl = opts['exclude_edits_under']
+        if isinstance(excl, list):
+            excl = ';'.join(excl)
+        cmd += ['--exclude-edits-under', excl]
+    if opts.get('max_interp_gap_hours') is not None:
+        cmd += ['--max-interp-gap-hours', str(opts['max_interp_gap_hours'])]
     if opts.get('split_offroute_private'):
         cmd += ['--split-offroute-private']
     if opts.get('private_cluster_radius'):

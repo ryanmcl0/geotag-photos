@@ -26,7 +26,8 @@ let map;
 let allTrips = [];        // trips currently loaded onto the map
 let allManifests = [];
 let allTripsMeta = [];    // full index — all trips including non-public
-let lightbox;
+let pswpItems = [];
+let photoIndexMap = {}; // photoId → index in pswpItems
 
 // Per-trip layers — so each trip can be toggled on/off independently.
 // tripLayers[tripId] = { route: L.GeoJSON, markers: L.MarkerClusterGroup, visible: bool }
@@ -618,6 +619,11 @@ function resolveUrl(tripPath, photoPath) {
     return photoPath.startsWith('http') ? photoPath : `${tripPath}/${photoPath}`;
 }
 
+function preloadDisplay(url) {
+    const img = new Image();
+    img.src = url;
+}
+
 /**
  * Create icon for photo marker with thumbnail preview
  */
@@ -642,6 +648,7 @@ function createPhotoIcon(count, thumbnailUrl) {
  * Create popup for single photo
  */
 function createSinglePhotoPopup(photo, location) {
+    preloadDisplay(resolveUrl(photo.tripPath, photo.display));
     const title = location || photo.tripName;
     const sub = (location && photo.tripName && photo.tripName !== location)
         ? `<div class="cluster-popup-subheader">${photo.tripName}</div>` : '';
@@ -706,6 +713,9 @@ function createMultiPhotoPopup(photos, location) {
             img.src = resolveUrl(photo.tripPath, photo.thumbnail);
             img.alt = '';
             img.dataset.photoId = photo.id;
+            const displayUrl = resolveUrl(photo.tripPath, photo.display);
+            img.addEventListener('touchstart', () => preloadDisplay(displayUrl), { passive: true });
+            img.addEventListener('mousedown', () => preloadDisplay(displayUrl));
             img.addEventListener('click', () => openGallery(photo.id));
             grid.appendChild(img);
         });
@@ -900,57 +910,140 @@ function updateMobileSeeAll() {
 }
 
 /**
- * Initialize GLightbox
+ * Initialize PhotoSwipe item list
  */
 function initLightbox() {
     rebuildLightbox();
 }
 
 function rebuildLightbox() {
-    const galleryContainer = document.getElementById('gallery');
-    galleryContainer.innerHTML = '';
+    pswpItems = [];
+    photoIndexMap = {};
     const visibleTripIds = new Set(allTrips.filter(shouldDisplayTrip).map(t => t.id));
     allManifests.forEach(manifest => {
         if (!visibleTripIds.has(manifest.tripId)) return;
         manifest.photos.forEach(photo => {
-            const a = document.createElement('a');
-            a.href = resolveUrl(manifest.tripPath, photo.display);
-            a.className = 'glightbox';
-            a.dataset.photoId = photo.id;
-            a.dataset.gallery = 'trip-photos';
-            galleryContainer.appendChild(a);
+            photoIndexMap[photo.id] = pswpItems.length;
+            const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);
+            // If the thumbnail is already in the browser cache (shown in map markers/popups),
+            // use its aspect ratio to size the slide so msrc shows immediately.
+            const probe = new Image();
+            probe.src = thumbUrl;
+            let w = 2160, h = 1440; // landscape fallback
+            if (probe.complete && probe.naturalWidth > 0) {
+                const ratio = probe.naturalWidth / probe.naturalHeight;
+                w = ratio >= 1 ? 2160 : Math.round(2160 * ratio);
+                h = ratio >= 1 ? Math.round(2160 / ratio) : 2160;
+            }
+            pswpItems.push({
+                src: resolveUrl(manifest.tripPath, photo.display),
+                msrc: thumbUrl,
+                w,
+                h
+            });
         });
-    });
-    if (lightbox) lightbox.destroy();
-    lightbox = GLightbox({
-        selector: '.glightbox',
-        touchNavigation: true,
-        loop: true,
-        autoplayVideos: true
     });
 }
 
 /**
- * Open gallery at specific photo
+ * Double-tap + hold + drag up/down to continuously zoom.
+ *
+ * Listens at document level with capture:true — this fires before ANY handler
+ * on any child element, including PhotoSwipe's own listeners, regardless of
+ * whether PhotoSwipe uses capture or bubble phase.
+ */
+function addDoubleTapDragZoom(gallery, pswpEl) {
+    let lastTapTime = 0;
+    let dragActive = false;
+    let dragStartY = 0;
+    let dragStartZoom = 1;
+    const TAP_GAP = 300;
+    const MAX_ZOOM = 3;
+
+    function currentZoom() {
+        if (!gallery.currItem) return 0.5;
+        return gallery.currItem.currZoomLevel || gallery.currItem.initialZoomLevel || 0.5;
+    }
+    function minZoom() {
+        return (gallery.currItem && gallery.currItem.initialZoomLevel) || 0.1;
+    }
+
+    function onStart(e) {
+        if (!pswpEl.classList.contains('pswp--open')) return;
+        if (e.touches.length !== 1) { dragActive = false; lastTapTime = 0; return; }
+        const now = Date.now();
+        if (lastTapTime > 0 && now - lastTapTime < TAP_GAP) {
+            dragActive = true;
+            dragStartY = e.touches[0].clientY;
+            dragStartZoom = currentZoom();
+            lastTapTime = 0;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+        } else {
+            lastTapTime = now;
+            dragActive = false;
+        }
+    }
+
+    function onMove(e) {
+        if (!dragActive || e.touches.length !== 1) return;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        const dy = dragStartY - e.touches[0].clientY;
+        const newZoom = Math.min(MAX_ZOOM, Math.max(minZoom(), dragStartZoom * Math.pow(1.004, dy)));
+        gallery.zoomTo(newZoom, { x: e.touches[0].clientX, y: e.touches[0].clientY }, 0);
+    }
+
+    function onEnd() { dragActive = false; }
+
+    document.addEventListener('touchstart',  onStart, { passive: false, capture: true });
+    document.addEventListener('touchmove',   onMove,  { passive: false, capture: true });
+    document.addEventListener('touchend',    onEnd,   { capture: true });
+    document.addEventListener('touchcancel', onEnd,   { capture: true });
+
+    gallery.listen('destroy', () => {
+        document.removeEventListener('touchstart',  onStart, { capture: true });
+        document.removeEventListener('touchmove',   onMove,  { capture: true });
+        document.removeEventListener('touchend',    onEnd,   { capture: true });
+        document.removeEventListener('touchcancel', onEnd,   { capture: true });
+    });
+}
+
+/**
+ * Open PhotoSwipe gallery at a specific photo
  */
 function openGallery(photoId) {
-    // Find photo index across all manifests
-    let photoIndex = 0;
-    let found = false;
+    const index = photoIndexMap[photoId];
+    if (index === undefined) return;
 
-    for (const manifest of allManifests) {
-        const index = manifest.photos.findIndex(p => p.id === photoId);
-        if (index !== -1) {
-            photoIndex += index;
-            found = true;
-            break;
-        }
-        photoIndex += manifest.photos.length;
-    }
+    map.closePopup();
+    const pswpEl = document.querySelector('.pswp');
+    const gallery = new PhotoSwipe(pswpEl, PhotoSwipeUI_Default, pswpItems, {
+        index,
+        history: false,
+        loop: true,
+        shareEl: false,
+        fullscreenEl: false,
+        tapToClose: false,
+        bgOpacity: 0.95,
+        showHideOpacity: true
+    });
 
-    if (found) {
-        lightbox.openAt(photoIndex);
-    }
+    // Resolve real dimensions after load so PhotoSwipe sizes slides correctly
+    gallery.listen('gettingData', (idx, item) => {
+        if (item.w || item.h) return;
+        const img = new Image();
+        img.onload = () => {
+            item.w = img.naturalWidth;
+            item.h = img.naturalHeight;
+            gallery.invalidateCurrItems();
+            gallery.updateSize(true);
+        };
+        img.src = item.src;
+    });
+
+    gallery.init();
+    addDoubleTapDragZoom(gallery, pswpEl);
 }
 
 function reinitLightbox() {

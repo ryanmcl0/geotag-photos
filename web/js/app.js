@@ -948,9 +948,9 @@ function rebuildLightbox() {
 /**
  * Double-tap + hold + drag up/down to continuously zoom.
  *
- * PhotoSwipe registers its own touch handlers during init() using the bubble
- * phase. We use capture:true so our handler runs first in the capture phase,
- * then stopImmediatePropagation() blocks PhotoSwipe from seeing the second tap.
+ * Listens at document level with capture:true — this fires before ANY handler
+ * on any child element, including PhotoSwipe's own listeners, regardless of
+ * whether PhotoSwipe uses capture or bubble phase.
  */
 function addDoubleTapDragZoom(gallery, pswpEl) {
     let lastTapTime = 0;
@@ -961,43 +961,52 @@ function addDoubleTapDragZoom(gallery, pswpEl) {
     const MAX_ZOOM = 3;
 
     function currentZoom() {
-        if (!gallery.currItem) return gallery.currItem && gallery.currItem.initialZoomLevel || 0.5;
+        if (!gallery.currItem) return 0.5;
         return gallery.currItem.currZoomLevel || gallery.currItem.initialZoomLevel || 0.5;
     }
     function minZoom() {
         return (gallery.currItem && gallery.currItem.initialZoomLevel) || 0.1;
     }
 
-    pswpEl.addEventListener('touchstart', (e) => {
+    function onStart(e) {
+        if (!pswpEl.classList.contains('pswp--open')) return;
         if (e.touches.length !== 1) { dragActive = false; lastTapTime = 0; return; }
         const now = Date.now();
-        const touch = e.touches[0];
-
         if (lastTapTime > 0 && now - lastTapTime < TAP_GAP) {
-            // Second tap while first is still in window — start drag-zoom
             dragActive = true;
-            dragStartY = touch.clientY;
+            dragStartY = e.touches[0].clientY;
             dragStartZoom = currentZoom();
             lastTapTime = 0;
-            e.stopImmediatePropagation(); // prevent PhotoSwipe's double-tap zoom
+            e.stopImmediatePropagation();
             e.preventDefault();
         } else {
             lastTapTime = now;
             dragActive = false;
         }
-    }, { passive: false, capture: true });
+    }
 
-    pswpEl.addEventListener('touchmove', (e) => {
+    function onMove(e) {
         if (!dragActive || e.touches.length !== 1) return;
         e.stopImmediatePropagation();
         e.preventDefault();
-        const dy = dragStartY - e.touches[0].clientY; // up = positive = zoom in
+        const dy = dragStartY - e.touches[0].clientY;
         const newZoom = Math.min(MAX_ZOOM, Math.max(minZoom(), dragStartZoom * Math.pow(1.004, dy)));
         gallery.zoomTo(newZoom, { x: e.touches[0].clientX, y: e.touches[0].clientY }, 0);
-    }, { passive: false, capture: true });
+    }
 
-    pswpEl.addEventListener('touchend', () => { dragActive = false; });
-    pswpEl.addEventListener('touchcancel', () => { dragActive = false; });
+    function onEnd() { dragActive = false; }
+
+    document.addEventListener('touchstart',  onStart, { passive: false, capture: true });
+    document.addEventListener('touchmove',   onMove,  { passive: false, capture: true });
+    document.addEventListener('touchend',    onEnd,   { capture: true });
+    document.addEventListener('touchcancel', onEnd,   { capture: true });
+
+    gallery.listen('destroy', () => {
+        document.removeEventListener('touchstart',  onStart, { capture: true });
+        document.removeEventListener('touchmove',   onMove,  { capture: true });
+        document.removeEventListener('touchend',    onEnd,   { capture: true });
+        document.removeEventListener('touchcancel', onEnd,   { capture: true });
+    });
 }
 
 /**
@@ -1007,6 +1016,7 @@ function openGallery(photoId) {
     const index = photoIndexMap[photoId];
     if (index === undefined) return;
 
+    map.closePopup();
     const pswpEl = document.querySelector('.pswp');
     const gallery = new PhotoSwipe(pswpEl, PhotoSwipeUI_Default, pswpItems, {
         index,

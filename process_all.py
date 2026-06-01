@@ -22,7 +22,7 @@ from pathlib import Path
 import click
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
-TRIPS_CONFIG = PROJECT_ROOT / 'trips.json'
+TRIPS_CONFIG = PROJECT_ROOT / 'config' / 'trips.json'
 WEB_TRIPS_DIR = PROJECT_ROOT / 'web' / 'trips'
 
 
@@ -118,6 +118,11 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):
         cmd += ['--raws-root', trip['raws']]
+    if opts.get('exclude_buildings'):
+        buildings = opts['exclude_buildings']
+        if isinstance(buildings, list):
+            buildings = ','.join(buildings)
+        cmd += ['--exclude-buildings', buildings]
     if opts.get('split_offroute_private'):
         cmd += ['--split-offroute-private']
     if opts.get('private_cluster_radius'):
@@ -129,7 +134,7 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 
     # Always provide the building-coords file when present; process_trip ignores
     # it if there's no raw tree to derive building names from.
-    locations = PROJECT_ROOT / 'locations.json'
+    locations = PROJECT_ROOT / 'config' / 'locations.json'
     if locations.exists():
         cmd += ['--locations-file', str(locations)]
 
@@ -146,7 +151,7 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool):
     """Process all trips listed in trips.json."""
     if not TRIPS_CONFIG.exists():
-        click.echo("Error: trips.json not found. Copy trips.example.json to trips.json and fill it in.", err=True)
+        click.echo("Error: config/trips.json not found. Copy config/trips.example.json to config/trips.json and fill it in.", err=True)
         sys.exit(1)
 
     config = json.loads(TRIPS_CONFIG.read_text())
@@ -224,6 +229,12 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
     click.echo(f"Done — {done}/{len(to_process)} trips processed successfully")
     if failed:
         click.echo(f"Failed: {', '.join(failed)}", err=True)
+
+    try:
+        import deploy
+        deploy.sync_public_flags()
+    except Exception as e:
+        click.echo(f"⚠ sync_public_flags failed: {e}", err=True)
 
 
 if __name__ == '__main__':

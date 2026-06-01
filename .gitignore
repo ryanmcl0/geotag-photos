@@ -40,6 +40,4 @@ venv/
 .venv/
 .wrangler/
 
-notes.txt
-pipeline-bugs-and-context.md
-AGENTS.md
+geotag-photos.kanban.md

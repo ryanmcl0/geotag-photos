@@ -1328,6 +1328,8 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--dump-buildings', is_flag=True,
               help='Discovery mode: list the building/location names derived from --raws-root for '
                    'the edited photos, with photo counts, then exit without processing.')
+@click.option('--exclude-buildings', 'exclude_buildings', default=None, metavar='NAME,NAME,...',
+              help='Comma-separated building names to drop entirely (photos are not placed or included).')
 @click.option('--split-offroute-private', is_flag=True,
               help='Split a GPX trip in two: photos placed by the GPX track (on-route) stay in this '
                    'trip (public); all other photos (off-route building/drone/fallback shots) are '
@@ -1370,6 +1372,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  max_interp_gap_hours: float,
                  filter_by_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
+                 exclude_buildings: Optional[str],
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
@@ -1546,6 +1549,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     if not photo_files:
         click.echo("Error: No photos found in directory", err=True)
         sys.exit(1)
+
+    exclude_building_set: set = set()
+    if exclude_buildings:
+        exclude_building_set = {b.strip().lower() for b in exclude_buildings.split(',') if b.strip()}
+        click.echo(f"Excluding buildings: {sorted(exclude_building_set)}")
 
     # Load building/location coordinate map (KML + web-search derived)
     building_coords: dict = {}
@@ -1783,6 +1791,9 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if raw_match is not None and raw_scan_root:
             building_name = building_from_raw(raw_match, Path(raw_scan_root))
 
+        if exclude_building_set and building_name and building_name.strip().lower() in exclude_building_set:
+            continue
+
         # Route-subdir photos belong to the documented GPX journey → force them
         # on-route (public). Skips building-coord lookup below.
         #
@@ -1820,7 +1831,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             # not just another city in the same country) as a wrong-city collision and
             # skip it; the photo then falls through to nearest-photo / fallback.
             if bc and fallback_source == 'cli' and fallback_gps and \
-                    haversine_distance(bc['lat'], bc['lon'], fallback_gps['lat'], fallback_gps['lon']) > 2000:
+                    haversine_distance(bc['lat'], bc['lon'], fallback_gps['lat'], fallback_gps['lon']) > 2_000_000:
                 bc = None
             if bc:
                 gps = {'lat': bc['lat'], 'lon': bc['lon']}

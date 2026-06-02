@@ -10,6 +10,7 @@ Usage:
   ./process_all.py --force                # reprocess all trips
   ./process_all.py --trip "Scotland"      # process one trip by name (partial match)
   ./process_all.py --dry-run              # show what would run without executing
+  ./process_all.py --trip X --gps-only    # update GPS/clusters only (reuse images, bust EXIF cache)
 """
 
 import json
@@ -110,6 +111,8 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--geosync', opts['geosync']]
     if opts.get('filter_raws'):
         cmd += ['--filter-by-raws-in', opts['filter_raws']]
+    if opts.get('exclude_raws'):
+        cmd += ['--exclude-raws-in', opts['exclude_raws']]
     if opts.get('fallback_location'):
         cmd += ['--fallback-location', opts['fallback_location']]
     if opts.get('cluster_radius'):
@@ -140,6 +143,10 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--gpx-route-subdir', opts['gpx_route_subdir']]
     if opts.get('route_snap_public_hours') is not None:
         cmd += ['--route-snap-public-hours', str(opts['route_snap_public_hours'])]
+    if opts.get('no_fake_route'):
+        cmd += ['--no-fake-route']
+    if opts.get('strict_building_distance'):
+        cmd += ['--strict-building-distance']
 
     # Always provide the building-coords file when present; process_trip ignores
     # it if there's no raw tree to derive building names from.
@@ -157,8 +164,14 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 @click.option('--dry-run', is_flag=True, help='Show what would run without executing')
 @click.option('--skip-existing-images', is_flag=True,
               help='Reuse already-generated thumbnails/display images (only recompute placement/clusters/manifest)')
-def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool):
+@click.option('--gps-only', is_flag=True,
+              help='GPS/cluster update only: busts EXIF cache, reuses existing images. '
+                   'Use after geotag_by_raws_dirs.py to apply new coordinates without re-encoding.')
+def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool, gps_only: bool):
     """Process all trips listed in trips.json."""
+    if gps_only:
+        force = True
+        skip_existing_images = True
     if not TRIPS_CONFIG.exists():
         click.echo("Error: config/trips.json not found. Copy config/trips.example.json to config/trips.json and fill it in.", err=True)
         sys.exit(1)
@@ -205,6 +218,12 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         click.echo(f"{'='*60}")
         click.echo(f"  {trip['name']}")
         click.echo(f"{'='*60}")
+
+        if gps_only:
+            cache = WEB_TRIPS_DIR / slugify(trip['name']) / 'exif_cache.json'
+            if cache.exists():
+                cache.unlink()
+                click.echo(f"  Busted EXIF cache")
 
         tmp_gpx = None
         try:

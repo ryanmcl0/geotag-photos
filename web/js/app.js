@@ -581,22 +581,63 @@ function buildMarkerLayer(manifest) {
         photoLookup[photo.id] = photo;
     });
 
+    const orderedMarkers = [];
     manifest.clusters.forEach(cluster => {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
         const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
         const marker = L.marker([cluster.lat, cluster.lon], {
             icon: createPhotoIcon(photos.length, thumbnailUrl)
         });
-        if (photos.length === 1) {
-            marker.bindPopup(() => createSinglePhotoPopup(photos[0], cluster.location));
-        } else {
-            marker.bindPopup(() => createMultiPhotoPopup(photos, cluster.location));
-        }
+        marker.bindPopup(() => buildMarkerPopup(marker));
         marker.photoData = photos;
         marker.locationName = cluster.location;
+        marker._clusterGroup = group;
+        marker._pendingPage = 0;
         group.addLayer(marker);
+        orderedMarkers.push(marker);
+    });
+    // Wire each marker to its siblings so cluster popups can page across clusters.
+    orderedMarkers.forEach((m, i) => {
+        m._sibs = orderedMarkers;
+        m._sibIdx = i;
     });
     return group;
+}
+
+/**
+ * Build the popup content for a marker, honouring a pending start page set by
+ * cross-cluster navigation. Single-photo clusters and multi-photo clusters both
+ * support paging onward to the adjacent cluster.
+ */
+function buildMarkerPopup(marker) {
+    let startPage = marker._pendingPage;
+    marker._pendingPage = 0; // consume; default for a fresh marker click
+    if (marker.photoData.length === 1) {
+        return createSinglePhotoPopup(marker);
+    }
+    return createMultiPhotoPopup(marker, startPage);
+}
+
+/**
+ * Open an adjacent cluster's popup. dir +1 = next (opens at first page),
+ * dir -1 = previous (opens at its last page). Uses zoomToShowLayer so the
+ * target marker is revealed even if currently collapsed inside a cluster bubble.
+ * Returns true if a sibling existed in that direction.
+ */
+function openSiblingCluster(marker, dir) {
+    const sibs = marker._sibs;
+    if (!sibs) return false;
+    const target = sibs[marker._sibIdx + dir];
+    if (!target) return false;
+    target._pendingPage = dir > 0 ? 0 : 'last';
+    map.closePopup();
+    const group = target._clusterGroup;
+    if (group && typeof group.zoomToShowLayer === 'function') {
+        group.zoomToShowLayer(target, () => target.openPopup());
+    } else {
+        target.openPopup();
+    }
+    return true;
 }
 
 /**
@@ -647,23 +688,68 @@ function createPhotoIcon(count, thumbnailUrl) {
 /**
  * Create popup for single photo
  */
-function createSinglePhotoPopup(photo, location) {
+function createSinglePhotoPopup(marker) {
+    const photo = marker.photoData[0];
+    const location = marker.locationName;
     preloadDisplay(resolveUrl(photo.tripPath, photo.display));
     const title = location || photo.tripName;
-    const sub = (location && photo.tripName && photo.tripName !== location)
-        ? `<div class="cluster-popup-subheader">${photo.tripName}</div>` : '';
-    const header = title
-        ? `<div class="cluster-popup-header">${title}</div>${sub}` : '';
-    return `
-        <div class="photo-popup">
-            ${header}
-            <img src="${resolveUrl(photo.tripPath, photo.thumbnail)}"
-                 alt=""
-                 class="popup-thumbnail"
-                 data-photo-id="${photo.id}"
-                 onclick="openGallery('${photo.id}')">
-        </div>
-    `;
+
+    const container = document.createElement('div');
+    container.className = 'photo-popup';
+
+    if (title) {
+        const header = document.createElement('div');
+        header.className = 'cluster-popup-header';
+        header.textContent = title;
+        container.appendChild(header);
+        if (location && photo.tripName && photo.tripName !== location) {
+            const sub = document.createElement('div');
+            sub.className = 'cluster-popup-subheader';
+            sub.textContent = photo.tripName;
+            container.appendChild(sub);
+        }
+    }
+
+    const img = document.createElement('img');
+    img.src = resolveUrl(photo.tripPath, photo.thumbnail);
+    img.alt = '';
+    img.className = 'popup-thumbnail';
+    img.dataset.photoId = photo.id;
+    img.addEventListener('click', () => openGallery(photo));
+    container.appendChild(img);
+
+    // If this single-photo cluster has neighbours, allow paging onward to them
+    // so cross-cluster navigation stays continuous.
+    const hasPrevCluster = marker._sibs && marker._sibIdx > 0;
+    const hasNextCluster = marker._sibs && marker._sibIdx < marker._sibs.length - 1;
+    if (hasPrevCluster || hasNextCluster) {
+        const nav = document.createElement('div');
+        nav.className = 'cluster-popup-nav';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.className = 'cluster-popup-navbtn';
+        prevBtn.innerHTML = '‹';
+        prevBtn.disabled = !hasPrevCluster;
+
+        const counter = document.createElement('span');
+        counter.className = 'cluster-popup-counter';
+        counter.textContent = '1 of 1';
+
+        const nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.className = 'cluster-popup-navbtn';
+        nextBtn.innerHTML = '›';
+        nextBtn.disabled = !hasNextCluster;
+
+        prevBtn.addEventListener('click', () => openSiblingCluster(marker, -1));
+        nextBtn.addEventListener('click', () => openSiblingCluster(marker, 1));
+
+        nav.append(prevBtn, counter, nextBtn);
+        container.appendChild(nav);
+    }
+
+    return container;
 }
 
 /**
@@ -677,7 +763,9 @@ function createSinglePhotoPopup(photo, location) {
  */
 const CLUSTER_POPUP_PAGE_SIZE = 9; // 3×3 grid keeps the popup compact + stable
 
-function createMultiPhotoPopup(photos, location) {
+function createMultiPhotoPopup(marker, startPage) {
+    const photos = marker.photoData;
+    const location = marker.locationName;
     const container = document.createElement('div');
     container.className = 'cluster-popup';
 
@@ -703,7 +791,11 @@ function createMultiPhotoPopup(photos, location) {
     container.appendChild(grid);
 
     const totalPages = Math.ceil(photos.length / CLUSTER_POPUP_PAGE_SIZE);
-    let page = 0;
+    let page = startPage === 'last' ? totalPages - 1 : (startPage || 0);
+    if (page < 0 || page >= totalPages) page = 0;
+
+    const hasPrevCluster = marker._sibs && marker._sibIdx > 0;
+    const hasNextCluster = marker._sibs && marker._sibIdx < marker._sibs.length - 1;
 
     const renderPage = () => {
         grid.innerHTML = '';
@@ -716,12 +808,12 @@ function createMultiPhotoPopup(photos, location) {
             const displayUrl = resolveUrl(photo.tripPath, photo.display);
             img.addEventListener('touchstart', () => preloadDisplay(displayUrl), { passive: true });
             img.addEventListener('mousedown', () => preloadDisplay(displayUrl));
-            img.addEventListener('click', () => openGallery(photo.id));
+            img.addEventListener('click', () => openGallery(photo));
             grid.appendChild(img);
         });
     };
 
-    if (totalPages > 1) {
+    if (totalPages > 1 || hasPrevCluster || hasNextCluster) {
         const nav = document.createElement('div');
         nav.className = 'cluster-popup-nav';
 
@@ -742,15 +834,18 @@ function createMultiPhotoPopup(photos, location) {
             const start = page * CLUSTER_POPUP_PAGE_SIZE;
             const end = Math.min(start + CLUSTER_POPUP_PAGE_SIZE, photos.length);
             counter.textContent = `${start + 1}–${end} of ${photos.length}`;
-            prevBtn.disabled = page === 0;
-            nextBtn.disabled = page >= totalPages - 1;
+            // Enabled at a boundary when an adjacent cluster exists to page into.
+            prevBtn.disabled = page === 0 && !hasPrevCluster;
+            nextBtn.disabled = page >= totalPages - 1 && !hasNextCluster;
         };
 
         prevBtn.addEventListener('click', () => {
             if (page > 0) { page--; renderPage(); updateNav(); }
+            else openSiblingCluster(marker, -1);
         });
         nextBtn.addEventListener('click', () => {
             if (page < totalPages - 1) { page++; renderPage(); updateNav(); }
+            else openSiblingCluster(marker, 1);
         });
 
         nav.append(prevBtn, counter, nextBtn);
@@ -923,23 +1018,26 @@ function rebuildLightbox() {
     allManifests.forEach(manifest => {
         if (!visibleTripIds.has(manifest.tripId)) return;
         manifest.photos.forEach(photo => {
-            photoIndexMap[photo.id] = pswpItems.length;
+            // Key by trip + id: photo ids (file stems like DJI_0099) collide across trips.
+            photoIndexMap[`${manifest.tripId}::${photo.id}`] = pswpItems.length;
             const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);
             // If the thumbnail is already in the browser cache (shown in map markers/popups),
             // use its aspect ratio to size the slide so msrc shows immediately.
             const probe = new Image();
             probe.src = thumbUrl;
-            let w = 2160, h = 1440; // landscape fallback
+            let w = 2160, h = 1440, needsSize = true; // provisional; corrected on open
             if (probe.complete && probe.naturalWidth > 0) {
                 const ratio = probe.naturalWidth / probe.naturalHeight;
                 w = ratio >= 1 ? 2160 : Math.round(2160 * ratio);
                 h = ratio >= 1 ? Math.round(2160 / ratio) : 2160;
+                needsSize = false; // ratio-correct, no distortion
             }
             pswpItems.push({
                 src: resolveUrl(manifest.tripPath, photo.display),
                 msrc: thumbUrl,
                 w,
-                h
+                h,
+                _needsSize: needsSize
             });
         });
     });
@@ -1012,8 +1110,11 @@ function addDoubleTapDragZoom(gallery, pswpEl) {
 /**
  * Open PhotoSwipe gallery at a specific photo
  */
-function openGallery(photoId) {
-    const index = photoIndexMap[photoId];
+function openGallery(photo) {
+    // Accept a photo object (preferred) or a bare id for backward-compat.
+    const uid = (photo && typeof photo === 'object')
+        ? `${photo.tripId}::${photo.id}` : photo;
+    const index = photoIndexMap[uid];
     if (index === undefined) return;
 
     map.closePopup();
@@ -1029,13 +1130,16 @@ function openGallery(photoId) {
         showHideOpacity: true
     });
 
-    // Resolve real dimensions after load so PhotoSwipe sizes slides correctly
+    // Resolve real dimensions after load so PhotoSwipe sizes slides correctly.
+    // Items that only have provisional (fallback) dimensions are flagged
+    // _needsSize — load the real image and set true dimensions to avoid stretch.
     gallery.listen('gettingData', (idx, item) => {
-        if (item.w || item.h) return;
+        if (!item._needsSize) return;
         const img = new Image();
         img.onload = () => {
             item.w = img.naturalWidth;
             item.h = img.naturalHeight;
+            item._needsSize = false;
             gallery.invalidateCurrItems();
             gallery.updateSize(true);
         };

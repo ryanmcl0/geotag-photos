@@ -133,6 +133,8 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         if isinstance(excl, list):
             excl = ';'.join(excl)
         cmd += ['--exclude-edits-under', excl]
+    if opts.get('only_edits_dirs'):
+        cmd += ['--only-edits-dirs']
     if opts.get('max_interp_gap_hours') is not None:
         cmd += ['--max-interp-gap-hours', str(opts['max_interp_gap_hours'])]
     if opts.get('split_offroute_private'):

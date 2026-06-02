@@ -1392,6 +1392,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--exclude-edits-under', 'exclude_edits_under', default=None, metavar='NAME,NAME,...',
               help='Comma-separated edit-folder names; drop any edit whose path contains one as a '
                    'component. Carves region subfolders out of a multi-region edits bundle.')
+@click.option('--only-edits-dirs', 'only_edits_dirs', is_flag=True,
+              help='Keep only photos that live under a folder literally named "Edits". Used for the '
+                   'pre-2019 in-tree backfill, where the edits sit in <year>/<Building>/Edits/ '
+                   'alongside raws/camera-card dumps that must NOT be picked up.')
 @click.option('--split-offroute-private', is_flag=True,
               help='Split a GPX trip in two: photos placed by the GPX track (on-route) stay in this '
                    'trip (public); all other photos (off-route building/drone/fallback shots) are '
@@ -1444,6 +1448,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
+                 only_edits_dirs: bool,
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
@@ -1531,6 +1536,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     click.echo("\nFinding photos...")
     photo_files = find_photos(photos_path)
     click.echo(f"Found {len(photo_files)} photos")
+
+    # Pre-2019 backfill: when the edits root is a whole year folder, restrict to
+    # photos living under an "Edits" subfolder so the year's raws / camera-card
+    # dumps (which also include JPGs) are not picked up.
+    if only_edits_dirs:
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if any(part.lower() == 'edits' for part in p.parts)]
+        click.echo(f"  --only-edits-dirs: kept {len(photo_files)} of {before} "
+                   f"(under an 'Edits/' folder)")
 
     # Optionally filter by stems present somewhere under a raws root, and build
     # a stem→raw-path index so we can re-read DateTimeOriginal from the raw

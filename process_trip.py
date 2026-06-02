@@ -1166,7 +1166,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
         <main class="map-container">
             <div id="map"></div>
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info"><span>i</span></button>
-            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true" style="display:none">
+            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
                 <div class="pswp__bg"></div>
                 <div class="pswp__scroll-wrap">
                     <div class="pswp__container">
@@ -1244,7 +1244,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
         <main class="map-container">
             <div id="map"></div>
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info"><span>i</span></button>
-            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true" style="display:none">
+            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
                 <div class="pswp__bg"></div>
                 <div class="pswp__scroll-wrap">
                     <div class="pswp__container">
@@ -1374,6 +1374,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--filter-by-raws-in', 'filter_by_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Only process edited photos whose stem exists somewhere under this folder. '
                    'Used to scope an Edits folder that bundles multiple trips.')
+@click.option('--exclude-raws-in', 'exclude_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
+              help='Drop edited photos whose stem exists somewhere under this folder. '
+                   'Inverse of --filter-by-raws-in; carves a region out of a bundled Edits folder '
+                   '(e.g. exclude the Guilin raws from a Hubei/Hunan trip sharing one Edits dir).')
 @click.option('--raws-root', 'raws_root', default=None, type=click.Path(exists=True, path_type=Path),
               help='Index raw files under this folder (stem→path) for building-name lookup and '
                    'accurate timestamps, WITHOUT filtering out edits that have no matching raw. '
@@ -1421,6 +1425,15 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help=f'Max length of longer side for thumbnails (default: {DEFAULT_THUMBNAIL_LONGEST}px)')
 @click.option('--fake-route-locations', default=None, metavar='LOC1,LOC2,...',
               help='Explicitly set location names for fake route (overrides name parsing). E.g. "Iceland,Italy"')
+@click.option('--no-fake-route', 'no_fake_route', is_flag=True,
+              help='Disable the no-GPX fake-route geocoding (Pass 4b). Photos without a building/EXIF '
+                   'match stay at the fallback location instead of being pinned to geocoded trip-name '
+                   'places. Use for building-specific trips where trip-name geocoding misfires.')
+@click.option('--strict-building-distance', 'strict_building_distance', is_flag=True,
+              help='Discard a building-coord match that is >2000km from the trip fallback location '
+                   '(treats it as a wrong-city collision for generic hotel-chain names). OFF by default '
+                   'so multi-country trips keep their legitimately-distant building matches. Enable only '
+                   'for single-region trips that suffer generic-name collisions.')
 @click.option('--skip-existing-images', is_flag=True,
               help='Reuse already-generated thumbnails/display images. Only recomputes GPS placement, clusters, and manifest. Fast re-run after logic changes.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
@@ -1429,7 +1442,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float,
-                 filter_by_raws_in: Optional[Path],
+                 filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
                  split_offroute_private: bool, private_cluster_radius: float,
@@ -1437,7 +1450,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
                  cluster_radius: float, raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
-                 fake_route_locations: Optional[str], kmz_path_str: Optional[str],
+                 fake_route_locations: Optional[str], no_fake_route: bool,
+                 strict_building_distance: bool, kmz_path_str: Optional[str],
                  skip_existing_images: bool, test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
@@ -1614,6 +1628,21 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         photo_files = [p for p in photo_files
                        if not any(part.lower() in excl for part in p.parts)]
         click.echo(f"  Excluded edits under {excl}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
+
+    # Drop edits whose stem appears under an excluded raws folder — carves a region
+    # out of a bundled Edits folder by raw membership (inverse of --filter-by-raws-in).
+    if exclude_raws_in:
+        excl_root = Path(exclude_raws_in)
+        excl_stems: set = set()
+        for ext in SUPPORTED_EXTENSIONS | {'.arw', '.dng', '.cr2', '.nef', '.raf'}:
+            for pat in (f'*{ext}', f'*{ext.upper()}'):
+                for p in excl_root.rglob(pat):
+                    excl_stems.add(p.stem)
+                    excl_stems.add(base_stem(p.stem))
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if p.stem not in excl_stems and base_stem(p.stem) not in excl_stems]
+        click.echo(f"  Excluded edits under raws {excl_root.name}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
 
     if not photo_files:
         click.echo("Error: No photos found in directory", err=True)
@@ -1901,11 +1930,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if not on_route and not gps and building_coords and building_name:
             bc = building_coords.get(building_name.strip().lower())
             # Generic building names (Marriott, Hilton, …) collide across cities in
-            # locations.json. When the trip pins an explicit fallback location, treat
-            # a match that's implausibly far from it (>2000km — a different continent,
-            # not just another city in the same country) as a wrong-city collision and
-            # skip it; the photo then falls through to nearest-photo / fallback.
-            if bc and fallback_source == 'cli' and fallback_gps and \
+            # locations.json. With --strict-building-distance, treat a match that's
+            # implausibly far (>2000km) from the trip fallback as a wrong-city collision
+            # and skip it. OFF by default: multi-country trips (e.g. Vietnam+Korea) have
+            # legitimately distant buildings and must NOT discard them.
+            if strict_building_distance and bc and fallback_source == 'cli' and fallback_gps and \
                     haversine_distance(bc['lat'], bc['lon'], fallback_gps['lat'], fallback_gps['lon']) > 2_000_000:
                 bc = None
             if bc:
@@ -2129,6 +2158,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 'features': [{'type': 'Feature', 'properties': {'name': 'Planned route'},
                               'geometry': {'type': 'LineString', 'coordinates': line_coords}}]
             }
+        elif no_fake_route:
+            # Building-specific trip: skip geocoded fake route. Non-building/EXIF photos
+            # keep their fallback placement (fallback_location or centroid).
+            click.echo("\nFake-route geocoding disabled (--no-fake-route) — using building/fallback placement only")
+            fake_route_geojson = {'type': 'FeatureCollection', 'features': []}
         else:
             # Pass 4b: fake route — place remaining photos at geocoded locations + build route line
             explicit = [l.strip() for l in fake_route_locations.split(',')] \

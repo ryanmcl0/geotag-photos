@@ -37,6 +37,26 @@ def is_processed(slug: str) -> bool:
     return (WEB_TRIPS_DIR / slug / 'manifest.json').exists()
 
 
+def trip_is_dirty(trip: dict, slug: str) -> bool:
+    """A processed trip is 'dirty' if any source edit is newer than its manifest.
+    Used by --update to select only trips whose edits changed. (Stat-only walk —
+    no content reads — but it does traverse the edits tree, so call only in --update.)"""
+    man = WEB_TRIPS_DIR / slug / 'manifest.json'
+    if not man.exists():
+        return True  # never processed → needs processing
+    man_mtime = man.stat().st_mtime
+    edits = Path(trip['edits'])
+    if not edits.exists():
+        return False
+    for p in edits.rglob('*'):
+        try:
+            if p.is_file() and p.stat().st_mtime > man_mtime:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def gather_gpx_files(gpx_entry) -> list[Path]:
     """Collect .gpx files from a path string or list of path strings."""
     paths = [gpx_entry] if isinstance(gpx_entry, str) else gpx_entry
@@ -96,7 +116,8 @@ def merge_gpx_to_temp(gpx_files: list[Path]) -> Path:
     return Path(tmp.name)
 
 
-def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool = False) -> list[str]:
+def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool = False,
+                  update: bool = False, reindex: bool = False) -> list[str]:
     cmd = [sys.executable, 'process_trip.py',
            '--name', trip['name'],
            '--photos', trip['edits']]
@@ -105,6 +126,10 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--gpx', str(gpx_path)]
     if skip_existing_images:
         cmd += ['--skip-existing-images']
+    if update:
+        cmd += ['--update']
+    if reindex:
+        cmd += ['--reindex']
 
     opts = trip.get('options', {})
     if opts.get('geosync'):
@@ -169,7 +194,15 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 @click.option('--gps-only', is_flag=True,
               help='GPS/cluster update only: busts EXIF cache, reuses existing images. '
                    'Use after geotag_by_raws_dirs.py to apply new coordinates without re-encoding.')
-def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool, gps_only: bool):
+@click.option('--update', 'update', is_flag=True,
+              help='Incremental: process unprocessed trips PLUS already-processed trips whose edits '
+                   'changed (any source newer than its manifest). Each runs in process_trip --update '
+                   'mode (delta re-encode + orphan cleanup). First --update on a trip adopts baseline.')
+@click.option('--reindex', 'reindex', is_flag=True,
+              help='Stamp source-state baselines on the selected (already-processed) trips without '
+                   'reprocessing — encodes only missing images. Pair with --trip to target one.')
+def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool,
+                gps_only: bool, update: bool, reindex: bool):
     """Process all trips listed in trips.json."""
     if gps_only:
         force = True
@@ -192,13 +225,27 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
     to_process, already_done = [], []
     for trip, is_public in all_trips:
         slug = slugify(trip['name'])
-        if not force and is_processed(slug):
+        if reindex:
+            # Baseline-stamp every selected trip (only meaningful for processed ones,
+            # but harmless otherwise).
+            to_process.append((trip, is_public))
+        elif update:
+            # Unprocessed → process; processed → only if dirty (edits changed).
+            if not is_processed(slug):
+                to_process.append((trip, is_public))
+            elif trip_is_dirty(trip, slug):
+                click.echo(f"  Δ dirty (edits changed): {trip['name']}")
+                to_process.append((trip, is_public))
+            else:
+                already_done.append(trip['name'])
+        elif not force and is_processed(slug):
             already_done.append(trip['name'])
         else:
             to_process.append((trip, is_public))
 
     if already_done:
-        click.echo(f"Skipping {len(already_done)} already-processed trip(s) (--force to reprocess)")
+        click.echo(f"Skipping {len(already_done)} unchanged/already-processed trip(s) "
+                   f"({'--force to reprocess' if not update else 'no edit changes detected'})")
 
     if not to_process:
         click.echo("Nothing to process.")
@@ -241,7 +288,8 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
                     tmp_gpx = merge_gpx_to_temp(gpx_files)
                     gpx_path = tmp_gpx
 
-            cmd = build_command(trip, gpx_path, skip_existing_images=skip_existing_images)
+            cmd = build_command(trip, gpx_path, skip_existing_images=skip_existing_images,
+                                update=update, reindex=reindex)
             result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
             if result.returncode != 0:
                 click.echo(f"\n  ✗ Failed (exit {result.returncode})", err=True)

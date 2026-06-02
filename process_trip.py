@@ -1439,6 +1439,16 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
                    'for single-region trips that suffer generic-name collisions.')
 @click.option('--skip-existing-images', is_flag=True,
               help='Reuse already-generated thumbnails/display images. Only recomputes GPS placement, clusters, and manifest. Fast re-run after logic changes.')
+@click.option('--update', 'update', is_flag=True,
+              help='Incremental update: reprocess only the delta vs the last run. Re-encodes/re-reads '
+                   'EXIF for NEW or CHANGED (mtime/size) source edits, reuses everything else, and '
+                   'deletes orphaned hosted images for edits that were removed. On the first run for an '
+                   'existing trip (no source_state.json) it ADOPTS the current artifacts as baseline '
+                   '(only encodes anything actually missing). Tracks state in <output>/source_state.json.')
+@click.option('--reindex', 'reindex', is_flag=True,
+              help='Write/refresh <output>/source_state.json from the current sources WITHOUT '
+                   'reprocessing (adopt-baseline only; encodes only missing images). Use to stamp a '
+                   'baseline on already-processed trips so a later --update detects real deltas.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
 @click.option('--dry-run', is_flag=True, help='Preview without writing files')
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
@@ -1456,7 +1466,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
                  fake_route_locations: Optional[str], no_fake_route: bool,
                  strict_building_distance: bool, kmz_path_str: Optional[str],
-                 skip_existing_images: bool, test_mode: int, dry_run: bool):
+                 skip_existing_images: bool, update: bool, reindex: bool,
+                 test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
 
@@ -1813,6 +1824,46 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Build raw-match index upfront (needed for cache keys).
     raw_matches = {pf: find_raw(pf.stem, pf) for pf in photo_files}
 
+    # --- Incremental update: per-source freshness state (mtime+size) ---
+    # Tracked in <output>/source_state.json (separate from exif_cache.json so the
+    # latter's format is untouched). See docs/incremental-update-design.md.
+    update_mode = update or reindex
+    source_state_path = output_path / 'source_state.json'
+    _had_state = source_state_path.exists()
+    prev_state: dict = {}
+    if _had_state:
+        try:
+            prev_state = json.loads(source_state_path.read_text())
+        except Exception:
+            prev_state = {}
+
+    def _stat_pair(p: Path):
+        try:
+            st = p.stat()
+            return [int(st.st_mtime), st.st_size]
+        except OSError:
+            return None
+
+    current_state = {str(pf): _stat_pair(pf) for pf in photo_files} if update_mode else {}
+    # First --update on a pre-existing trip (no state file) ADOPTS current artifacts as
+    # the baseline; --reindex always adopts. Adopt = treat nothing as "changed", so only
+    # genuinely-missing images get encoded.
+    adopt = reindex or (update and not _had_state)
+
+    def _changed(pf: Path) -> bool:
+        if not update or adopt:
+            return False
+        return prev_state.get(str(pf)) != current_state.get(str(pf))
+
+    changed_edits = {pf for pf in photo_files if _changed(pf)} if update_mode else set()
+    if update_mode:
+        if adopt:
+            click.echo(f"Update: adopting baseline for {len(photo_files)} sources "
+                       f"({'--reindex' if reindex else 'first --update'}); encoding only missing images")
+        else:
+            click.echo(f"Update: {len(changed_edits)} changed/new of {len(photo_files)} "
+                       f"sources will re-encode + re-read EXIF; rest reused")
+
     # EXIF cache: persisted between runs as <output>/exif_cache.json so that
     # location-only reprocesses don't re-read the external drive.
     exif_cache_path = output_path / 'exif_cache.json'
@@ -1822,6 +1873,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             exif_cache = json.loads(exif_cache_path.read_text())
         except Exception:
             exif_cache = {}
+
+    # Changed sources (update mode): drop stale EXIF so it's re-read from the drive,
+    # along with the matched raw (its timestamp/GPS may have changed too).
+    for pf in changed_edits:
+        exif_cache.pop(str(pf), None)
+        _r = raw_matches.get(pf)
+        if _r is not None:
+            exif_cache.pop(str(_r), None)
 
     cache_hits = sum(1 for pf in photo_files if str(pf) in exif_cache)
     uncached_edits = [pf for pf in photo_files if str(pf) not in exif_cache]
@@ -2006,11 +2065,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # Generate photo ID
         photo_id = photo_file.stem
 
-        # Generate resized images (unless reusing existing ones)
+        # Generate resized images (unless reusing existing ones). Reuse when
+        # --skip-existing-images OR --update/--reindex and the images already exist —
+        # but in --update, a CHANGED source still re-encodes.
         if not dry_run:
             thumb_path = hosted_photos_path / 'thumbnails' / f'{photo_id}.{image_ext}'
             display_path = hosted_photos_path / 'display' / f'{photo_id}.{image_ext}'
-            if not (skip_existing_images and thumb_path.exists() and display_path.exists()):
+            reuse_img = ((skip_existing_images or update_mode)
+                         and thumb_path.exists() and display_path.exists()
+                         and photo_file not in changed_edits)
+            if not reuse_img:
                 generate_thumbnail(photo_file, thumb_path, thumbnail_longest, format_name, quality)
                 generate_display_image(photo_file, display_path, display_longest, format_name, quality)
 
@@ -2272,6 +2336,31 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
         click.echo(f"\nSaved manifest: {manifest_path}")
+
+        # --- Incremental update: orphan cleanup + persist source state ---
+        if update_mode:
+            # Delete hosted images for sources no longer in the manifest (deleted edits).
+            # Skipped for split trips: off-route images move to a separate -private dir,
+            # so the main manifest doesn't list them and they'd be wrongly culled.
+            if not split_offroute_private:
+                kept_ids = {p['id'] for p in processed_photos}
+                removed = 0
+                for sub in ('thumbnails', 'display'):
+                    d = hosted_photos_path / sub
+                    if d.is_dir():
+                        for img in d.iterdir():
+                            if img.is_file() and img.stem not in kept_ids:
+                                img.unlink()
+                                removed += 1
+                if removed:
+                    click.echo(f"Update: removed {removed} orphaned image file(s)")
+            # Persist the new baseline (built from the CURRENT sources, so deleted
+            # edits naturally drop out of the state).
+            try:
+                source_state_path.write_text(json.dumps(current_state))
+                click.echo(f"Update: wrote source state for {len(current_state)} sources")
+            except Exception as e:
+                click.echo(f"Warning: could not write {source_state_path}: {e}", err=True)
 
         # Convert GPX to GeoJSON (fake_route_geojson already built above for no-GPX trips)
         if not no_gpx_mode:

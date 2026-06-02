@@ -157,7 +157,7 @@ GENERIC_RAW_DIRS = {
 }
 
 # Camera-card dumps and backup folders that aren't real locations
-# (e.g. "100MSDCF", "100CANON", "4", "Ryan Cam SD Backup 3", "Ricyky Backup").
+# (e.g. "100MSDCF", "100CANON", "4", "Camera Backup", "Card Dump").
 _GENERIC_DIR_RE = re.compile(
     r'^\d+$|^\d+(msdcf|canon|nikon|olymp|_pana|nz\d*)$|backup|^ryan cam|sd card',
     re.I,
@@ -175,8 +175,8 @@ def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
     trip's raw root: the deepest directory component that isn't a generic
     container (Pictures/Photos/Edits, camera-card dumps, backups, etc.).
 
-    e.g. <root>/50 West Street/Pictures/_RM12642.ARW -> "50 West Street"
-         <root>/Philippines/Manila - Gramercy Residence/x.ARW -> "Manila - Gramercy Residence"
+    e.g. <root>/Location Name/Pictures/IMG_001.ARW -> "Location Name"
+         <root>/Country/Location - Building/x.ARW -> "Location - Building"
     Returns None for flat folders or photos that live only under generic dirs.
     """
     try:
@@ -208,9 +208,8 @@ def parse_location_names(trip_name: str) -> list[str]:
 
     Trip names follow "Country - Region, Region, Country - Region, ..." where a
     bare comma segment (no ' - ') continues the most recently named country. Each
-    region is returned qualified with its country (e.g. "South Coast, Iceland") so
-    geocoding is unambiguous — without the country, "South Coast" geocodes to
-    South Coast Plaza in California, not Iceland's south coast.
+    region is returned qualified with its country (e.g. "Region, Country") so
+    geocoding is unambiguous.
     """
     loc = re.sub(r'^\d{4}[:\d]*\s+', '', trip_name).strip()
     out = []
@@ -1377,7 +1376,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--exclude-raws-in', 'exclude_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Drop edited photos whose stem exists somewhere under this folder. '
                    'Inverse of --filter-by-raws-in; carves a region out of a bundled Edits folder '
-                   '(e.g. exclude the Guilin raws from a Hubei/Hunan trip sharing one Edits dir).')
+                   '(e.g. exclude one trip\'s raws from a bundle sharing one Edits dir).')
 @click.option('--raws-root', 'raws_root', default=None, type=click.Path(exists=True, path_type=Path),
               help='Index raw files under this folder (stem→path) for building-name lookup and '
                    'accurate timestamps, WITHOUT filtering out edits that have no matching raw. '
@@ -1400,7 +1399,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--private-cluster-radius', default=150, type=float,
               help='Cluster radius (m) for the off-route private split (default: 150, building-level)')
 @click.option('--gpx-route-subdir', default=None,
-              help='Raw-path folder name marking on-route photos (e.g. "Xinjiang"). These are forced '
+              help='Raw-path folder name marking on-route photos (e.g. "Route Folder"). These are forced '
                    'onto the GPX track (real GPS kept, else interpolated/clamped) and treated as public '
                    'in --split-offroute-private, regardless of GPS-recording gaps.')
 @click.option('--route-snap-public-hours', default=3.0, type=float,
@@ -1424,7 +1423,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--thumbnail-longest', default=DEFAULT_THUMBNAIL_LONGEST, type=int,
               help=f'Max length of longer side for thumbnails (default: {DEFAULT_THUMBNAIL_LONGEST}px)')
 @click.option('--fake-route-locations', default=None, metavar='LOC1,LOC2,...',
-              help='Explicitly set location names for fake route (overrides name parsing). E.g. "Iceland,Italy"')
+              help='Explicitly set location names for fake route (overrides name parsing). E.g. "Location1,Location2"')
 @click.option('--no-fake-route', 'no_fake_route', is_flag=True,
               help='Disable the no-GPX fake-route geocoding (Pass 4b). Photos without a building/EXIF '
                    'match stay at the fallback location instead of being pinned to geocoded trip-name '
@@ -1891,7 +1890,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if raw_match is not None and raw_scan_root:
             building_name = building_from_raw(raw_match, Path(raw_scan_root))
         # Fall back to deriving the label from the edits directory structure
-        # (e.g. /Edits/2025 China CNY/Hubei - Sidu/IMG_001.jpg → "Hubei - Sidu").
+        # (e.g. /Edits/Trip Name/Subfolder/IMG_001.jpg → "Subfolder").
         if not building_name:
             building_name = building_from_raw(photo_file, photos_path)
 
@@ -1932,7 +1931,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             # Generic building names (Marriott, Hilton, …) collide across cities in
             # locations.json. With --strict-building-distance, treat a match that's
             # implausibly far (>2000km) from the trip fallback as a wrong-city collision
-            # and skip it. OFF by default: multi-country trips (e.g. Vietnam+Korea) have
+            # and skip it. OFF by default: multi-country trips (e.g. Country1+Country2) have
             # legitimately distant buildings and must NOT discard them.
             if strict_building_distance and bc and fallback_source == 'cli' and fallback_gps and \
                     haversine_distance(bc['lat'], bc['lon'], fallback_gps['lat'], fallback_gps['lon']) > 2_000_000:

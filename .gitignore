@@ -29,8 +29,18 @@ wrangler.toml
 docs/
 CLAUDE.md
 scripts/
+.claude/
 
 safety-check/
+incorrect-location-names.md
+
+# Specific personal trip reconstruction scripts
+reconstruction/guizhou_gpx_build.py
+reconstruction/guizhou_road_route.py
+reconstruction/hubei_hunan_road_route.py
+reconstruction/iceland_italy_gpx_build.py
+reconstruction/mauritania_train_gpx.py
+reconstruction/geotag_by_raws_dirs.py
 
 # ── OS / tooling ─────────────────────────────────────────────────────────────
 .DS_Store

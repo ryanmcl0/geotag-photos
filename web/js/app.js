@@ -433,11 +433,12 @@ async function loadSingleTrip(trip, basePath) {
     manifest.tripPath = tripPath;
 
     const hidden = loadHiddenTripIds();
+    const hasGpx = Boolean(manifest.source && manifest.source.gpx_path);
     tripLayers[trip.id] = {
         route: buildRouteLayer(routeData, color, trip.name),
-        markers: buildMarkerLayer(manifest),
+        markers: buildMarkerLayer(manifest, hasGpx),
         color,
-        hasGpx: Boolean(manifest.source && manifest.source.gpx_path),
+        hasGpx,
         visible: !hidden.has(trip.id),
     };
 
@@ -570,7 +571,7 @@ function buildRouteLayer(routeData, color, tripName) {
 /**
  * Build a MarkerClusterGroup for a single trip's photos.
  */
-function buildMarkerLayer(manifest) {
+function buildMarkerLayer(manifest, hasGpx) {
     const group = makeClusterGroup();
     const photoLookup = {};
     manifest.photos.forEach(photo => {
@@ -581,12 +582,21 @@ function buildMarkerLayer(manifest) {
         photoLookup[photo.id] = photo;
     });
 
+    // Clusters are stored in chronological (trip) order, so the first and last
+    // entries are the start and end of the route. Only flag them for GPX trips,
+    // where the route order is meaningful, and only when there's more than one stop.
+    const lastIdx = manifest.clusters.length - 1;
     const orderedMarkers = [];
-    manifest.clusters.forEach(cluster => {
+    manifest.clusters.forEach((cluster, idx) => {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
         const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
+        let endpoint = null;
+        if (hasGpx && lastIdx > 0) {
+            if (idx === 0) endpoint = 'start';
+            else if (idx === lastIdx) endpoint = 'end';
+        }
         const marker = L.marker([cluster.lat, cluster.lon], {
-            icon: createPhotoIcon(photos.length, thumbnailUrl)
+            icon: createPhotoIcon(photos.length, thumbnailUrl, endpoint)
         });
         marker.bindPopup(() => buildMarkerPopup(marker));
         marker.photoData = photos;
@@ -668,17 +678,24 @@ function preloadDisplay(url) {
 /**
  * Create icon for photo marker with thumbnail preview
  */
-function createPhotoIcon(count, thumbnailUrl) {
+function createPhotoIcon(count, thumbnailUrl, endpoint) {
     const countBadge = count > 1 ? `<span class="photo-marker-count">${count}</span>` : '';
+    // endpoint: 'start' | 'end' | null — adds a coloured ring + label to the
+    // first/last cluster of a GPX trip so the route's beginning and end are visible.
+    const endpointClass = endpoint ? ` photo-marker-${endpoint}` : '';
+    const endpointLabel = endpoint
+        ? `<span class="photo-marker-endpoint">${endpoint === 'start' ? 'START' : 'END'}</span>`
+        : '';
 
     return L.divIcon({
         html: `
-            <div class="photo-marker-wrapper">
+            <div class="photo-marker-wrapper${endpointClass}">
                 <img src="${thumbnailUrl}" class="photo-marker-thumb" alt="">
                 ${countBadge}
+                ${endpointLabel}
             </div>
         `,
-        className: 'photo-marker-icon',
+        className: `photo-marker-icon${endpointClass}`,
         iconSize: L.point(44, 44),
         iconAnchor: L.point(22, 22),
         popupAnchor: L.point(0, -22)

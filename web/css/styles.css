@@ -345,6 +345,50 @@ body {
     border: 1.5px solid white;
 }
 
+/* Start/end markers for GPX trips: a coloured ring + label on the first and
+   last cluster of the route, so the trip's beginning and end read at a glance. */
+.photo-marker-start .photo-marker-thumb {
+    border-color: #16a34a;
+    box-shadow: 0 0 0 2px #16a34a, 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.photo-marker-end .photo-marker-thumb {
+    border-color: #e11d48;
+    box-shadow: 0 0 0 2px #e11d48, 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.photo-marker-endpoint {
+    position: absolute;
+    bottom: -9px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+    border-radius: 8px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    border: 1.5px solid white;
+    z-index: 6;
+}
+
+.photo-marker-start .photo-marker-endpoint {
+    background: #16a34a;
+}
+
+.photo-marker-end .photo-marker-endpoint {
+    background: #e11d48;
+}
+
+/* Keep the start/end ring + label above neighbouring markers. */
+.photo-marker-icon.photo-marker-start,
+.photo-marker-icon.photo-marker-end {
+    z-index: 600 !important;
+}
+
 
 /* Custom cluster markers - clean minimal style */
 .marker-cluster {

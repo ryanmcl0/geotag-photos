@@ -522,9 +522,12 @@ body {
        can't inadvertently drop these elements on iOS Safari */
     .sidebar-toggle,
     .mobile-see-all-trigger,
-    .map-style-control {
+    .map-style-control,
+    .year-filter-wrapper,
+    .route-filter-wrapper {
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
+        will-change: transform;
     }
 
     .sidebar-toggle {

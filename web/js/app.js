@@ -884,6 +884,27 @@ function fitMapToBounds() {
  * Mobile: floating See All button + inline password modal.
  * Only rendered if non-public trips exist; hidden on desktop via CSS.
  */
+function openMobilePwModal() {
+    if (checkAllAccess()) {
+        document.getElementById('mobile-pw-overlay').dataset.mode = 'lock';
+        document.querySelector('.mobile-pw-title').textContent = 'Return to public trips only?';
+        document.getElementById('mobile-pw-input').style.display = 'none';
+        document.getElementById('mobile-pw-submit').textContent = 'Yes, lock';
+        document.getElementById('mobile-pw-error').textContent = '';
+    } else {
+        document.getElementById('mobile-pw-overlay').dataset.mode = 'unlock';
+        document.querySelector('.mobile-pw-title').textContent = '🔒 Unlock All Trips';
+        document.getElementById('mobile-pw-input').style.display = '';
+        document.getElementById('mobile-pw-submit').textContent = 'Unlock';
+        document.getElementById('mobile-pw-error').textContent = '';
+    }
+    document.getElementById('mobile-pw-overlay').classList.add('visible');
+    if (!checkAllAccess()) {
+        document.getElementById('mobile-pw-input').focus();
+    }
+}
+window.openAllTripsModal = openMobilePwModal;
+
 function initMobileControls() {
     const hasNonPublic = allTripsMeta.some(t => t.public === false);
     const trigger = document.getElementById('mobile-see-all-trigger');
@@ -891,24 +912,7 @@ function initMobileControls() {
 
     updateMobileSeeAll();
 
-    trigger.addEventListener('click', () => {
-        if (checkAllAccess()) {
-            document.getElementById('mobile-pw-overlay').dataset.mode = 'lock';
-            document.querySelector('.mobile-pw-title').textContent = 'Return to public trips only?';
-            document.getElementById('mobile-pw-input').style.display = 'none';
-            document.getElementById('mobile-pw-submit').textContent = 'Yes, lock';
-            document.getElementById('mobile-pw-error').textContent = '';
-            document.getElementById('mobile-pw-overlay').classList.add('visible');
-        } else {
-            document.getElementById('mobile-pw-overlay').dataset.mode = 'unlock';
-            document.querySelector('.mobile-pw-title').textContent = '🔒 Unlock All Trips';
-            document.getElementById('mobile-pw-input').style.display = '';
-            document.getElementById('mobile-pw-submit').textContent = 'Unlock';
-            document.getElementById('mobile-pw-error').textContent = '';
-            document.getElementById('mobile-pw-overlay').classList.add('visible');
-            document.getElementById('mobile-pw-input').focus();
-        }
-    });
+    trigger.addEventListener('click', openMobilePwModal);
 
     document.getElementById('mobile-pw-cancel').addEventListener('click', closeMobilePwModal);
 
@@ -984,17 +988,35 @@ async function mobileSubmitPassword() {
 }
 
 function repaintFixedControls() {
-    ['sidebar-toggle', 'mobile-see-all-trigger'].forEach(id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.style.display = 'none';
-        void el.offsetHeight;
-        el.style.display = '';
-    });
-    const mc = document.querySelector('.map-style-control');
-    if (mc) { mc.style.display = 'none'; void mc.offsetHeight; mc.style.display = ''; }
+    const ids = ['sidebar-toggle', 'mobile-see-all-trigger'];
+    const selectors = ['.map-style-control', '.year-filter-wrapper', '.route-filter-wrapper'];
+    const els = [
+        ...ids.map(id => document.getElementById(id)),
+        ...selectors.map(s => document.querySelector(s)),
+    ].filter(Boolean);
+    els.forEach(el => { el.style.display = 'none'; });
+    void document.body.offsetHeight;
+    els.forEach(el => { el.style.display = ''; });
 }
 window.repaintFixedControls = repaintFixedControls;
+
+// Called by sidebar.js to force iOS visual-viewport sync after keyboard
+// dismissal or sidebar close.  invalidateSize recalculates the Leaflet
+// container, and the scroll-reset nudges iOS out of any lingering
+// keyboard-height offset on the layout viewport.
+window.remeasureMap = function() {
+    if (map && typeof map.invalidateSize === 'function') {
+        map.invalidateSize({ animate: false });
+    }
+    // iOS can retain a non-zero document scroll offset after the soft
+    // keyboard retracts even with overflow:hidden / position:fixed on the
+    // body.  Resetting it prevents controls from rendering above the fold.
+    try {
+        document.body.scrollTop = 0;
+        document.documentElement.scrollTop = 0;
+        window.scrollTo(0, 0);
+    } catch (_) {}
+};
 
 function updateMobileSeeAll() {
     const trigger = document.getElementById('mobile-see-all-trigger');

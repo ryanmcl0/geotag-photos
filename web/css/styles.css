@@ -311,14 +311,25 @@ body {
 }
 
 .photo-marker-thumb {
+    /* Hard box constraints (not just width/height) so the thumbnail can never
+       render at its intrinsic aspect ratio — i.e. no tall "bar" flash before the
+       image loads or if the stylesheet applies after the marker is inserted. The
+       matching width/height HTML attributes on the <img> reserve the box too. */
     width: 44px;
     height: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    min-height: 44px;
+    max-height: 44px;
+    display: block;
     border-radius: 10px;
     border: 2px solid white;
     object-fit: cover;
-    background: #f0f0f0;
+    /* Neutral dark placeholder tile (blends with the map) shown until the photo
+       paints over it — opaque thumbnails cover it fully on load. */
+    background: #2a2d33;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    transition: all 0.2s ease;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .photo-marker-icon:hover .photo-marker-thumb {

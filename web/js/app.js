@@ -690,7 +690,8 @@ function createPhotoIcon(count, thumbnailUrl, endpoint) {
     return L.divIcon({
         html: `
             <div class="photo-marker-wrapper${endpointClass}">
-                <img src="${thumbnailUrl}" class="photo-marker-thumb" alt="">
+                <img src="${thumbnailUrl}" class="photo-marker-thumb" alt=""
+                     width="44" height="44" decoding="async">
                 ${countBadge}
                 ${endpointLabel}
             </div>

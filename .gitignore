@@ -1,5 +1,11 @@
 # ── Generated output (personal trip data) ────────────────────────────────────
 
+# Personal one-off data-prep scripts (hardcoded drive paths, building names, coords)
+backfill_pre2019_locations.py
+# Backups of the gitignored coordinate file
+locations.json.bak
+*.json.bak
+
 # Compressed images — hosted on R2, never in git
 hosted-photos/
 
@@ -34,13 +40,8 @@ scripts/
 safety-check/
 incorrect-location-names.md
 
-# Specific personal trip reconstruction scripts
-reconstruction/guizhou_gpx_build.py
-reconstruction/guizhou_road_route.py
-reconstruction/hubei_hunan_road_route.py
-reconstruction/iceland_italy_gpx_build.py
-reconstruction/mauritania_train_gpx.py
-reconstruction/geotag_by_raws_dirs.py
+# Personal one-off reconstruction scripts (drive paths, trip-specific data)
+reconstruction/personal/
 
 # ── OS / tooling ─────────────────────────────────────────────────────────────
 .DS_Store

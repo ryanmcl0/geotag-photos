@@ -1414,6 +1414,13 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Lat,lon to pin photos with no GPS that are outside the GPX window. '
                    'Defaults to nearest-by-time placed photo (or GPX centroid if none in range). '
                    'Pass "none" to drop them instead.')
+@click.option('--untimed-to-fallback', 'untimed_to_fallback', is_flag=True,
+              help='Instead of dropping photos with no EXIF timestamp, pin them at --fallback-location '
+                   '(one cluster). Use for scan/export edits (e.g. date-named TIFFs) that lost their '
+                   'EXIF — a date is parsed from the filename when present, else a sentinel is used.')
+@click.option('--untimed-label', 'untimed_label', default=None, metavar='NAME',
+              help='Cluster title for --untimed-to-fallback photos (e.g. "Ricky Film"). If NAME is in '
+                   'locations.json its coords are used (own cluster); otherwise they go to the fallback.')
 @click.option('--nearest-photo-max-hours', default=6.0, type=float,
               help='Max time gap (h) when using nearest-by-time fallback. Beyond this, fall back to centroid (default: 6)')
 @click.option('--cluster-radius', default=DEFAULT_CLUSTER_RADIUS, help='Clustering radius in meters')
@@ -1462,7 +1469,9 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  only_edits_dirs: bool,
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
-                 fallback_location: Optional[str], nearest_photo_max_hours: float,
+                 fallback_location: Optional[str], untimed_to_fallback: bool,
+                 untimed_label: Optional[str],
+                 nearest_photo_max_hours: float,
                  cluster_radius: float, raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
                  fake_route_locations: Optional[str], no_fake_route: bool,
@@ -1613,16 +1622,29 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         return {part.lower() for part in path.parent.parts
                 if not _is_generic_component(part)}
 
-    def find_raw(stem: str, edit_path: Optional[Path] = None) -> Optional[Path]:
+    def _token_narrowed_cands(stem: str, edit_path: Optional[Path] = None) -> list:
+        """All raw candidates for a stem, narrowed to those whose folder shares the
+        most location tokens with the edit's folder. >1 remaining = a genuine stem
+        collision the folder name can't resolve (e.g. flat multi-region edits bundles);
+        the caller breaks that tie by timestamp."""
         cands = raw_index.get(stem) or raw_base_index.get(base_stem(stem))
+        if not cands:
+            return []
+        if len(cands) == 1:
+            return list(cands)
+        edit_tokens = _meaningful_tokens(edit_path) if edit_path else set()
+        best = max(len(edit_tokens & _meaningful_tokens(p)) for p in cands)
+        return [p for p in cands if len(edit_tokens & _meaningful_tokens(p)) == best]
+
+    def find_raw(stem: str, edit_path: Optional[Path] = None) -> Optional[Path]:
+        cands = _token_narrowed_cands(stem, edit_path)
         if not cands:
             return None
         if len(cands) == 1:
             return cands[0]
-        # Stem collision: prefer the raw whose folder shares a location name with
-        # the edit's folder. Fall back to rank.
-        edit_tokens = _meaningful_tokens(edit_path) if edit_path else set()
-        return min(cands, key=lambda p: (-len(edit_tokens & _meaningful_tokens(p)), rank(p)))
+        # Folder name couldn't disambiguate — fall back to rank. (Timestamp-based
+        # resolution happens after EXIF is read; see the collision pass below.)
+        return min(cands, key=rank)
 
     if filter_by_raws_in:
         before = len(photo_files)
@@ -1825,6 +1847,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Build raw-match index upfront (needed for cache keys).
     raw_matches = {pf: find_raw(pf.stem, pf) for pf in photo_files}
 
+    # Stem collisions the folder name can't resolve (>1 candidate after token
+    # narrowing) — e.g. flat multi-region edits bundles where the camera counter
+    # repeated across regions. We read EVERY candidate's EXIF (below) and pick the
+    # one whose capture time matches the edit's, in a pass after the batch read.
+    raw_cand_map = {pf: _token_narrowed_cands(pf.stem, pf) for pf in photo_files}
+    collision_edits = [pf for pf in photo_files if len(raw_cand_map[pf]) > 1]
+    if collision_edits:
+        click.echo(f"Stem collisions to resolve by timestamp: {len(collision_edits)}")
+
     # --- Incremental update: per-source freshness state (mtime+size) ---
     # Tracked in <output>/source_state.json (separate from exif_cache.json so the
     # latter's format is untouched). See docs/incremental-update-design.md.
@@ -1885,9 +1916,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     cache_hits = sum(1 for pf in photo_files if str(pf) in exif_cache)
     uncached_edits = [pf for pf in photo_files if str(pf) not in exif_cache]
-    uncached_raws  = list({r for pf in uncached_edits
-                           if (r := raw_matches[pf]) is not None
-                           and str(r) not in exif_cache})
+    uncached_raws  = {r for pf in uncached_edits
+                      if (r := raw_matches[pf]) is not None
+                      and str(r) not in exif_cache}
+    # Also read EVERY collision candidate's EXIF so we can timestamp-resolve them.
+    for pf in collision_edits:
+        for r in raw_cand_map[pf]:
+            if str(r) not in exif_cache:
+                uncached_raws.add(r)
+    uncached_raws = list(uncached_raws)
 
     if cache_hits:
         click.echo(f"EXIF cache: {cache_hits} hits, reading {len(uncached_edits)} new edits / {len(uncached_raws)} new raws from drive...")
@@ -1912,6 +1949,30 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     exif_edits = exif_cache
     exif_raws  = exif_cache
 
+    # Resolve stem collisions by timestamp: among the candidate raws for a colliding
+    # edit, pick the one whose DateTimeOriginal is closest to the edit's own — that's
+    # the same physical shot. The wrong-region collisions are a different capture (and
+    # so a different time), so this disambiguates where the folder name can't.
+    if collision_edits:
+        _resolved = 0
+        for pf in collision_edits:
+            edit_ts = _parse_exif_datetime(exif_edits.get(str(pf), {}).get('DateTimeOriginal'))
+            if edit_ts is None:
+                continue  # no reference time → keep the folder/rank pick
+            best = None
+            for r in raw_cand_map[pf]:
+                raw_ts = _parse_exif_datetime(exif_raws.get(str(r), {}).get('DateTimeOriginal'))
+                if raw_ts is None:
+                    continue
+                diff = abs((raw_ts - edit_ts).total_seconds())
+                if best is None or diff < best[0]:
+                    best = (diff, r)
+            if best is not None and raw_matches[pf] != best[1]:
+                raw_matches[pf] = best[1]
+                _resolved += 1
+        if _resolved:
+            click.echo(f"  Timestamp-resolved {_resolved} stem collision(s) to the matching raw")
+
     for photo_file in tqdm(photo_files, desc="Processing"):
         # Get photo timestamp — prefer the raw file's timestamp when available,
         # since edited JPGs sometimes carry corrupted DateTimeOriginal.
@@ -1926,22 +1987,47 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if photo_time is None:
             photo_time = get_exif_datetime(photo_file)  # PIL fallback
 
+        forced_untimed = False
         if not photo_time:
-            failed_photos.append((photo_file, "No EXIF timestamp"))
-            skipped_records.append({
-                'id': photo_file.stem,
-                'source_filename': photo_file.name,
-                'reason': 'no_exif_timestamp',
-            })
-            continue
+            if untimed_to_fallback and fallback_gps is not None:
+                # Keep it: pin at the fallback (one cluster). Derive a date from the
+                # filename if it encodes one (e.g. img20201228_123040.tif), else sentinel.
+                _m = re.search(r'(20\d{6})[_-]?(\d{6})', photo_file.stem)
+                if _m:
+                    try:
+                        photo_time = datetime.strptime(_m.group(1) + _m.group(2), '%Y%m%d%H%M%S')
+                    except ValueError:
+                        photo_time = None
+                if photo_time is None:
+                    photo_time = datetime(2000, 1, 1)  # sentinel; placed at fallback regardless
+                forced_untimed = True
+            else:
+                failed_photos.append((photo_file, "No EXIF timestamp"))
+                skipped_records.append({
+                    'id': photo_file.stem,
+                    'source_filename': photo_file.name,
+                    'reason': 'no_exif_timestamp',
+                })
+                continue
 
         # Apply timezone offset
         if geosync:
             photo_time = apply_timezone_offset(photo_time, geosync)
 
         # Determine GPS source — priority: EXIF on the JPG, then DJI DNG, then GPX.
-        gps = _parse_exif_gps(exif_edits.get(str(photo_file), {}))
-        gps_source = 'exif' if gps else None
+        # Untimed-to-fallback photos skip the whole chain and pin at the labelled
+        # location (own cluster) if given + known, else the fallback.
+        if forced_untimed:
+            _uloc = building_coords.get(untimed_label.strip().lower()) if untimed_label else None
+            if _uloc:
+                gps = {'lat': _uloc['lat'], 'lon': _uloc['lon']}
+                gps_source = 'building'
+            else:
+                gps = {'lat': fallback_gps['lat'], 'lon': fallback_gps['lon']}
+                gps_source = 'fallback_centroid'
+        else:
+            gps = _parse_exif_gps(exif_edits.get(str(photo_file), {}))
+            gps_source = 'exif' if gps else None
 
         if not gps and raws and photo_file.stem.startswith('DJI_'):
             raw_path = find_dji_raw(photo_file, Path(raws))
@@ -1968,6 +2054,20 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # (e.g. /Edits/Trip Name/Subfolder/IMG_001.jpg → "Subfolder").
         if not building_name:
             building_name = building_from_raw(photo_file, photos_path)
+        # Single-location no-GPX trips point --raws-root AT the location folder itself,
+        # so there's no component *below* the root to extract — fall back to the root
+        # folder's own name (e.g. raws .../2019/An Teallach → "An Teallach"). Guarded:
+        # only no-GPX trips, and only a clean name (not generic, not a year/date-prefixed
+        # tree root like "2017" or "07.2024 Japan"), so broad GPX/multi-location roots
+        # don't mislabel route photos.
+        if not building_name and no_gpx_mode and raw_scan_root:
+            _root_name = Path(raw_scan_root).name
+            if _root_name and not _is_generic_component(_root_name) \
+                    and not re.match(r'\d', _root_name):
+                building_name = _root_name
+        # Untimed-to-fallback photos get their explicit label as the cluster title.
+        if forced_untimed and untimed_label:
+            building_name = untimed_label
 
         if exclude_building_set and building_name and building_name.strip().lower() in exclude_building_set:
             continue

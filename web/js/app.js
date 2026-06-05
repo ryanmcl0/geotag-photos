@@ -2,6 +2,13 @@
  * Travel Photography Map - Main Application
  */
 
+const CUSTOM_COUNTRY_NAMES = { SCT: 'Scotland', WAL: 'Wales', ENG: 'England' };
+const _intlNames = new Intl.DisplayNames(['en'], { type: 'region' });
+function countryName(cc) {
+    if (CUSTOM_COUNTRY_NAMES[cc]) return CUSTOM_COUNTRY_NAMES[cc];
+    try { return _intlNames.of(cc); } catch { return cc; }
+}
+
 // Configuration
 const CONFIG = {
     // Map settings
@@ -227,7 +234,6 @@ function rebuildCountryFilter() {
     const existing = document.querySelector('.country-filter-wrapper');
     if (existing) existing.remove();
 
-    const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
     const countByCountry = {};
     allTrips.forEach(t => {
         (t.countries || []).forEach(cc => {
@@ -238,7 +244,7 @@ function rebuildCountryFilter() {
     const countries = Object.keys(countByCountry)
         .map(cc => ({
             code: cc,
-            name: (() => { try { return countryNames.of(cc); } catch { return cc; } })(),
+            name: countryName(cc),
             count: countByCountry[cc]
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -697,7 +703,6 @@ function updateTripInfo() {
         // trip.countries (from GPX route) covers countries with no photo clusters.
         (trip.countries || []).forEach(c => uniqueCountries.add(c));
     });
-    const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
     const viewConfig = typeof VIEW_CONFIG !== 'undefined' ? VIEW_CONFIG : { mode: 'all' };
 
     let titleText = '';
@@ -724,7 +729,7 @@ function updateTripInfo() {
     const countryListEl = document.getElementById('country-list');
     if (countryListEl) {
         countryListEl.textContent = uniqueCountries.size > 0
-            ? [...uniqueCountries].map(cc => { try { return countryNames.of(cc); } catch { return cc; } }).sort().join(', ')
+            ? [...uniqueCountries].map(countryName).sort().join(', ')
             : '';
     }
 }

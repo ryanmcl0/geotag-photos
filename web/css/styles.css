@@ -578,7 +578,7 @@ body {
     .sidebar-toggle,
     .mobile-see-all-trigger,
     .map-style-control,
-    .year-filter-wrapper,
+    .map-top-filters,
     .route-filter-wrapper {
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
@@ -612,8 +612,8 @@ body {
         height: 40px;
     }
 
-    /* Year filter — shift down slightly so it clears the hamburger */
-    .year-filter-wrapper {
+    /* Top filters — shift down slightly so they clear the hamburger */
+    .map-top-filters {
         top: 70px;
     }
 
@@ -927,13 +927,21 @@ body {
     padding: 8px 10px 0 0;
 }
 
-/* Year filter dropdown */
-.year-filter-wrapper {
+/* Shared top filter bar — holds year + country dropdowns side by side */
+.map-top-filters {
     position: absolute;
     top: 12px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 1000;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+/* Year filter dropdown */
+.year-filter-wrapper {
+    position: relative;
     font-family: inherit;
 }
 
@@ -1004,6 +1012,139 @@ body {
     margin-left: auto;
     color: #666;
     font-size: 12px;
+}
+
+/* Country filter dropdown */
+.country-filter-wrapper {
+    position: relative;
+    font-family: inherit;
+}
+
+.country-filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: rgba(20, 20, 20, 0.94);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 500;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.country-filter-btn:hover { background: rgba(35,35,35,0.95); }
+
+.country-filter-chevron { flex-shrink: 0; color: #aaa; }
+
+.country-filter-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 20, 0.97);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 6px;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    max-height: min(70vh, 560px);
+    overflow-y: auto;
+    /* Always show a scrollbar so it's obvious the list scrolls (macOS hides
+       overlay scrollbars by default, which made later countries look missing). */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.3) transparent;
+}
+
+.country-filter-menu::-webkit-scrollbar { width: 8px; }
+.country-filter-menu::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.25);
+    border-radius: 4px;
+}
+
+.country-filter-menu.open { display: block; }
+
+/* Two-column grid so all ~30 countries fit with minimal scrolling */
+.country-filter-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px 4px;
+}
+
+.country-filter-actions {
+    display: flex;
+    gap: 4px;
+    padding: 4px 4px 6px;
+}
+
+.country-filter-action-btn {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 5px;
+    background: rgba(255,255,255,0.07);
+    color: #ccc;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    font-weight: 500;
+    transition: background 0.12s, color 0.12s;
+}
+
+.country-filter-action-btn:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+}
+
+.country-filter-divider {
+    height: 1px;
+    background: rgba(255,255,255,0.1);
+    margin: 2px 4px 6px;
+}
+
+.country-filter-option {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    color: #999;
+    cursor: pointer;
+    font-size: 12.5px;
+    transition: background 0.12s, color 0.12s;
+}
+
+.country-filter-option:hover { background: rgba(255,255,255,0.08); color: #fff; }
+
+.country-filter-option--active { color: #fff; }
+
+.country-filter-check {
+    width: 12px;
+    flex-shrink: 0;
+    color: #fff;
+    font-size: 11px;
+}
+
+.country-filter-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.country-filter-count {
+    flex-shrink: 0;
+    color: #666;
+    font-size: 11px;
+    white-space: nowrap;
 }
 
 /* Route type filter */

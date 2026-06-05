@@ -938,7 +938,29 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
         })
 
     name_unlabeled_clusters(clusters)
+    add_cluster_countries(clusters)
     return clusters
+
+
+def add_cluster_countries(clusters: list[dict]) -> None:
+    """
+    Tag each cluster with the country code (cc) of its anchor point via offline
+    reverse-geocoding. Lets the frontend filter individual markers by country
+    even on multi-country trips. Mutates clusters in place; silently no-ops if
+    reverse_geocoder is unavailable.
+    """
+    if not clusters:
+        return
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return
+    coords = [(c['lat'], c['lon']) for c in clusters]
+    results = rg.search(coords, verbose=False)
+    for cluster, res in zip(clusters, results):
+        cc = res.get('cc') if res else None
+        if cc:
+            cluster['country'] = cc
 
 
 def name_unlabeled_clusters(clusters: list[dict]) -> None:

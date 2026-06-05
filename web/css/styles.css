@@ -266,10 +266,46 @@ body {
     line-height: 1.4;
 }
 
+.country-details {
+    margin-top: 6px;
+}
+.country-summary {
+    font-size: 0.75rem;
+    color: #999;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.country-summary::-webkit-details-marker { display: none; }
+.country-summary::after {
+    content: ' ›';
+    opacity: 0.6;
+}
+details[open] .country-summary::after {
+    content: ' ↑';
+}
 .country-list {
     font-size: 0.75rem;
     color: #999;
     margin-top: 4px;
+}
+.country-breakdown {
+    margin-top: 6px;
+}
+.country-section-label {
+    font-size: 0.7rem;
+    color: #777;
+    margin-top: 8px;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.country-section-label--pending {
+    color: #555;
+    margin-top: 10px;
+}
+.country-list--pending {
+    color: #666;
 }
 
 

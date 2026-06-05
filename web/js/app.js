@@ -94,10 +94,8 @@ function tripMatchesCountryFilter(trip) {
     const markers = (layer && layer.markers._allMarkers) || [];
     // Per-cluster match: show the trip if any of its clusters is in a selected country.
     if (markers.some(m => m.country && activeCountryFilter.has(m.country))) return true;
-    // Fallback for trips whose clusters lack country codes: match at trip level.
-    if (markers.length === 0 || markers.every(m => !m.country)) {
-        return (trip.countries || []).some(c => activeCountryFilter.has(c));
-    }
+    // trip.countries (from GPX route) may cover countries with no photos — always check it.
+    if ((trip.countries || []).some(c => activeCountryFilter.has(c))) return true;
     return false;
 }
 
@@ -696,10 +694,8 @@ function updateTripInfo() {
             totalPhotos += m.photoData.length;
             if (m.country) uniqueCountries.add(m.country);
         });
-        // Fallback for trips whose clusters lack country codes.
-        if (markers.length === 0 || markers.every(m => !m.country)) {
-            (trip.countries || []).forEach(c => uniqueCountries.add(c));
-        }
+        // trip.countries (from GPX route) covers countries with no photo clusters.
+        (trip.countries || []).forEach(c => uniqueCountries.add(c));
     });
     const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
     const viewConfig = typeof VIEW_CONFIG !== 'undefined' ? VIEW_CONFIG : { mode: 'all' };

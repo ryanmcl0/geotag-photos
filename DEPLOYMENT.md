@@ -131,7 +131,7 @@ After processing a new trip with `process_trip.py`, just deploy the new trip:
 
 ```bash
 # Deploy just one trip (faster)
-python deploy.py --trip 2024-japan
+python deploy.py --trip <trip-slug>
 
 # Or deploy everything
 python deploy.py

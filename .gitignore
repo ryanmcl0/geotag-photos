@@ -1,5 +1,11 @@
 # ── Generated output (personal trip data) ────────────────────────────────────
 
+# Personal one-off data-prep scripts (hardcoded drive paths, building names, coords)
+backfill_pre2019_locations.py
+# Backups of the gitignored coordinate file
+locations.json.bak
+*.json.bak
+
 # Compressed images — hosted on R2, never in git
 hosted-photos/
 
@@ -29,8 +35,13 @@ wrangler.toml
 docs/
 CLAUDE.md
 scripts/
+.claude/
 
 safety-check/
+incorrect-location-names.md
+
+# Personal one-off reconstruction scripts (drive paths, trip-specific data)
+reconstruction/personal/
 
 # ── OS / tooling ─────────────────────────────────────────────────────────────
 .DS_Store

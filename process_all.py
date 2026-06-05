@@ -140,6 +140,10 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--exclude-raws-in', opts['exclude_raws']]
     if opts.get('fallback_location'):
         cmd += ['--fallback-location', opts['fallback_location']]
+    if opts.get('untimed_to_fallback'):
+        cmd += ['--untimed-to-fallback']
+    if opts.get('untimed_label'):
+        cmd += ['--untimed-label', opts['untimed_label']]
     if opts.get('cluster_radius'):
         cmd += ['--cluster-radius', str(opts['cluster_radius'])]
     if trip.get('kmz'):

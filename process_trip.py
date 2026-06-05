@@ -157,9 +157,10 @@ GENERIC_RAW_DIRS = {
 }
 
 # Camera-card dumps and backup folders that aren't real locations
-# (e.g. "100MSDCF", "100CANON", "4", "Ryan Cam SD Backup 3", "Ricyky Backup").
+# (e.g. "100MSDCF", "100CANON", "4", "Camera Backup", "Card Dump").
 _GENERIC_DIR_RE = re.compile(
-    r'^\d+$|^\d+(msdcf|canon|nikon|olymp|_pana|nz\d*)$|backup|^ryan cam|sd card',
+    r'^\d+$|^\d+(msdcf|canon|nikon|olymp|_pana|nz\d*)$|backup|^ryan cam|sd card'
+    r'|^edits?\s*\d+$',  # "Edits1", "Edit 2" etc. — numbered edit subfolders, not locations
     re.I,
 )
 
@@ -175,8 +176,8 @@ def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
     trip's raw root: the deepest directory component that isn't a generic
     container (Pictures/Photos/Edits, camera-card dumps, backups, etc.).
 
-    e.g. <root>/50 West Street/Pictures/_RM12642.ARW -> "50 West Street"
-         <root>/Philippines/Manila - Gramercy Residence/x.ARW -> "Manila - Gramercy Residence"
+    e.g. <root>/Location Name/Pictures/IMG_001.ARW -> "Location Name"
+         <root>/Country/Location - Building/x.ARW -> "Location - Building"
     Returns None for flat folders or photos that live only under generic dirs.
     """
     try:
@@ -208,9 +209,8 @@ def parse_location_names(trip_name: str) -> list[str]:
 
     Trip names follow "Country - Region, Region, Country - Region, ..." where a
     bare comma segment (no ' - ') continues the most recently named country. Each
-    region is returned qualified with its country (e.g. "South Coast, Iceland") so
-    geocoding is unambiguous — without the country, "South Coast" geocodes to
-    South Coast Plaza in California, not Iceland's south coast.
+    region is returned qualified with its country (e.g. "Region, Country") so
+    geocoding is unambiguous.
     """
     loc = re.sub(r'^\d{4}[:\d]*\s+', '', trip_name).strip()
     out = []
@@ -1166,7 +1166,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
         <main class="map-container">
             <div id="map"></div>
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info"><span>i</span></button>
-            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true" style="display:none">
+            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
                 <div class="pswp__bg"></div>
                 <div class="pswp__scroll-wrap">
                     <div class="pswp__container">
@@ -1244,7 +1244,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
         <main class="map-container">
             <div id="map"></div>
             <button id="exif-toggle" class="exif-toggle" title="Toggle EXIF info"><span>i</span></button>
-            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true" style="display:none">
+            <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
                 <div class="pswp__bg"></div>
                 <div class="pswp__scroll-wrap">
                     <div class="pswp__container">
@@ -1374,6 +1374,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--filter-by-raws-in', 'filter_by_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Only process edited photos whose stem exists somewhere under this folder. '
                    'Used to scope an Edits folder that bundles multiple trips.')
+@click.option('--exclude-raws-in', 'exclude_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
+              help='Drop edited photos whose stem exists somewhere under this folder. '
+                   'Inverse of --filter-by-raws-in; carves a region out of a bundled Edits folder '
+                   '(e.g. exclude one trip\'s raws from a bundle sharing one Edits dir).')
 @click.option('--raws-root', 'raws_root', default=None, type=click.Path(exists=True, path_type=Path),
               help='Index raw files under this folder (stem→path) for building-name lookup and '
                    'accurate timestamps, WITHOUT filtering out edits that have no matching raw. '
@@ -1389,6 +1393,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--exclude-edits-under', 'exclude_edits_under', default=None, metavar='NAME,NAME,...',
               help='Comma-separated edit-folder names; drop any edit whose path contains one as a '
                    'component. Carves region subfolders out of a multi-region edits bundle.')
+@click.option('--only-edits-dirs', 'only_edits_dirs', is_flag=True,
+              help='Keep only photos that live under a folder literally named "Edits". Used for the '
+                   'pre-2019 in-tree backfill, where the edits sit in <year>/<Building>/Edits/ '
+                   'alongside raws/camera-card dumps that must NOT be picked up.')
 @click.option('--split-offroute-private', is_flag=True,
               help='Split a GPX trip in two: photos placed by the GPX track (on-route) stay in this '
                    'trip (public); all other photos (off-route building/drone/fallback shots) are '
@@ -1396,7 +1404,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--private-cluster-radius', default=150, type=float,
               help='Cluster radius (m) for the off-route private split (default: 150, building-level)')
 @click.option('--gpx-route-subdir', default=None,
-              help='Raw-path folder name marking on-route photos (e.g. "Xinjiang"). These are forced '
+              help='Raw-path folder name marking on-route photos (e.g. "Route Folder"). These are forced '
                    'onto the GPX track (real GPS kept, else interpolated/clamped) and treated as public '
                    'in --split-offroute-private, regardless of GPS-recording gaps.')
 @click.option('--route-snap-public-hours', default=3.0, type=float,
@@ -1420,25 +1428,47 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--thumbnail-longest', default=DEFAULT_THUMBNAIL_LONGEST, type=int,
               help=f'Max length of longer side for thumbnails (default: {DEFAULT_THUMBNAIL_LONGEST}px)')
 @click.option('--fake-route-locations', default=None, metavar='LOC1,LOC2,...',
-              help='Explicitly set location names for fake route (overrides name parsing). E.g. "Iceland,Italy"')
+              help='Explicitly set location names for fake route (overrides name parsing). E.g. "Location1,Location2"')
+@click.option('--no-fake-route', 'no_fake_route', is_flag=True,
+              help='Disable the no-GPX fake-route geocoding (Pass 4b). Photos without a building/EXIF '
+                   'match stay at the fallback location instead of being pinned to geocoded trip-name '
+                   'places. Use for building-specific trips where trip-name geocoding misfires.')
+@click.option('--strict-building-distance', 'strict_building_distance', is_flag=True,
+              help='Discard a building-coord match that is >2000km from the trip fallback location '
+                   '(treats it as a wrong-city collision for generic hotel-chain names). OFF by default '
+                   'so multi-country trips keep their legitimately-distant building matches. Enable only '
+                   'for single-region trips that suffer generic-name collisions.')
 @click.option('--skip-existing-images', is_flag=True,
               help='Reuse already-generated thumbnails/display images. Only recomputes GPS placement, clusters, and manifest. Fast re-run after logic changes.')
+@click.option('--update', 'update', is_flag=True,
+              help='Incremental update: reprocess only the delta vs the last run. Re-encodes/re-reads '
+                   'EXIF for NEW or CHANGED (mtime/size) source edits, reuses everything else, and '
+                   'deletes orphaned hosted images for edits that were removed. On the first run for an '
+                   'existing trip (no source_state.json) it ADOPTS the current artifacts as baseline '
+                   '(only encodes anything actually missing). Tracks state in <output>/source_state.json.')
+@click.option('--reindex', 'reindex', is_flag=True,
+              help='Write/refresh <output>/source_state.json from the current sources WITHOUT '
+                   'reprocessing (adopt-baseline only; encodes only missing images). Use to stamp a '
+                   'baseline on already-processed trips so a later --update detects real deltas.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
 @click.option('--dry-run', is_flag=True, help='Preview without writing files')
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float,
-                 filter_by_raws_in: Optional[Path],
+                 filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
+                 only_edits_dirs: bool,
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
                  fallback_location: Optional[str], nearest_photo_max_hours: float,
                  cluster_radius: float, raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
-                 fake_route_locations: Optional[str], kmz_path_str: Optional[str],
-                 skip_existing_images: bool, test_mode: int, dry_run: bool):
+                 fake_route_locations: Optional[str], no_fake_route: bool,
+                 strict_building_distance: bool, kmz_path_str: Optional[str],
+                 skip_existing_images: bool, update: bool, reindex: bool,
+                 test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
 
@@ -1518,6 +1548,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     click.echo("\nFinding photos...")
     photo_files = find_photos(photos_path)
     click.echo(f"Found {len(photo_files)} photos")
+
+    # Pre-2019 backfill: when the edits root is a whole year folder, restrict to
+    # photos living under an "Edits" subfolder so the year's raws / camera-card
+    # dumps (which also include JPGs) are not picked up.
+    if only_edits_dirs:
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if any(part.lower() == 'edits' for part in p.parts)]
+        click.echo(f"  --only-edits-dirs: kept {len(photo_files)} of {before} "
+                   f"(under an 'Edits/' folder)")
 
     # Optionally filter by stems present somewhere under a raws root, and build
     # a stem→raw-path index so we can re-read DateTimeOriginal from the raw
@@ -1614,6 +1654,21 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         photo_files = [p for p in photo_files
                        if not any(part.lower() in excl for part in p.parts)]
         click.echo(f"  Excluded edits under {excl}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
+
+    # Drop edits whose stem appears under an excluded raws folder — carves a region
+    # out of a bundled Edits folder by raw membership (inverse of --filter-by-raws-in).
+    if exclude_raws_in:
+        excl_root = Path(exclude_raws_in)
+        excl_stems: set = set()
+        for ext in SUPPORTED_EXTENSIONS | {'.arw', '.dng', '.cr2', '.nef', '.raf'}:
+            for pat in (f'*{ext}', f'*{ext.upper()}'):
+                for p in excl_root.rglob(pat):
+                    excl_stems.add(p.stem)
+                    excl_stems.add(base_stem(p.stem))
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if p.stem not in excl_stems and base_stem(p.stem) not in excl_stems]
+        click.echo(f"  Excluded edits under raws {excl_root.name}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
 
     if not photo_files:
         click.echo("Error: No photos found in directory", err=True)
@@ -1770,6 +1825,46 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Build raw-match index upfront (needed for cache keys).
     raw_matches = {pf: find_raw(pf.stem, pf) for pf in photo_files}
 
+    # --- Incremental update: per-source freshness state (mtime+size) ---
+    # Tracked in <output>/source_state.json (separate from exif_cache.json so the
+    # latter's format is untouched). See docs/incremental-update-design.md.
+    update_mode = update or reindex
+    source_state_path = output_path / 'source_state.json'
+    _had_state = source_state_path.exists()
+    prev_state: dict = {}
+    if _had_state:
+        try:
+            prev_state = json.loads(source_state_path.read_text())
+        except Exception:
+            prev_state = {}
+
+    def _stat_pair(p: Path):
+        try:
+            st = p.stat()
+            return [int(st.st_mtime), st.st_size]
+        except OSError:
+            return None
+
+    current_state = {str(pf): _stat_pair(pf) for pf in photo_files} if update_mode else {}
+    # First --update on a pre-existing trip (no state file) ADOPTS current artifacts as
+    # the baseline; --reindex always adopts. Adopt = treat nothing as "changed", so only
+    # genuinely-missing images get encoded.
+    adopt = reindex or (update and not _had_state)
+
+    def _changed(pf: Path) -> bool:
+        if not update or adopt:
+            return False
+        return prev_state.get(str(pf)) != current_state.get(str(pf))
+
+    changed_edits = {pf for pf in photo_files if _changed(pf)} if update_mode else set()
+    if update_mode:
+        if adopt:
+            click.echo(f"Update: adopting baseline for {len(photo_files)} sources "
+                       f"({'--reindex' if reindex else 'first --update'}); encoding only missing images")
+        else:
+            click.echo(f"Update: {len(changed_edits)} changed/new of {len(photo_files)} "
+                       f"sources will re-encode + re-read EXIF; rest reused")
+
     # EXIF cache: persisted between runs as <output>/exif_cache.json so that
     # location-only reprocesses don't re-read the external drive.
     exif_cache_path = output_path / 'exif_cache.json'
@@ -1779,6 +1874,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             exif_cache = json.loads(exif_cache_path.read_text())
         except Exception:
             exif_cache = {}
+
+    # Changed sources (update mode): drop stale EXIF so it's re-read from the drive,
+    # along with the matched raw (its timestamp/GPS may have changed too).
+    for pf in changed_edits:
+        exif_cache.pop(str(pf), None)
+        _r = raw_matches.get(pf)
+        if _r is not None:
+            exif_cache.pop(str(_r), None)
 
     cache_hits = sum(1 for pf in photo_files if str(pf) in exif_cache)
     uncached_edits = [pf for pf in photo_files if str(pf) not in exif_cache]
@@ -1862,7 +1965,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if raw_match is not None and raw_scan_root:
             building_name = building_from_raw(raw_match, Path(raw_scan_root))
         # Fall back to deriving the label from the edits directory structure
-        # (e.g. /Edits/2025 China CNY/Hubei - Sidu/IMG_001.jpg → "Hubei - Sidu").
+        # (e.g. /Edits/Trip Name/Subfolder/IMG_001.jpg → "Subfolder").
         if not building_name:
             building_name = building_from_raw(photo_file, photos_path)
 
@@ -1901,11 +2004,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if not on_route and not gps and building_coords and building_name:
             bc = building_coords.get(building_name.strip().lower())
             # Generic building names (Marriott, Hilton, …) collide across cities in
-            # locations.json. When the trip pins an explicit fallback location, treat
-            # a match that's implausibly far from it (>2000km — a different continent,
-            # not just another city in the same country) as a wrong-city collision and
-            # skip it; the photo then falls through to nearest-photo / fallback.
-            if bc and fallback_source == 'cli' and fallback_gps and \
+            # locations.json. With --strict-building-distance, treat a match that's
+            # implausibly far (>2000km) from the trip fallback as a wrong-city collision
+            # and skip it. OFF by default: multi-country trips (e.g. Country1+Country2) have
+            # legitimately distant buildings and must NOT discard them.
+            if strict_building_distance and bc and fallback_source == 'cli' and fallback_gps and \
                     haversine_distance(bc['lat'], bc['lon'], fallback_gps['lat'], fallback_gps['lon']) > 2_000_000:
                 bc = None
             if bc:
@@ -1963,11 +2066,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # Generate photo ID
         photo_id = photo_file.stem
 
-        # Generate resized images (unless reusing existing ones)
+        # Generate resized images (unless reusing existing ones). Reuse when
+        # --skip-existing-images OR --update/--reindex and the images already exist —
+        # but in --update, a CHANGED source still re-encodes.
         if not dry_run:
             thumb_path = hosted_photos_path / 'thumbnails' / f'{photo_id}.{image_ext}'
             display_path = hosted_photos_path / 'display' / f'{photo_id}.{image_ext}'
-            if not (skip_existing_images and thumb_path.exists() and display_path.exists()):
+            reuse_img = ((skip_existing_images or update_mode)
+                         and thumb_path.exists() and display_path.exists()
+                         and photo_file not in changed_edits)
+            if not reuse_img:
                 generate_thumbnail(photo_file, thumb_path, thumbnail_longest, format_name, quality)
                 generate_display_image(photo_file, display_path, display_longest, format_name, quality)
 
@@ -2129,6 +2237,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 'features': [{'type': 'Feature', 'properties': {'name': 'Planned route'},
                               'geometry': {'type': 'LineString', 'coordinates': line_coords}}]
             }
+        elif no_fake_route:
+            # Building-specific trip: skip geocoded fake route. Non-building/EXIF photos
+            # keep their fallback placement (fallback_location or centroid).
+            click.echo("\nFake-route geocoding disabled (--no-fake-route) — using building/fallback placement only")
+            fake_route_geojson = {'type': 'FeatureCollection', 'features': []}
         else:
             # Pass 4b: fake route — place remaining photos at geocoded locations + build route line
             explicit = [l.strip() for l in fake_route_locations.split(',')] \
@@ -2224,6 +2337,31 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         with open(manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
         click.echo(f"\nSaved manifest: {manifest_path}")
+
+        # --- Incremental update: orphan cleanup + persist source state ---
+        if update_mode:
+            # Delete hosted images for sources no longer in the manifest (deleted edits).
+            # Skipped for split trips: off-route images move to a separate -private dir,
+            # so the main manifest doesn't list them and they'd be wrongly culled.
+            if not split_offroute_private:
+                kept_ids = {p['id'] for p in processed_photos}
+                removed = 0
+                for sub in ('thumbnails', 'display'):
+                    d = hosted_photos_path / sub
+                    if d.is_dir():
+                        for img in d.iterdir():
+                            if img.is_file() and img.stem not in kept_ids:
+                                img.unlink()
+                                removed += 1
+                if removed:
+                    click.echo(f"Update: removed {removed} orphaned image file(s)")
+            # Persist the new baseline (built from the CURRENT sources, so deleted
+            # edits naturally drop out of the state).
+            try:
+                source_state_path.write_text(json.dumps(current_state))
+                click.echo(f"Update: wrote source state for {len(current_state)} sources")
+            except Exception as e:
+                click.echo(f"Warning: could not write {source_state_path}: {e}", err=True)
 
         # Convert GPX to GeoJSON (fake_route_geojson already built above for no-GPX trips)
         if not no_gpx_mode:

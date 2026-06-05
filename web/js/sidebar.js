@@ -218,17 +218,28 @@
                 </div>
             `;
         } else {
-            section.innerHTML = `
-                <button class="see-all-btn" id="see-all-btn">&#128274; See All Trips</button>
-                <div class="see-all-form" id="see-all-form">
-                    <input type="password" id="all-password" placeholder="Password" autocomplete="current-password">
-                    <div class="see-all-actions">
-                        <button class="see-all-submit" id="all-submit">Unlock</button>
-                        <button class="see-all-cancel" id="all-cancel">Cancel</button>
+            // On mobile the inline password form causes an iOS visual-viewport
+            // bug (keyboard inside a position:fixed sidebar shifts the layout
+            // and the controls never come back).  Instead, close the sidebar
+            // and open the body-level modal which handles this correctly.
+            const onMobile = window.matchMedia('(max-width: 768px)').matches;
+            if (onMobile) {
+                section.innerHTML = `
+                    <button class="see-all-btn" id="see-all-btn">&#128274; See All Trips</button>
+                `;
+            } else {
+                section.innerHTML = `
+                    <button class="see-all-btn" id="see-all-btn">&#128274; See All Trips</button>
+                    <div class="see-all-form" id="see-all-form">
+                        <input type="password" id="all-password" placeholder="Password" autocomplete="current-password">
+                        <div class="see-all-actions">
+                            <button class="see-all-submit" id="all-submit">Unlock</button>
+                            <button class="see-all-cancel" id="all-cancel">Cancel</button>
+                        </div>
+                        <p class="see-all-error" id="see-all-error"></p>
                     </div>
-                    <p class="see-all-error" id="see-all-error"></p>
-                </div>
-            `;
+                `;
+            }
         }
 
         const tripInfo = document.getElementById('trip-info');
@@ -249,23 +260,38 @@
                 }
             });
         } else {
-            document.getElementById('see-all-btn').addEventListener('click', () => {
-                document.getElementById('see-all-btn').style.display = 'none';
-                document.getElementById('see-all-form').style.display = 'block';
-                document.getElementById('all-password').focus();
-            });
+            const onMobile = window.matchMedia('(max-width: 768px)').matches;
+            if (onMobile) {
+                // Close the sidebar, then let the body-level modal handle auth
+                document.getElementById('see-all-btn').addEventListener('click', () => {
+                    if (typeof window.closeMobileSidebar === 'function') {
+                        window.closeMobileSidebar();
+                    }
+                    setTimeout(() => {
+                        if (typeof window.openAllTripsModal === 'function') {
+                            window.openAllTripsModal();
+                        }
+                    }, 360);
+                });
+            } else {
+                document.getElementById('see-all-btn').addEventListener('click', () => {
+                    document.getElementById('see-all-btn').style.display = 'none';
+                    document.getElementById('see-all-form').style.display = 'block';
+                    document.getElementById('all-password').focus();
+                });
 
-            document.getElementById('all-cancel').addEventListener('click', () => {
-                document.getElementById('see-all-btn').style.display = '';
-                document.getElementById('see-all-form').style.display = 'none';
-                document.getElementById('all-password').value = '';
-                document.getElementById('see-all-error').textContent = '';
-            });
+                document.getElementById('all-cancel').addEventListener('click', () => {
+                    document.getElementById('see-all-btn').style.display = '';
+                    document.getElementById('see-all-form').style.display = 'none';
+                    document.getElementById('all-password').value = '';
+                    document.getElementById('see-all-error').textContent = '';
+                });
 
-            document.getElementById('all-submit').addEventListener('click', submitAllPassword);
-            document.getElementById('all-password').addEventListener('keydown', e => {
-                if (e.key === 'Enter') submitAllPassword();
-            });
+                document.getElementById('all-submit').addEventListener('click', submitAllPassword);
+                document.getElementById('all-password').addEventListener('keydown', e => {
+                    if (e.key === 'Enter') submitAllPassword();
+                });
+            }
         }
     }
 
@@ -290,6 +316,8 @@
                 // map resize/zoom, otherwise Leaflet measures a short container.
                 input.blur();
                 await new Promise(r => setTimeout(r, 450));
+                // Force iOS visual-viewport back to y=0 now that keyboard is gone
+                if (typeof window.remeasureMap === 'function') window.remeasureMap();
                 if (typeof window.unlockAllAccess === 'function') {
                     await window.unlockAllAccess();
                 }
@@ -356,7 +384,13 @@
             // After transition, remove from compositing stack so iOS doesn't
             // invalidate other position:fixed elements
             if (isMobile()) {
-                closeTimer = setTimeout(() => { sidebar.style.display = 'none'; }, 350);
+                closeTimer = setTimeout(() => {
+                    sidebar.style.display = 'none';
+                    if (typeof window.remeasureMap === 'function') window.remeasureMap();
+                    if (typeof window.repaintFixedControls === 'function') {
+                        requestAnimationFrame(() => requestAnimationFrame(window.repaintFixedControls));
+                    }
+                }, 350);
             }
         }
 
@@ -365,9 +399,9 @@
             if (e.propertyName === 'left' && !sidebar.classList.contains('open') && isMobile()) {
                 if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
                 sidebar.style.display = 'none';
-                // Force-repaint fixed controls in case iOS dropped them
+                if (typeof window.remeasureMap === 'function') window.remeasureMap();
                 if (typeof window.repaintFixedControls === 'function') {
-                    requestAnimationFrame(window.repaintFixedControls);
+                    requestAnimationFrame(() => requestAnimationFrame(window.repaintFixedControls));
                 }
             }
         });
@@ -378,6 +412,10 @@
         });
 
         overlay.addEventListener('click', closeSidebar);
+
+        // Expose so renderSeeAllSection can close the sidebar before opening
+        // the body-level modal (prevents iOS keyboard-in-fixed-element bug)
+        window.closeMobileSidebar = closeSidebar;
     }
 
     // Initialize on DOM ready

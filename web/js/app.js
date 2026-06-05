@@ -722,16 +722,30 @@ function updateTripInfo() {
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
 
-    const countryText = uniqueCountries.size > 0 ? ` · ${uniqueCountries.size} countries` : '';
     document.getElementById('photo-count').textContent =
-        `${totalPhotos.toLocaleString()} photos${countryText}`;
+        `${totalPhotos.toLocaleString()} photos`;
 
+    const PENDING_COUNTRIES = [
+        'Albania','Belgium','Bosnia','Croatia',
+        'Ireland','Luxembourg','Montenegro','Netherlands','Slovakia','Tunisia',
+    ];
+    const TOTAL_COUNTRIES = 55;
+
+    const sorted = [...uniqueCountries].map(countryName).sort();
+    const onMap = uniqueCountries.size;
+    const pending = PENDING_COUNTRIES.length;
+
+    const summaryEl = document.getElementById('country-summary');
     const countryListEl = document.getElementById('country-list');
-    if (countryListEl) {
-        countryListEl.textContent = uniqueCountries.size > 0
-            ? [...uniqueCountries].map(countryName).sort().join(', ')
-            : '';
-    }
+    const availLabelEl = document.getElementById('country-available-label');
+    const pendingLabelEl = document.getElementById('country-pending-label');
+    const pendingListEl = document.getElementById('country-pending-list');
+
+    if (summaryEl) summaryEl.textContent = `${TOTAL_COUNTRIES} countries visited`;
+    if (availLabelEl) availLabelEl.textContent = `${onMap} on map`;
+    if (countryListEl) countryListEl.textContent = sorted.join(', ');
+    if (pendingLabelEl) pendingLabelEl.textContent = `${pending} pending`;
+    if (pendingListEl) pendingListEl.textContent = PENDING_COUNTRIES.join(', ');
 }
 
 /**

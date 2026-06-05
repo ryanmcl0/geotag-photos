@@ -159,7 +159,8 @@ GENERIC_RAW_DIRS = {
 # Camera-card dumps and backup folders that aren't real locations
 # (e.g. "100MSDCF", "100CANON", "4", "Camera Backup", "Card Dump").
 _GENERIC_DIR_RE = re.compile(
-    r'^\d+$|^\d+(msdcf|canon|nikon|olymp|_pana|nz\d*)$|backup|^ryan cam|sd card',
+    r'^\d+$|^\d+(msdcf|canon|nikon|olymp|_pana|nz\d*)$|backup|^ryan cam|sd card'
+    r'|^edits?\s*\d+$',  # "Edits1", "Edit 2" etc. — numbered edit subfolders, not locations
     re.I,
 )
 

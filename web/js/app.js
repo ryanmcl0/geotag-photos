@@ -2,6 +2,13 @@
  * Travel Photography Map - Main Application
  */
 
+const CUSTOM_COUNTRY_NAMES = { SCT: 'Scotland', WAL: 'Wales', ENG: 'England' };
+const _intlNames = new Intl.DisplayNames(['en'], { type: 'region' });
+function countryName(cc) {
+    if (CUSTOM_COUNTRY_NAMES[cc]) return CUSTOM_COUNTRY_NAMES[cc];
+    try { return _intlNames.of(cc); } catch { return cc; }
+}
+
 // Configuration
 const CONFIG = {
     // Map settings
@@ -40,6 +47,7 @@ function checkAllAccess() {
 
 const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
 let activeRouteFilter = 'all'; // 'all' | 'gpx'
+let activeCountryFilter = null; // null = all countries, Set<string> = filter by country codes
 
 function loadHiddenTripIds() {
     try {
@@ -63,6 +71,7 @@ async function init() {
     await loadTripData();
     initLightbox();
     initYearFilter();
+    initCountryFilter();
     initRouteFilter();
     initMobileControls();
 }
@@ -80,9 +89,30 @@ function tripMatchesRouteFilter(trip) {
     return Boolean(layer && layer.hasGpx);
 }
 
+function visibleMarkersForTrip(trip) {
+    const layer = tripLayers[trip.id];
+    if (!layer || !layer.markers._allMarkers) return [];
+    return layer.markers._allMarkers.filter(markerMatchesCountryFilter);
+}
+
+function tripMatchesCountryFilter(trip) {
+    if (!activeCountryFilter) return true;
+    const layer = tripLayers[trip.id];
+    const markers = (layer && layer.markers._allMarkers) || [];
+    // Per-cluster match: show the trip if any of its clusters is in a selected country.
+    if (markers.some(m => m.country && activeCountryFilter.has(m.country))) return true;
+    // trip.countries (from GPX route) may cover countries with no photos — always check it.
+    if ((trip.countries || []).some(c => activeCountryFilter.has(c))) return true;
+    return false;
+}
+
 function shouldDisplayTrip(trip) {
     const layer = tripLayers[trip.id];
-    return Boolean(layer && layer.visible && tripMatchesYearFilter(trip) && tripMatchesRouteFilter(trip));
+    if (!layer || !layer.visible) return false;
+    if (!tripMatchesRouteFilter(trip)) return false;
+    // Country filter overrides year: if countries are selected, skip year filter entirely
+    if (activeCountryFilter !== null) return tripMatchesCountryFilter(trip);
+    return tripMatchesYearFilter(trip);
 }
 
 function syncVisibleTripLayers({ fit = false } = {}) {
@@ -91,6 +121,7 @@ function syncVisibleTripLayers({ fit = false } = {}) {
         if (!layer) return;
         const show = shouldDisplayTrip(trip);
         if (show) {
+            refreshMarkerGroup(layer.markers); // apply current country filter to markers
             if (!map.hasLayer(layer.route)) layer.route.addTo(map);
             if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
         } else {
@@ -102,6 +133,20 @@ function syncVisibleTripLayers({ fit = false } = {}) {
     updateTripInfo();
     reinitLightbox();
     if (fit) fitMapToBounds();
+}
+
+/**
+ * Shared centered container at the top of the map holding the year + country
+ * dropdowns side by side. Created on demand by whichever filter initialises first.
+ */
+function getTopFilterBar() {
+    let bar = document.querySelector('.map-top-filters');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'map-top-filters';
+        document.getElementById('map').appendChild(bar);
+    }
+    return bar;
 }
 
 function initYearFilter() {
@@ -140,7 +185,7 @@ function initYearFilter() {
             `).join('')}
         </div>
     `;
-    document.getElementById('map').appendChild(wrapper);
+    getTopFilterBar().appendChild(wrapper);
 
     const btn = wrapper.querySelector('#yearFilterBtn');
     const menu = wrapper.querySelector('#yearFilterMenu');
@@ -174,6 +219,144 @@ function setYearFilter(year, wrapper) {
     });
 
     syncVisibleTripLayers({ fit: true });
+}
+
+function initCountryFilter() {
+    rebuildCountryFilter();
+}
+
+/**
+ * (Re)build the country dropdown from the trips currently loaded onto the map.
+ * Rebuilt after unlock/lock so newly available (or removed) countries appear.
+ * The active selection is preserved across rebuilds.
+ */
+function rebuildCountryFilter() {
+    const existing = document.querySelector('.country-filter-wrapper');
+    if (existing) existing.remove();
+
+    const countByCountry = {};
+    allTrips.forEach(t => {
+        (t.countries || []).forEach(cc => {
+            countByCountry[cc] = (countByCountry[cc] || 0) + 1;
+        });
+    });
+
+    const countries = Object.keys(countByCountry)
+        .map(cc => ({
+            code: cc,
+            name: countryName(cc),
+            count: countByCountry[cc]
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (countries.length < 2) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'country-filter-wrapper';
+    wrapper.innerHTML = `
+        <button class="country-filter-btn" id="countryFilterBtn">
+            <span id="countryFilterLabel">All countries</span>
+            <svg class="country-filter-chevron" viewBox="0 0 10 6" width="10" height="6">
+                <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+            </svg>
+        </button>
+        <div class="country-filter-menu" id="countryFilterMenu">
+            <div class="country-filter-actions">
+                <button class="country-filter-action-btn" id="countrySelectAll">Select all</button>
+                <button class="country-filter-action-btn" id="countrySelectNone">Select none</button>
+            </div>
+            <div class="country-filter-divider"></div>
+            <div class="country-filter-options">
+                ${countries.map(c => `
+                    <div class="country-filter-option country-filter-option--active" data-country="${c.code}" title="${c.count} trip${c.count !== 1 ? 's' : ''}">
+                        <span class="country-filter-check">✓</span>
+                        <span class="country-filter-name">${c.name}</span>
+                        <span class="country-filter-count">${c.count}</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+    getTopFilterBar().appendChild(wrapper);
+
+    const btn = wrapper.querySelector('#countryFilterBtn');
+    const menu = wrapper.querySelector('#countryFilterMenu');
+
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        menu.classList.toggle('open');
+    });
+    document.addEventListener('click', () => menu.classList.remove('open'));
+    menu.addEventListener('click', e => e.stopPropagation());
+
+    wrapper.querySelector('#countrySelectAll').addEventListener('click', () => {
+        activeCountryFilter = null;
+        wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+            opt.classList.add('country-filter-option--active');
+            opt.querySelector('.country-filter-check').textContent = '✓';
+        });
+        updateCountryFilterLabel(wrapper, null);
+        syncVisibleTripLayers({ fit: true });
+    });
+
+    wrapper.querySelector('#countrySelectNone').addEventListener('click', () => {
+        activeCountryFilter = new Set();
+        wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+            opt.classList.remove('country-filter-option--active');
+            opt.querySelector('.country-filter-check').textContent = '';
+        });
+        updateCountryFilterLabel(wrapper, activeCountryFilter);
+        syncVisibleTripLayers({ fit: true });
+    });
+
+    wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+            const cc = opt.dataset.country;
+            if (!activeCountryFilter) {
+                activeCountryFilter = new Set(countries.map(c => c.code));
+            }
+            if (activeCountryFilter.has(cc)) {
+                activeCountryFilter.delete(cc);
+                opt.classList.remove('country-filter-option--active');
+                opt.querySelector('.country-filter-check').textContent = '';
+            } else {
+                activeCountryFilter.add(cc);
+                opt.classList.add('country-filter-option--active');
+                opt.querySelector('.country-filter-check').textContent = '✓';
+            }
+            if (activeCountryFilter.size === countries.length) {
+                activeCountryFilter = null;
+            }
+            updateCountryFilterLabel(wrapper, activeCountryFilter);
+            syncVisibleTripLayers({ fit: true });
+        });
+    });
+
+    // Restore the active selection across rebuilds (e.g. after unlock/lock).
+    if (activeCountryFilter) {
+        // Drop any codes no longer present, then normalise a full set back to "all".
+        activeCountryFilter = new Set(
+            [...activeCountryFilter].filter(cc => cc in countByCountry)
+        );
+        if (activeCountryFilter.size === countries.length) activeCountryFilter = null;
+    }
+    wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+        const active = !activeCountryFilter || activeCountryFilter.has(opt.dataset.country);
+        opt.classList.toggle('country-filter-option--active', active);
+        opt.querySelector('.country-filter-check').textContent = active ? '✓' : '';
+    });
+    updateCountryFilterLabel(wrapper, activeCountryFilter);
+}
+
+function updateCountryFilterLabel(wrapper, filter) {
+    const label = wrapper.querySelector('#countryFilterLabel');
+    if (!filter) {
+        label.textContent = 'All countries';
+    } else if (filter.size === 0) {
+        label.textContent = 'No countries';
+    } else {
+        label.textContent = `${filter.size} countr${filter.size === 1 ? 'y' : 'ies'}`;
+    }
 }
 
 function initRouteFilter() {
@@ -400,7 +583,11 @@ async function loadTripData() {
         }
 
         for (const trip of trips) {
-            await loadSingleTrip(trip, basePath);
+            try {
+                await loadSingleTrip(trip, basePath);
+            } catch (e) {
+                console.warn(`Skipped trip ${trip.id}:`, e.message);
+            }
         }
 
         updateTripInfo();
@@ -465,6 +652,7 @@ async function unlockAllAccess() {
         await loadSingleTrip(trip, basePath);
     }
 
+    rebuildCountryFilter();
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
@@ -493,6 +681,7 @@ function lockAllAccess() {
     allTrips = allTrips.filter(t => !nonPublicIds.has(t.id));
     allManifests = allManifests.filter(m => !nonPublicIds.has(m.tripId));
 
+    rebuildCountryFilter();
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
@@ -505,11 +694,19 @@ window.lockAllAccess = lockAllAccess;
  */
 function updateTripInfo() {
     const visibleTrips = allTrips.filter(shouldDisplayTrip);
-    const visibleTripIds = new Set(visibleTrips.map(t => t.id));
-    const visibleManifests = allManifests.filter(m => visibleTripIds.has(m.tripId));
-    const totalPhotos = visibleManifests.reduce((sum, m) => sum + m.photos.length, 0);
-    const uniqueCountries = new Set(visibleTrips.flatMap(t => t.countries || []));
-    const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
+    // Count photos and countries from the markers actually shown, so the totals
+    // stay accurate when a country filter hides part of a multi-country trip.
+    let totalPhotos = 0;
+    const uniqueCountries = new Set();
+    visibleTrips.forEach(trip => {
+        const markers = visibleMarkersForTrip(trip);
+        markers.forEach(m => {
+            totalPhotos += m.photoData.length;
+            if (m.country) uniqueCountries.add(m.country);
+        });
+        // trip.countries (from GPX route) covers countries with no photo clusters.
+        (trip.countries || []).forEach(c => uniqueCountries.add(c));
+    });
     const viewConfig = typeof VIEW_CONFIG !== 'undefined' ? VIEW_CONFIG : { mode: 'all' };
 
     let titleText = '';
@@ -529,16 +726,30 @@ function updateTripInfo() {
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
 
-    const countryText = uniqueCountries.size > 0 ? ` · ${uniqueCountries.size} countries` : '';
     document.getElementById('photo-count').textContent =
-        `${totalPhotos.toLocaleString()} photos${countryText}`;
+        `${totalPhotos.toLocaleString()} photos`;
 
+    const PENDING_COUNTRIES = [
+        'Albania','Belgium','Bosnia','Croatia',
+        'Ireland','Luxembourg','Montenegro','Netherlands','Slovakia','Tunisia',
+    ];
+    const TOTAL_COUNTRIES = 55;
+
+    const sorted = [...uniqueCountries].map(countryName).sort();
+    const onMap = uniqueCountries.size;
+    const pending = PENDING_COUNTRIES.length;
+
+    const summaryEl = document.getElementById('country-summary');
     const countryListEl = document.getElementById('country-list');
-    if (countryListEl) {
-        countryListEl.textContent = uniqueCountries.size > 0
-            ? [...uniqueCountries].map(cc => { try { return countryNames.of(cc); } catch { return cc; } }).sort().join(', ')
-            : '';
-    }
+    const availLabelEl = document.getElementById('country-available-label');
+    const pendingLabelEl = document.getElementById('country-pending-label');
+    const pendingListEl = document.getElementById('country-pending-list');
+
+    if (summaryEl) summaryEl.textContent = `${TOTAL_COUNTRIES} countries visited`;
+    if (availLabelEl) availLabelEl.textContent = `${onMap} on map`;
+    if (countryListEl) countryListEl.textContent = sorted.join(', ');
+    if (pendingLabelEl) pendingLabelEl.textContent = `${pending} pending`;
+    if (pendingListEl) pendingListEl.textContent = PENDING_COUNTRIES.join(', ');
 }
 
 /**
@@ -582,36 +793,64 @@ function buildMarkerLayer(manifest, hasGpx) {
         photoLookup[photo.id] = photo;
     });
 
-    // Clusters are stored in chronological (trip) order, so the first and last
-    // entries are the start and end of the route. Only flag them for GPX trips,
-    // where the route order is meaningful, and only when there's more than one stop.
-    const lastIdx = manifest.clusters.length - 1;
-    const orderedMarkers = [];
-    manifest.clusters.forEach((cluster, idx) => {
+    // Build a marker per cluster. They start unattached to the group — membership
+    // is applied by refreshMarkerGroup(), which honours the active country filter
+    // so multi-country trips only show markers for the selected countries.
+    const allMarkers = manifest.clusters.map(cluster => {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
         const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
-        let endpoint = null;
-        if (hasGpx && lastIdx > 0) {
-            if (idx === 0) endpoint = 'start';
-            else if (idx === lastIdx) endpoint = 'end';
-        }
-        const marker = L.marker([cluster.lat, cluster.lon], {
-            icon: createPhotoIcon(photos.length, thumbnailUrl, endpoint)
-        });
+        const marker = L.marker([cluster.lat, cluster.lon]);
         marker.bindPopup(() => buildMarkerPopup(marker));
         marker.photoData = photos;
         marker.locationName = cluster.location;
+        marker.country = cluster.country || null;
         marker._clusterGroup = group;
         marker._pendingPage = 0;
-        group.addLayer(marker);
-        orderedMarkers.push(marker);
+        marker._photoCount = photos.length;
+        marker._thumbnailUrl = thumbnailUrl;
+        return marker;
     });
-    // Wire each marker to its siblings so cluster popups can page across clusters.
-    orderedMarkers.forEach((m, i) => {
-        m._sibs = orderedMarkers;
-        m._sibIdx = i;
-    });
+    group._allMarkers = allMarkers;
+    group._hasGpx = hasGpx;
+    refreshMarkerGroup(group);
     return group;
+}
+
+/**
+ * Does this marker's cluster belong to a currently-selected country?
+ * Clusters without a country code (older data) are always kept so nothing
+ * silently disappears.
+ */
+function markerMatchesCountryFilter(marker) {
+    if (!activeCountryFilter) return true;
+    if (!marker.country) return true;
+    return activeCountryFilter.has(marker.country);
+}
+
+/**
+ * Rebuild a cluster group's membership from its full marker set, keeping only
+ * markers that pass the country filter. Endpoint rings (start/end) and the
+ * sibling chain used for cross-cluster paging are recomputed over the visible
+ * subset so they stay correct after filtering.
+ */
+function refreshMarkerGroup(group) {
+    const all = group._allMarkers || [];
+    const visible = all.filter(markerMatchesCountryFilter);
+    group.clearLayers();
+    const lastIdx = visible.length - 1;
+    visible.forEach((marker, i) => {
+        // Only flag start/end for GPX trips where route order is meaningful,
+        // and only when there's more than one stop.
+        let endpoint = null;
+        if (group._hasGpx && lastIdx > 0) {
+            if (i === 0) endpoint = 'start';
+            else if (i === lastIdx) endpoint = 'end';
+        }
+        marker.setIcon(createPhotoIcon(marker._photoCount, marker._thumbnailUrl, endpoint));
+        marker._sibs = visible;
+        marker._sibIdx = i;
+    });
+    group.addLayers(visible);
 }
 
 /**
@@ -1007,7 +1246,7 @@ async function mobileSubmitPassword() {
 
 function repaintFixedControls() {
     const ids = ['sidebar-toggle', 'mobile-see-all-trigger'];
-    const selectors = ['.map-style-control', '.year-filter-wrapper', '.route-filter-wrapper'];
+    const selectors = ['.map-style-control', '.map-top-filters', '.route-filter-wrapper'];
     const els = [
         ...ids.map(id => document.getElementById(id)),
         ...selectors.map(s => document.querySelector(s)),
@@ -1054,10 +1293,19 @@ function initLightbox() {
 function rebuildLightbox() {
     pswpItems = [];
     photoIndexMap = {};
-    const visibleTripIds = new Set(allTrips.filter(shouldDisplayTrip).map(t => t.id));
+    // Per visible trip, the set of photo ids whose cluster passes the country
+    // filter — so the gallery never pages into hidden-country photos.
+    const visiblePhotoIds = {};
+    allTrips.filter(shouldDisplayTrip).forEach(trip => {
+        const ids = new Set();
+        visibleMarkersForTrip(trip).forEach(m => m.photoData.forEach(p => ids.add(p.id)));
+        visiblePhotoIds[trip.id] = ids;
+    });
     allManifests.forEach(manifest => {
-        if (!visibleTripIds.has(manifest.tripId)) return;
+        const ids = visiblePhotoIds[manifest.tripId];
+        if (!ids) return;
         manifest.photos.forEach(photo => {
+            if (!ids.has(photo.id)) return;
             // Key by trip + id: photo ids (file stems like DJI_0099) collide across trips.
             photoIndexMap[`${manifest.tripId}::${photo.id}`] = pswpItems.length;
             const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);

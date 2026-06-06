@@ -140,8 +140,19 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--exclude-raws-in', opts['exclude_raws']]
     if opts.get('fallback_location'):
         cmd += ['--fallback-location', opts['fallback_location']]
+    if opts.get('untimed_to_fallback'):
+        cmd += ['--untimed-to-fallback']
+    if opts.get('untimed_label'):
+        cmd += ['--untimed-label', opts['untimed_label']]
     if opts.get('cluster_radius'):
         cmd += ['--cluster-radius', str(opts['cluster_radius'])]
+    if opts.get('burst_time_window') is not None:
+        cmd += ['--burst-time-window', str(opts['burst_time_window'])]
+    if opts.get('burst_max_spread') is not None:
+        cmd += ['--burst-max-spread', str(opts['burst_max_spread'])]
+    if opts.get('geotag_overrides'):
+        import json as _json
+        cmd += ['--geotag-overrides', _json.dumps(opts['geotag_overrides'])]
     if trip.get('kmz'):
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):
@@ -162,6 +173,16 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--only-edits-dirs']
     if opts.get('max_interp_gap_hours') is not None:
         cmd += ['--max-interp-gap-hours', str(opts['max_interp_gap_hours'])]
+    if opts.get('max_gap_interp_km') is not None:
+        cmd += ['--max-gap-interp-km', str(opts['max_gap_interp_km'])]
+    if opts.get('phone_gps'):
+        cmd += ['--phone-gps']
+        if opts.get('phone_gps_dir'):
+            cmd += ['--phone-gps-dir', opts['phone_gps_dir']]
+        if opts.get('phone_gps_threshold_min') is not None:
+            cmd += ['--phone-gps-threshold-min', str(opts['phone_gps_threshold_min'])]
+        if opts.get('phone_gps_offset_hours') is not None:
+            cmd += ['--phone-gps-offset-hours', str(opts['phone_gps_offset_hours'])]
     if opts.get('split_offroute_private'):
         cmd += ['--split-offroute-private']
     if opts.get('private_cluster_radius'):
@@ -170,6 +191,11 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--gpx-route-subdir', opts['gpx_route_subdir']]
     if opts.get('route_snap_public_hours') is not None:
         cmd += ['--route-snap-public-hours', str(opts['route_snap_public_hours'])]
+    if opts.get('private_locations'):
+        locs = opts['private_locations']
+        if isinstance(locs, list):
+            locs = ';'.join(locs)
+        cmd += ['--private-locations', locs]
     if opts.get('no_fake_route'):
         cmd += ['--no-fake-route']
     if opts.get('strict_building_distance'):

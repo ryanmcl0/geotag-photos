@@ -66,6 +66,16 @@ def find_orphans():
     return sorted((indexed | web | hosted) - expected), expected
 
 
+def _r2_trip_prefixes(s3, r2_bucket):
+    """Top-level '<slug>/' prefixes present in the R2 bucket (one LIST with Delimiter,
+    not a full object enumeration)."""
+    prefixes = set()
+    for page in s3.get_paginator('list_objects_v2').paginate(Bucket=r2_bucket, Delimiter='/'):
+        for cp in page.get('CommonPrefixes', []):
+            prefixes.add(cp['Prefix'].rstrip('/'))
+    return prefixes
+
+
 def prune_removed_trips(*, s3=None, r2_bucket=None, dry_run=False, force=False, echo=print):
     """Remove orphaned trips. Pass s3 (a boto3 R2 client) + r2_bucket to also clean R2;
     omit them for a local-only prune. echo lets callers route output (print / click.echo).
@@ -74,6 +84,14 @@ def prune_removed_trips(*, s3=None, r2_bucket=None, dry_run=False, force=False, 
     if orphans is None:
         echo("    ⚠️  Can't read config/trips.json — skipping prune")
         return []
+
+    # When R2 is available, also reconcile against the bucket itself: a trip whose local
+    # files are already gone but still has objects on R2 (e.g. removed in an earlier run
+    # before the local dirs were cleaned) leaves no local trace for find_orphans to catch.
+    if s3 is not None and r2_bucket:
+        r2_orphans = _r2_trip_prefixes(s3, r2_bucket) - expected
+        orphans = sorted(set(orphans) | r2_orphans)
+
     if not orphans:
         echo("    ✓ No removed trips to prune")
         return []

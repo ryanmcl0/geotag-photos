@@ -906,12 +906,114 @@ def cluster_anchor_point(cluster_photos: list[dict]) -> tuple[float, float]:
     return anchor['lat'], anchor['lon']
 
 
-def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
+def detect_stationary_bursts(photos: list[dict],
+                             burst_time_window_s: float = 5400,
+                             burst_max_spread_m: float = 500) -> list[dict]:
+    """
+    Pre-pass before spatial clustering: detect periods where the photographer was
+    stationary (or moving slowly within a small area) and collapse all their GPS
+    coordinates to the median of the burst.
+
+    Problem this solves: GPX interpolation assigns each photo a slightly different
+    coordinate based on its exact timestamp, even if the photographer spent an hour
+    at one bridge. This spreads those photos across ~500m of track, causing the
+    spatial clusterer to split them into multiple clusters despite them being one
+    location.
+
+    Algorithm: greedy forward sweep over timestamp-sorted photos. For each unassigned
+    photo, take all photos within the next burst_time_window_s seconds. If the ENTIRE
+    group's max spread from the median is <= burst_max_spread_m, it's a stationary
+    burst — collapse all to the median and advance past them. If the group is too
+    spread out (driving, different locations), leave each photo at its own coordinate.
+
+    Critically, the spread check is on the WHOLE GROUP, not pairwise — this prevents
+    chaining (A close to B, B close to C, but A far from C) from merging distinct
+    locations into one cluster.
+
+    Only affects gpx/gpx_nearest_time placed photos; exif/building/phone placements
+    are already at real coordinates and don't need correction.
+    """
+    if not photos:
+        return photos
+
+    GPX_SOURCES = ('gpx', 'gpx_nearest_time')
+    photos_out = [dict(p) for p in photos]
+    id_to_idx = {p['id']: i for i, p in enumerate(photos_out)}
+
+    def _ts(p):
+        try:
+            return datetime.fromisoformat(p['timestamp'].replace('Z', '+00:00')).timestamp()
+        except Exception:
+            return 0.0
+
+    candidates = sorted(
+        [p for p in photos_out if p.get('gps_source') in GPX_SOURCES],
+        key=_ts
+    )
+    if len(candidates) < 3:
+        return photos_out
+
+    times = [_ts(p) for p in candidates]
+    assigned = set()
+    i = 0
+
+    while i < len(candidates):
+        if candidates[i]['id'] in assigned:
+            i += 1
+            continue
+
+        # Grow the window greedily: add photos one at a time (within the time limit) and
+        # stop as soon as adding the next photo would push the group spread over the limit.
+        # This correctly handles the case where the time window contains multiple distinct
+        # locations — we collapse the compact prefix instead of rejecting the whole window.
+        window = [candidates[i]]
+        j = i + 1
+        while j < len(candidates) and times[j] - times[i] <= burst_time_window_s:
+            candidate_window = window + [candidates[j]]
+            clats = sorted(p['lat'] for p in candidate_window)
+            clons = sorted(p['lon'] for p in candidate_window)
+            cmed_lat = clats[len(clats) // 2]
+            cmed_lon = clons[len(clons) // 2]
+            if max(haversine_distance(cmed_lat, cmed_lon, p['lat'], p['lon'])
+                   for p in candidate_window) > burst_max_spread_m:
+                break
+            window = candidate_window
+            j += 1
+
+        if len(window) < 3:
+            i += 1
+            continue
+
+        lats = sorted(p['lat'] for p in window)
+        lons = sorted(p['lon'] for p in window)
+        med_lat = lats[len(lats) // 2]
+        med_lon = lons[len(lons) // 2]
+        for p in window:
+            assigned.add(p['id'])
+            photos_out[id_to_idx[p['id']]]['lat'] = med_lat
+            photos_out[id_to_idx[p['id']]]['lon'] = med_lon
+        i = j
+
+    return photos_out
+
+
+def cluster_photos(photos: list[dict], radius: float,
+                   burst_time_window_s: float = 5400,
+                   burst_max_spread_m: float = 500) -> list[dict]:
     """
     Group photos into clusters based on proximity.
+
+    Applies stationary-burst detection first (see detect_stationary_bursts) so that
+    photos taken at the same location over a prolonged period (e.g. 1hr at a bridge)
+    are collapsed to one point before spatial clustering — preventing GPX interpolation
+    from scattering them across multiple clusters.
     """
     if not photos:
         return []
+
+    # Pre-pass: collapse stationary bursts so GPX-interpolated positions don't
+    # scatter same-location photos across multiple spatial clusters.
+    photos = detect_stationary_bursts(photos, burst_time_window_s, burst_max_spread_m)
 
     # Sort by timestamp
     photos_sorted = sorted(photos, key=lambda p: p['timestamp'])
@@ -919,7 +1021,7 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
     clusters = []
     used = set()
 
-    for i, photo in enumerate(photos_sorted):
+    for photo in photos_sorted:
         if photo['id'] in used:
             continue
 
@@ -928,7 +1030,7 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
         used.add(photo['id'])
 
         # Find nearby photos
-        for j, other in enumerate(photos_sorted):
+        for other in photos_sorted:
             if other['id'] in used:
                 continue
 
@@ -1331,7 +1433,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
 
 def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext,
                        cluster_radius, format_name, quality, display_longest, thumbnail_longest,
-                       base_name, photos_path):
+                       base_name, photos_path,
+                       burst_time_window: float = 90, burst_max_spread: float = 500):
     """
     Write off-route photos as a separate '<slug>-private' trip. Moves their
     compressed images out of the public hosted dir into the private one (so the
@@ -1366,7 +1469,8 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
             if src.exists():
                 shutil.move(str(src), str(dst))
 
-    clusters = cluster_photos(off_photos, cluster_radius)
+    clusters = cluster_photos(off_photos, cluster_radius,
+                              burst_time_window * 60, burst_max_spread)
     countries = get_countries_from_photos(off_photos)
     ts = sorted(p['timestamp'] for p in off_photos)
     dates = {'start': ts[0][:10], 'end': ts[-1][:10]}
@@ -1477,6 +1581,13 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--nearest-photo-max-hours', default=6.0, type=float,
               help='Max time gap (h) when using nearest-by-time fallback. Beyond this, fall back to centroid (default: 6)')
 @click.option('--cluster-radius', default=DEFAULT_CLUSTER_RADIUS, help='Clustering radius in meters')
+@click.option('--burst-time-window', default=90.0, type=float,
+              help='Stationary-burst detection: time window in minutes. Photos within this window '
+                   'AND within --burst-max-spread are collapsed to one point before clustering, '
+                   'so e.g. 1hr at a bridge forms one cluster not many. (default: 90)')
+@click.option('--burst-max-spread', default=500.0, type=float,
+              help='Stationary-burst detection: max spatial spread in metres within the time window '
+                   'for photos to be considered the same location. (default: 500)')
 @click.option('--raws', type=click.Path(exists=True), help='Path to original DNG files for DJI drone GPS data')
 @click.option('--format', 'format_name', default=DEFAULT_FORMAT,
               type=click.Choice(['webp', 'jpeg'], case_sensitive=False),
@@ -1527,7 +1638,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  fallback_location: Optional[str], untimed_to_fallback: bool,
                  untimed_label: Optional[str],
                  nearest_photo_max_hours: float,
-                 cluster_radius: float, raws: str,
+                 cluster_radius: float, burst_time_window: float, burst_max_spread: float,
+                 raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
                  fake_route_locations: Optional[str], no_fake_route: bool,
                  strict_building_distance: bool, kmz_path_str: Optional[str],
@@ -2504,7 +2616,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     # Generate clusters (after all position refinements)
     click.echo("\nGenerating clusters...")
-    clusters = cluster_photos(processed_photos, cluster_radius)
+    clusters = cluster_photos(processed_photos, cluster_radius,
+                              burst_time_window * 60, burst_max_spread)
     click.echo(f"Created {len(clusters)} clusters")
 
     # Detect countries
@@ -2605,7 +2718,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             result = write_private_trip(
                 off_route_photos, output_path, hosted_photos_path, image_ext,
                 private_cluster_radius, format_name, quality, display_longest, thumbnail_longest,
-                name, photos_path)
+                name, photos_path,
+                burst_time_window=burst_time_window, burst_max_spread=burst_max_spread)
             if result:
                 ps, pn_photos, pn_clusters, pcc = result
                 click.echo(f"Wrote private split: {ps} "

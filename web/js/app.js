@@ -149,6 +149,15 @@ function getTopFilterBar() {
     return bar;
 }
 
+/**
+ * Close any open filter dropdown except `keep`, so the year and country menus
+ * never overlap each other when one is opened while the other is showing.
+ */
+function closeOtherFilterMenus(keep) {
+    document.querySelectorAll('.year-filter-menu.open, .country-filter-menu.open')
+        .forEach(m => { if (m !== keep) m.classList.remove('open'); });
+}
+
 function initYearFilter() {
     const years = [...new Set(allTrips.map(t => {
         const m = (t.name || '').match(/^(\d{4})/);
@@ -197,6 +206,7 @@ function initYearFilter() {
 
     btn.addEventListener('click', e => {
         e.stopPropagation();
+        closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
     });
     document.addEventListener('click', () => menu.classList.remove('open'));
@@ -293,6 +303,7 @@ function rebuildCountryFilter() {
 
     btn.addEventListener('click', e => {
         e.stopPropagation();
+        closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
     });
     document.addEventListener('click', () => menu.classList.remove('open'));

@@ -1405,6 +1405,52 @@ function addDoubleTapDragZoom(gallery, pswpEl) {
 }
 
 /**
+ * Trackpad / mouse-wheel zoom for desktop.
+ *
+ * On macOS a trackpad pinch arrives as a `wheel` event with ctrlKey=true; a
+ * regular two-finger scroll arrives as a plain wheel event. PhotoSwipe v4 has
+ * no desktop wheel-zoom, so by default the browser zooms the whole page and
+ * PhotoSwipe treats the scroll as a close gesture. We intercept at document
+ * level with capture:true (before PhotoSwipe's own listeners), preventDefault
+ * to stop the page zoom, and zoom the current slide centered on the cursor.
+ */
+function addWheelZoom(gallery, pswpEl) {
+    const MAX_ZOOM = 3;
+    // We can't read the live zoom back reliably between rapid wheel events
+    // (currItem.currZoomLevel stays at the fit level), so accumulate the target
+    // ourselves. Lazily seed from the actual zoom and reset on slide changes.
+    let targetZoom = null;
+
+    function minZoom() {
+        return (gallery.currItem && gallery.currItem.initialZoomLevel) || 0.1;
+    }
+
+    function onWheel(e) {
+        if (!pswpEl.classList.contains('pswp--open')) return;
+        // Always stop the browser page zoom and PhotoSwipe's close-on-scroll.
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (targetZoom === null) targetZoom = gallery.getZoomLevel();
+        // Trackpad pinch (ctrlKey) gives small deltas; mouse wheel gives large
+        // ones. Normalize so both feel reasonable.
+        const factor = e.ctrlKey ? 0.01 : 0.0025;
+        targetZoom = Math.min(MAX_ZOOM,
+            Math.max(minZoom(), targetZoom * Math.exp(-e.deltaY * factor)));
+        gallery.zoomTo(targetZoom, { x: e.clientX, y: e.clientY }, 0);
+    }
+
+    // Reset the accumulator whenever the displayed slide changes so the next
+    // wheel event re-seeds from that slide's real (fit) zoom.
+    function resetTarget() { targetZoom = null; }
+
+    document.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    gallery.listen('afterChange', resetTarget);
+    gallery.listen('destroy', () => {
+        document.removeEventListener('wheel', onWheel, { capture: true });
+    });
+}
+
+/**
  * Open PhotoSwipe gallery at a specific photo
  */
 function openGallery(photo) {
@@ -1445,6 +1491,7 @@ function openGallery(photo) {
 
     gallery.init();
     addDoubleTapDragZoom(gallery, pswpEl);
+    addWheelZoom(gallery, pswpEl);
 }
 
 function reinitLightbox() {

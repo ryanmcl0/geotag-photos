@@ -1596,6 +1596,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--route-snap-public-hours', default=3.0, type=float,
               help='In --split-offroute-private, route-snapped (gpx_nearest_time) photos within this '
                    'many hours of the track count as public/on-route (default: 3)')
+@click.option('--private-locations', default=None,
+              help='Semicolon-separated location/building folder names whose photos are moved to the '
+                   '"<slug>-private" trip (behind the "See All" gate), regardless of route. Reuses '
+                   'the private-split machinery; works with or without --split-offroute-private.')
 @click.option('--fallback-location', default=None, metavar='LAT,LON',
               help='Lat,lon to pin photos with no GPS that are outside the GPX window. '
                    'Defaults to nearest-by-time placed photo (or GPX centroid if none in range). '
@@ -1667,6 +1671,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  only_edits_dirs: bool,
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
+                 private_locations: Optional[str],
                  fallback_location: Optional[str], untimed_to_fallback: bool,
                  untimed_label: Optional[str],
                  nearest_photo_max_hours: float,
@@ -1708,7 +1713,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     # Reprocessing a split trip: pull any previously-quarantined private images
     # back into the public hosted dir so the split re-partitions cleanly (idempotent).
-    if split_offroute_private and not dry_run:
+    if (split_offroute_private or private_locations) and not dry_run:
         prev_priv = hosted_root / (trip_id + '-private')
         if prev_priv.exists():
             hosted_photos_path.mkdir(parents=True, exist_ok=True)
@@ -2619,8 +2624,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Public/on-route = GPX-interpolated, OR in the --gpx-route-subdir, OR snapped
     # to the track within --route-snap-public-hours. Everything else is off-route.
     off_route_photos = []
-    if split_offroute_private and not no_gpx_mode:
+    private_locs = {s.strip() for s in (private_locations or '').split(';') if s.strip()}
+    if (split_offroute_private or private_locs) and not no_gpx_mode:
         def _is_public(p):
+            # explicit private locations override everything
+            if private_locs and p.get('building') in private_locs:
+                return False
+            # without route-based splitting, everything else is public
+            if not split_offroute_private:
+                return True
             if p.get('on_route'):
                 return True
             if p['gps_source'] == 'gpx':
@@ -2632,8 +2644,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         public_photos = [p for p in processed_photos if _is_public(p)]
         off_route_photos = [p for p in processed_photos if not _is_public(p)]
         processed_photos = public_photos
-        click.echo(f"\nSplit: {len(processed_photos)} on-route (public), "
-                   f"{len(off_route_photos)} off-route (private)")
+        click.echo(f"\nSplit: {len(processed_photos)} public, "
+                   f"{len(off_route_photos)} private")
         from collections import Counter as _Counter
         gps_source_counts = dict(_Counter(p['gps_source'] for p in processed_photos))
 
@@ -2710,7 +2722,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             # Delete hosted images for sources no longer in the manifest (deleted edits).
             # Skipped for split trips: off-route images move to a separate -private dir,
             # so the main manifest doesn't list them and they'd be wrongly culled.
-            if not split_offroute_private:
+            if not split_offroute_private and not private_locations:
                 kept_ids = {p['id'] for p in processed_photos}
                 removed = 0
                 for sub in ('thumbnails', 'display'):
@@ -2758,8 +2770,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         click.echo(f"Generated year page: {year_page}")
         click.echo(f"Generated trip page: {trip_page}")
 
-        # Write the off-route photos as a separate private trip
-        if split_offroute_private and off_route_photos:
+        # Write the off-route / private-location photos as a separate private trip
+        if off_route_photos:
             result = write_private_trip(
                 off_route_photos, output_path, hosted_photos_path, image_ext,
                 private_cluster_radius, format_name, quality, display_longest, thumbnail_longest,

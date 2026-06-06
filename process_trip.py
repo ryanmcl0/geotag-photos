@@ -38,11 +38,11 @@ DEFAULT_CLUSTER_RADIUS = 1000  # meters — merges shots from the same village/v
 # (snow texture, rock edges) sharp; lower qualities over-smooth.
 DEFAULT_THUMBNAIL_LONGEST = 400
 DEFAULT_DISPLAY_LONGEST = 2160
-DEFAULT_FORMAT = 'webp'  # 'webp' or 'jpeg'
-DEFAULT_QUALITY = 90
+DEFAULT_FORMAT = 'webp'  # 'webp' or 'jpeg' (AVIF supported but rejected — see docs/compression-options.md)
+DEFAULT_QUALITY = 85     # q85: ~visually transparent vs q90, ~-28% size. Chosen 2026-06 to fit <10GB R2.
 
-FORMAT_TO_EXT = {'jpeg': 'jpg', 'webp': 'webp'}
-FORMAT_TO_PIL = {'jpeg': 'JPEG', 'webp': 'WEBP'}
+FORMAT_TO_EXT = {'jpeg': 'jpg', 'webp': 'webp', 'avif': 'avif'}
+FORMAT_TO_PIL = {'jpeg': 'JPEG', 'webp': 'WEBP', 'avif': 'AVIF'}
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 DEFAULT_HOSTED_PHOTOS_DIR = PROJECT_ROOT / 'hosted-photos'
@@ -795,6 +795,8 @@ def _save_options(format_name: str, quality: int) -> dict:
         return {'quality': quality, 'optimize': True, 'progressive': True}
     if format_name == 'webp':
         return {'quality': quality, 'method': 6}
+    if format_name == 'avif':
+        return {'quality': quality, 'speed': 6}
     raise ValueError(f"Unsupported format: {format_name}")
 
 

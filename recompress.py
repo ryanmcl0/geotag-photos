@@ -144,7 +144,7 @@ def recompress_trip(trip_dir: Path, *, photos_override: Optional[Path],
 @click.option('--hosted-photos-dir', default=None, type=click.Path(path_type=Path),
               help=f'Root for compressed image storage (default: <project>/hosted-photos)')
 @click.option('--format', 'format_name', default=DEFAULT_FORMAT,
-              type=click.Choice(['webp', 'jpeg'], case_sensitive=False))
+              type=click.Choice(['webp', 'jpeg', 'avif'], case_sensitive=False))
 @click.option('--quality', default=DEFAULT_QUALITY, type=click.IntRange(1, 100))
 @click.option('--display-longest', default=DEFAULT_DISPLAY_LONGEST, type=int)
 @click.option('--thumbnail-longest', default=DEFAULT_THUMBNAIL_LONGEST, type=int)

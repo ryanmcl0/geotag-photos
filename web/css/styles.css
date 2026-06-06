@@ -1015,8 +1015,18 @@ details[open] .country-summary::after {
     padding: 6px;
     min-width: 180px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    max-height: 320px;
+    max-height: min(70vh, 480px);
     overflow-y: auto;
+    /* Always show a scrollbar so it's obvious the list scrolls (macOS hides
+       overlay scrollbars by default, which made earlier years look missing). */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.3) transparent;
+}
+
+.year-filter-menu::-webkit-scrollbar { width: 8px; }
+.year-filter-menu::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.3);
+    border-radius: 4px;
 }
 
 .year-filter-menu.open { display: block; }

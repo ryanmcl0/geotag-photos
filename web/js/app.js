@@ -190,6 +190,11 @@ function initYearFilter() {
     const btn = wrapper.querySelector('#yearFilterBtn');
     const menu = wrapper.querySelector('#yearFilterMenu');
 
+    // The menu overlays the Leaflet map; without this, wheel-scrolling the menu
+    // zooms the map underneath instead of scrolling the (overflowing) list.
+    L.DomEvent.disableScrollPropagation(menu);
+    L.DomEvent.disableClickPropagation(menu);
+
     btn.addEventListener('click', e => {
         e.stopPropagation();
         menu.classList.toggle('open');
@@ -281,6 +286,10 @@ function rebuildCountryFilter() {
 
     const btn = wrapper.querySelector('#countryFilterBtn');
     const menu = wrapper.querySelector('#countryFilterMenu');
+
+    // Stop wheel/click over the menu from reaching the Leaflet map (zoom/pan).
+    L.DomEvent.disableScrollPropagation(menu);
+    L.DomEvent.disableClickPropagation(menu);
 
     btn.addEventListener('click', e => {
         e.stopPropagation();

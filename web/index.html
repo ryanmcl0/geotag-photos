@@ -35,7 +35,15 @@
                 <h1 id="trip-name">Loading...</h1>
                 <p id="trip-dates"></p>
                 <p id="photo-count"></p>
-                <p id="country-list" class="country-list"></p>
+                <details id="country-details" class="country-details">
+                    <summary id="country-summary" class="country-summary"></summary>
+                    <div class="country-breakdown">
+                        <p class="country-section-label" id="country-available-label"></p>
+                        <p id="country-list" class="country-list"></p>
+                        <p class="country-section-label country-section-label--pending" id="country-pending-label"></p>
+                        <p id="country-pending-list" class="country-list country-list--pending"></p>
+                    </div>
+                </details>
             </div>
             <ul class="nav-list" id="nav-list">
                 <!-- Populated by sidebar.js -->

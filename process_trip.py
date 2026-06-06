@@ -38,11 +38,11 @@ DEFAULT_CLUSTER_RADIUS = 1000  # meters — merges shots from the same village/v
 # (snow texture, rock edges) sharp; lower qualities over-smooth.
 DEFAULT_THUMBNAIL_LONGEST = 400
 DEFAULT_DISPLAY_LONGEST = 2160
-DEFAULT_FORMAT = 'webp'  # 'webp' or 'jpeg'
-DEFAULT_QUALITY = 90
+DEFAULT_FORMAT = 'webp'  # 'webp' or 'jpeg' (AVIF supported but rejected — see docs/compression-options.md)
+DEFAULT_QUALITY = 85     # q85: ~visually transparent vs q90, ~-28% size. Chosen 2026-06 to fit <10GB R2.
 
-FORMAT_TO_EXT = {'jpeg': 'jpg', 'webp': 'webp'}
-FORMAT_TO_PIL = {'jpeg': 'JPEG', 'webp': 'WEBP'}
+FORMAT_TO_EXT = {'jpeg': 'jpg', 'webp': 'webp', 'avif': 'avif'}
+FORMAT_TO_PIL = {'jpeg': 'JPEG', 'webp': 'WEBP', 'avif': 'AVIF'}
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 DEFAULT_HOSTED_PHOTOS_DIR = PROJECT_ROOT / 'hosted-photos'
@@ -187,6 +187,35 @@ def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
     for comp in reversed(rel.parts[:-1]):  # skip the filename itself
         if not _is_generic_component(comp):
             return comp
+    return None
+
+
+def load_geotag_overrides(raw_overrides: list) -> list:
+    """
+    Parse geotag_overrides from trip config. Each entry has ids_from, ids_to (strings
+    with numeric suffix, e.g. "RM101884"), lat, lon. Returns list of
+    (from_num, to_num, lat, lon) tuples for fast range checks.
+    """
+    result = []
+    for o in (raw_overrides or []):
+        try:
+            from_num = int(''.join(filter(str.isdigit, str(o['ids_from']))))
+            to_num   = int(''.join(filter(str.isdigit, str(o['ids_to']))))
+            result.append((from_num, to_num, float(o['lat']), float(o['lon'])))
+        except (KeyError, ValueError):
+            pass
+    return result
+
+
+def apply_geotag_override(photo_stem: str, overrides: list) -> Optional[dict]:
+    """Return fixed {lat, lon} if photo_stem's numeric ID falls in any override range."""
+    digits = ''.join(filter(str.isdigit, photo_stem))
+    if not digits or not overrides:
+        return None
+    num = int(digits)
+    for from_num, to_num, lat, lon in overrides:
+        if from_num <= num <= to_num:
+            return {'lat': lat, 'lon': lon}
     return None
 
 
@@ -669,15 +698,19 @@ def get_camera_settings(photo_path: Path) -> dict:
 
 def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
                     max_time_delta_seconds: float = 7200,
-                    max_interp_gap_seconds: float = 7200) -> Optional[dict]:
+                    max_interp_gap_seconds: float = 7200,
+                    max_gap_interp_km: float = 2.0) -> Optional[dict]:
     """
     Find GPS coordinates for a photo timestamp by interpolating between trackpoints.
 
     Returns None when:
       - the photo is more than max_time_delta_seconds outside the GPX window, OR
       - the two bracketing trackpoints are more than max_interp_gap_seconds apart
-        in time (recording was paused — interpolating across the gap would draw a
-        straight line through places the photographer never went).
+        in time AND more than max_gap_interp_km apart in space. A long *time* gap
+        where the endpoints are spatially close means recording was paused while
+        staying in one area (e.g. forgot to restart recording at a stop) — safe to
+        interpolate. A gap that is long in BOTH time and distance means the
+        photographer moved an unknown path, so we reject and let the fallback place it.
     In both cases the caller's fallback chain handles placement instead.
     """
     if not trackpoints:
@@ -706,14 +739,23 @@ def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
         if next_time.tzinfo is None:
             next_time = next_time.replace(tzinfo=timezone.utc)
         total_delta = (next_time - prev_time).total_seconds()
-        # Recording gap — don't interpolate across it
+        # Recording gap: reject only if it spans both a long TIME and a real DISTANCE.
+        # If the bracketing points are close together, the photographer stayed put
+        # (just forgot to record) and interpolating between them is accurate.
         if total_delta > max_interp_gap_seconds:
-            return None
+            gap_km = haversine_distance(prev_point['lat'], prev_point['lon'],
+                                        next_point['lat'], next_point['lon']) / 1000.0
+            if gap_km > max_gap_interp_km:
+                return None
         photo_delta = (photo_time - prev_time).total_seconds()
         factor = photo_delta / total_delta if total_delta > 0 else 0
         lat = prev_point['lat'] + factor * (next_point['lat'] - prev_point['lat'])
         lon = prev_point['lon'] + factor * (next_point['lon'] - prev_point['lon'])
-        return {'lat': lat, 'lon': lon}
+        # Report which source the photo was anchored to (the temporally-closer
+        # bracketing point). Phone fixes merged into the track carry src='phone';
+        # GPX points have no src and default to 'gpx'.
+        closer = prev_point if photo_delta <= (total_delta - photo_delta) else next_point
+        return {'lat': lat, 'lon': lon, 'src': closer.get('src', 'gpx')}
 
     # Photo falls outside the GPX window. Only return a point if we're within
     # the tolerance — otherwise we'd pin it to a wildly wrong location.
@@ -725,7 +767,7 @@ def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
         endpoint_time = endpoint_time.replace(tzinfo=timezone.utc)
     if abs((photo_time - endpoint_time).total_seconds()) > max_time_delta_seconds:
         return None
-    return {'lat': endpoint['lat'], 'lon': endpoint['lon']}
+    return {'lat': endpoint['lat'], 'lon': endpoint['lon'], 'src': endpoint.get('src', 'gpx')}
 
 
 def interpolate_gps_clamped(trackpoints: list[dict], photo_time: datetime) -> Optional[dict]:
@@ -795,6 +837,8 @@ def _save_options(format_name: str, quality: int) -> dict:
         return {'quality': quality, 'optimize': True, 'progressive': True}
     if format_name == 'webp':
         return {'quality': quality, 'method': 6}
+    if format_name == 'avif':
+        return {'quality': quality, 'speed': 6}
     raise ValueError(f"Unsupported format: {format_name}")
 
 
@@ -891,12 +935,114 @@ def cluster_anchor_point(cluster_photos: list[dict]) -> tuple[float, float]:
     return anchor['lat'], anchor['lon']
 
 
-def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
+def detect_stationary_bursts(photos: list[dict],
+                             burst_time_window_s: float = 5400,
+                             burst_max_spread_m: float = 500) -> list[dict]:
+    """
+    Pre-pass before spatial clustering: detect periods where the photographer was
+    stationary (or moving slowly within a small area) and collapse all their GPS
+    coordinates to the median of the burst.
+
+    Problem this solves: GPX interpolation assigns each photo a slightly different
+    coordinate based on its exact timestamp, even if the photographer spent an hour
+    at one bridge. This spreads those photos across ~500m of track, causing the
+    spatial clusterer to split them into multiple clusters despite them being one
+    location.
+
+    Algorithm: greedy forward sweep over timestamp-sorted photos. For each unassigned
+    photo, take all photos within the next burst_time_window_s seconds. If the ENTIRE
+    group's max spread from the median is <= burst_max_spread_m, it's a stationary
+    burst — collapse all to the median and advance past them. If the group is too
+    spread out (driving, different locations), leave each photo at its own coordinate.
+
+    Critically, the spread check is on the WHOLE GROUP, not pairwise — this prevents
+    chaining (A close to B, B close to C, but A far from C) from merging distinct
+    locations into one cluster.
+
+    Only affects gpx/gpx_nearest_time placed photos; exif/building/phone placements
+    are already at real coordinates and don't need correction.
+    """
+    if not photos:
+        return photos
+
+    GPX_SOURCES = ('gpx', 'gpx_nearest_time')
+    photos_out = [dict(p) for p in photos]
+    id_to_idx = {p['id']: i for i, p in enumerate(photos_out)}
+
+    def _ts(p):
+        try:
+            return datetime.fromisoformat(p['timestamp'].replace('Z', '+00:00')).timestamp()
+        except Exception:
+            return 0.0
+
+    candidates = sorted(
+        [p for p in photos_out if p.get('gps_source') in GPX_SOURCES],
+        key=_ts
+    )
+    if len(candidates) < 3:
+        return photos_out
+
+    times = [_ts(p) for p in candidates]
+    assigned = set()
+    i = 0
+
+    while i < len(candidates):
+        if candidates[i]['id'] in assigned:
+            i += 1
+            continue
+
+        # Grow the window greedily: add photos one at a time (within the time limit) and
+        # stop as soon as adding the next photo would push the group spread over the limit.
+        # This correctly handles the case where the time window contains multiple distinct
+        # locations — we collapse the compact prefix instead of rejecting the whole window.
+        window = [candidates[i]]
+        j = i + 1
+        while j < len(candidates) and times[j] - times[i] <= burst_time_window_s:
+            candidate_window = window + [candidates[j]]
+            clats = sorted(p['lat'] for p in candidate_window)
+            clons = sorted(p['lon'] for p in candidate_window)
+            cmed_lat = clats[len(clats) // 2]
+            cmed_lon = clons[len(clons) // 2]
+            if max(haversine_distance(cmed_lat, cmed_lon, p['lat'], p['lon'])
+                   for p in candidate_window) > burst_max_spread_m:
+                break
+            window = candidate_window
+            j += 1
+
+        if len(window) < 3:
+            i += 1
+            continue
+
+        lats = sorted(p['lat'] for p in window)
+        lons = sorted(p['lon'] for p in window)
+        med_lat = lats[len(lats) // 2]
+        med_lon = lons[len(lons) // 2]
+        for p in window:
+            assigned.add(p['id'])
+            photos_out[id_to_idx[p['id']]]['lat'] = med_lat
+            photos_out[id_to_idx[p['id']]]['lon'] = med_lon
+        i = j
+
+    return photos_out
+
+
+def cluster_photos(photos: list[dict], radius: float,
+                   burst_time_window_s: float = 5400,
+                   burst_max_spread_m: float = 500) -> list[dict]:
     """
     Group photos into clusters based on proximity.
+
+    Applies stationary-burst detection first (see detect_stationary_bursts) so that
+    photos taken at the same location over a prolonged period (e.g. 1hr at a bridge)
+    are collapsed to one point before spatial clustering — preventing GPX interpolation
+    from scattering them across multiple clusters.
     """
     if not photos:
         return []
+
+    # Pre-pass: collapse stationary bursts so GPX-interpolated positions don't
+    # scatter same-location photos across multiple spatial clusters.
+    photos = detect_stationary_bursts(photos, burst_time_window_s, burst_max_spread_m)
 
     # Sort by timestamp
     photos_sorted = sorted(photos, key=lambda p: p['timestamp'])
@@ -904,7 +1050,7 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
     clusters = []
     used = set()
 
-    for i, photo in enumerate(photos_sorted):
+    for photo in photos_sorted:
         if photo['id'] in used:
             continue
 
@@ -913,7 +1059,7 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
         used.add(photo['id'])
 
         # Find nearby photos
-        for j, other in enumerate(photos_sorted):
+        for other in photos_sorted:
             if other['id'] in used:
                 continue
 
@@ -938,7 +1084,29 @@ def cluster_photos(photos: list[dict], radius: float) -> list[dict]:
         })
 
     name_unlabeled_clusters(clusters)
+    add_cluster_countries(clusters)
     return clusters
+
+
+def add_cluster_countries(clusters: list[dict]) -> None:
+    """
+    Tag each cluster with the country code (cc) of its anchor point via offline
+    reverse-geocoding. Lets the frontend filter individual markers by country
+    even on multi-country trips. Mutates clusters in place; silently no-ops if
+    reverse_geocoder is unavailable.
+    """
+    if not clusters:
+        return
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return
+    coords = [(c['lat'], c['lon']) for c in clusters]
+    results = rg.search(coords, verbose=False)
+    for cluster, res in zip(clusters, results):
+        cc = res.get('cc') if res else None
+        if cc:
+            cluster['country'] = cc
 
 
 def name_unlabeled_clusters(clusters: list[dict]) -> None:
@@ -1294,7 +1462,8 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
 
 def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext,
                        cluster_radius, format_name, quality, display_longest, thumbnail_longest,
-                       base_name, photos_path):
+                       base_name, photos_path,
+                       burst_time_window: float = 90, burst_max_spread: float = 500):
     """
     Write off-route photos as a separate '<slug>-private' trip. Moves their
     compressed images out of the public hosted dir into the private one (so the
@@ -1329,7 +1498,8 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
             if src.exists():
                 shutil.move(str(src), str(dst))
 
-    clusters = cluster_photos(off_photos, cluster_radius)
+    clusters = cluster_photos(off_photos, cluster_radius,
+                              burst_time_window * 60, burst_max_spread)
     countries = get_countries_from_photos(off_photos)
     ts = sorted(p['timestamp'] for p in off_photos)
     dates = {'start': ts[0][:10], 'end': ts[-1][:10]}
@@ -1371,6 +1541,22 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Split route into separate lines when consecutive trackpoints are >X km apart (default: 5)')
 @click.option('--max-interp-gap-hours', default=2.0, type=float,
               help="Don't interpolate across GPX recording gaps longer than this; snap to nearest trackpoint by time instead (default: 2)")
+@click.option('--max-gap-interp-km', default=2.0, type=float,
+              help='Override --max-interp-gap-hours when the gap is short in DISTANCE: still '
+                   'interpolate across a long time-gap if its bracketing trackpoints are within '
+                   'this many km (you stayed put / forgot to record). Set 0 to disable (default: 2)')
+@click.option('--phone-gps', is_flag=True,
+              help='Fallback: place no-GPS photos (outside the GPX track / no building) by matching '
+                   'their timestamp to GPS-tagged phone photos in <raws>/<--phone-gps-dir>. Only '
+                   'used when a phone photo is within --phone-gps-threshold-min.')
+@click.option('--phone-gps-dir', default='Phone',
+              help='Phone subfolder under raws for --phone-gps (default: Phone)')
+@click.option('--phone-gps-threshold-min', default=30.0, type=float,
+              help='Max minutes between a camera photo and the nearest phone photo to borrow its '
+                   'GPS (default: 30). Beyond this, the photo is NOT phone-placed.')
+@click.option('--phone-gps-offset-hours', default=0.0, type=float,
+              help='Hour offset added to camera timestamps before matching phone photos, if the '
+                   'camera clock differs from the phone tz (default: 0)')
 @click.option('--filter-by-raws-in', 'filter_by_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Only process edited photos whose stem exists somewhere under this folder. '
                    'Used to scope an Edits folder that bundles multiple trips.')
@@ -1410,16 +1596,37 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--route-snap-public-hours', default=3.0, type=float,
               help='In --split-offroute-private, route-snapped (gpx_nearest_time) photos within this '
                    'many hours of the track count as public/on-route (default: 3)')
+@click.option('--private-locations', default=None,
+              help='Semicolon-separated location/building folder names whose photos are moved to the '
+                   '"<slug>-private" trip (behind the "See All" gate), regardless of route. Reuses '
+                   'the private-split machinery; works with or without --split-offroute-private.')
 @click.option('--fallback-location', default=None, metavar='LAT,LON',
               help='Lat,lon to pin photos with no GPS that are outside the GPX window. '
                    'Defaults to nearest-by-time placed photo (or GPX centroid if none in range). '
                    'Pass "none" to drop them instead.')
+@click.option('--untimed-to-fallback', 'untimed_to_fallback', is_flag=True,
+              help='Instead of dropping photos with no EXIF timestamp, pin them at --fallback-location '
+                   '(one cluster). Use for scan/export edits (e.g. date-named TIFFs) that lost their '
+                   'EXIF — a date is parsed from the filename when present, else a sentinel is used.')
+@click.option('--untimed-label', 'untimed_label', default=None, metavar='NAME',
+              help='Cluster title for --untimed-to-fallback photos (e.g. "Ricky Film"). If NAME is in '
+                   'locations.json its coords are used (own cluster); otherwise they go to the fallback.')
 @click.option('--nearest-photo-max-hours', default=6.0, type=float,
               help='Max time gap (h) when using nearest-by-time fallback. Beyond this, fall back to centroid (default: 6)')
 @click.option('--cluster-radius', default=DEFAULT_CLUSTER_RADIUS, help='Clustering radius in meters')
+@click.option('--burst-time-window', default=90.0, type=float,
+              help='Stationary-burst detection: time window in minutes. Photos within this window '
+                   'AND within --burst-max-spread are collapsed to one point before clustering, '
+                   'so e.g. 1hr at a bridge forms one cluster not many. (default: 90)')
+@click.option('--burst-max-spread', default=500.0, type=float,
+              help='Stationary-burst detection: max spatial spread in metres within the time window '
+                   'for photos to be considered the same location. (default: 500)')
+@click.option('--geotag-overrides', 'geotag_overrides_json', default=None,
+              help='JSON list of {ids_from, ids_to, lat, lon} to force specific photo ID ranges '
+                   'to fixed coordinates, bypassing all GPS logic.')
 @click.option('--raws', type=click.Path(exists=True), help='Path to original DNG files for DJI drone GPS data')
 @click.option('--format', 'format_name', default=DEFAULT_FORMAT,
-              type=click.Choice(['webp', 'jpeg'], case_sensitive=False),
+              type=click.Choice(['webp', 'jpeg', 'avif'], case_sensitive=False),
               help=f'Image format for thumbnails/display (default: {DEFAULT_FORMAT})')
 @click.option('--quality', default=DEFAULT_QUALITY, type=click.IntRange(1, 100),
               help=f'JPEG/WebP encoder quality 1-100 (default: {DEFAULT_QUALITY})')
@@ -1455,15 +1662,22 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
-                 max_interp_gap_hours: float,
+                 max_interp_gap_hours: float, max_gap_interp_km: float,
+                 phone_gps: bool, phone_gps_dir: str, phone_gps_threshold_min: float,
+                 phone_gps_offset_hours: float,
                  filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
                  only_edits_dirs: bool,
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
-                 fallback_location: Optional[str], nearest_photo_max_hours: float,
-                 cluster_radius: float, raws: str,
+                 private_locations: Optional[str],
+                 fallback_location: Optional[str], untimed_to_fallback: bool,
+                 untimed_label: Optional[str],
+                 nearest_photo_max_hours: float,
+                 cluster_radius: float, burst_time_window: float, burst_max_spread: float,
+                 geotag_overrides_json: Optional[str],
+                 raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
                  fake_route_locations: Optional[str], no_fake_route: bool,
                  strict_building_distance: bool, kmz_path_str: Optional[str],
@@ -1499,7 +1713,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     # Reprocessing a split trip: pull any previously-quarantined private images
     # back into the public hosted dir so the split re-partitions cleanly (idempotent).
-    if split_offroute_private and not dry_run:
+    if (split_offroute_private or private_locations) and not dry_run:
         prev_priv = hosted_root / (trip_id + '-private')
         if prev_priv.exists():
             hosted_photos_path.mkdir(parents=True, exist_ok=True)
@@ -1613,16 +1827,29 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         return {part.lower() for part in path.parent.parts
                 if not _is_generic_component(part)}
 
-    def find_raw(stem: str, edit_path: Optional[Path] = None) -> Optional[Path]:
+    def _token_narrowed_cands(stem: str, edit_path: Optional[Path] = None) -> list:
+        """All raw candidates for a stem, narrowed to those whose folder shares the
+        most location tokens with the edit's folder. >1 remaining = a genuine stem
+        collision the folder name can't resolve (e.g. flat multi-region edits bundles);
+        the caller breaks that tie by timestamp."""
         cands = raw_index.get(stem) or raw_base_index.get(base_stem(stem))
+        if not cands:
+            return []
+        if len(cands) == 1:
+            return list(cands)
+        edit_tokens = _meaningful_tokens(edit_path) if edit_path else set()
+        best = max(len(edit_tokens & _meaningful_tokens(p)) for p in cands)
+        return [p for p in cands if len(edit_tokens & _meaningful_tokens(p)) == best]
+
+    def find_raw(stem: str, edit_path: Optional[Path] = None) -> Optional[Path]:
+        cands = _token_narrowed_cands(stem, edit_path)
         if not cands:
             return None
         if len(cands) == 1:
             return cands[0]
-        # Stem collision: prefer the raw whose folder shares a location name with
-        # the edit's folder. Fall back to rank.
-        edit_tokens = _meaningful_tokens(edit_path) if edit_path else set()
-        return min(cands, key=lambda p: (-len(edit_tokens & _meaningful_tokens(p)), rank(p)))
+        # Folder name couldn't disambiguate — fall back to rank. (Timestamp-based
+        # resolution happens after EXIF is read; see the collision pass below.)
+        return min(cands, key=rank)
 
     if filter_by_raws_in:
         before = len(photo_files)
@@ -1687,6 +1914,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         building_coords = load_locations_file(locations_file)
         click.echo(f"Loaded {len(building_coords)} building locations from {locations_file.name}")
 
+    geotag_overrides_parsed: list = []
+    if geotag_overrides_json:
+        import json as _json
+        geotag_overrides_parsed = load_geotag_overrides(_json.loads(geotag_overrides_json))
+        if geotag_overrides_parsed:
+            click.echo(f"Loaded {len(geotag_overrides_parsed)} geotag override range(s)")
+
     # Discovery mode: report building names derived from the raw folders, then exit.
     if dump_buildings:
         if not raw_scan_root:
@@ -1748,6 +1982,40 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             link.symlink_to(os.path.relpath(target, output_path))
 
     # Process photos
+    # Optional phone-GPS fallback track (reuses the correlate_phone_gps module).
+    phone_track = None
+    phone_nearest = None
+    if phone_gps and raws:
+        try:
+            from correlate_phone_gps import build_phone_track, nearest_factory
+            phone_track = build_phone_track(str(raws), phone_gps_dir)
+            phone_nearest = nearest_factory(phone_track) if phone_track else None
+            click.echo(f"Phone-GPS fallback: {len(phone_track or [])} GPS points "
+                       f"(±{phone_gps_threshold_min:.0f}min, offset {phone_gps_offset_hours:+.0f}h)")
+        except Exception as e:
+            click.echo(f"Phone-GPS fallback unavailable: {e}", err=True)
+
+    # Merge phone GPS fixes into the trackpoint set as extra (UTC) trackpoints, so a
+    # single interpolation pass uses BOTH sources: between phone fixes it interpolates
+    # over them, where GPX is dense GPX wins (temporally-closest bracket), and in GPX
+    # recording gaps a nearby phone fix fills the hole instead of the photo snapping to
+    # the approach road. Degrades to GPX-only when there are no phone points.
+    #
+    # Phone EXIF is on the phone's local clock; convert to UTC by subtracting
+    # phone_gps_offset_hours (the phone's UTC offset, e.g. +8 in China) so it shares the
+    # GPX/photo UTC axis. build_phone_track's epoch round-trips the phone wall clock via
+    # fromtimestamp(), independent of the machine timezone.
+    combined_trackpoints = trackpoints
+    if phone_track:
+        phone_trackpoints = []
+        for epoch, la, lo in phone_track:
+            local_naive = datetime.fromtimestamp(epoch)
+            utc = (local_naive - timedelta(hours=phone_gps_offset_hours)).replace(tzinfo=timezone.utc)
+            phone_trackpoints.append({'lat': la, 'lon': lo, 'time': utc, 'src': 'phone'})
+        combined_trackpoints = sorted(trackpoints + phone_trackpoints, key=lambda p: p['time'])
+        click.echo(f"Merged {len(phone_trackpoints)} phone fixes into the track "
+                   f"({len(combined_trackpoints)} total trackpoints for interpolation)")
+
     click.echo("\nProcessing photos...")
     processed_photos = []
     failed_photos = []
@@ -1825,6 +2093,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Build raw-match index upfront (needed for cache keys).
     raw_matches = {pf: find_raw(pf.stem, pf) for pf in photo_files}
 
+    # Stem collisions the folder name can't resolve (>1 candidate after token
+    # narrowing) — e.g. flat multi-region edits bundles where the camera counter
+    # repeated across regions. We read EVERY candidate's EXIF (below) and pick the
+    # one whose capture time matches the edit's, in a pass after the batch read.
+    raw_cand_map = {pf: _token_narrowed_cands(pf.stem, pf) for pf in photo_files}
+    collision_edits = [pf for pf in photo_files if len(raw_cand_map[pf]) > 1]
+    if collision_edits:
+        click.echo(f"Stem collisions to resolve by timestamp: {len(collision_edits)}")
+
     # --- Incremental update: per-source freshness state (mtime+size) ---
     # Tracked in <output>/source_state.json (separate from exif_cache.json so the
     # latter's format is untouched). See docs/incremental-update-design.md.
@@ -1885,9 +2162,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     cache_hits = sum(1 for pf in photo_files if str(pf) in exif_cache)
     uncached_edits = [pf for pf in photo_files if str(pf) not in exif_cache]
-    uncached_raws  = list({r for pf in uncached_edits
-                           if (r := raw_matches[pf]) is not None
-                           and str(r) not in exif_cache})
+    uncached_raws  = {r for pf in uncached_edits
+                      if (r := raw_matches[pf]) is not None
+                      and str(r) not in exif_cache}
+    # Also read EVERY collision candidate's EXIF so we can timestamp-resolve them.
+    for pf in collision_edits:
+        for r in raw_cand_map[pf]:
+            if str(r) not in exif_cache:
+                uncached_raws.add(r)
+    uncached_raws = list(uncached_raws)
 
     if cache_hits:
         click.echo(f"EXIF cache: {cache_hits} hits, reading {len(uncached_edits)} new edits / {len(uncached_raws)} new raws from drive...")
@@ -1912,6 +2195,30 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     exif_edits = exif_cache
     exif_raws  = exif_cache
 
+    # Resolve stem collisions by timestamp: among the candidate raws for a colliding
+    # edit, pick the one whose DateTimeOriginal is closest to the edit's own — that's
+    # the same physical shot. The wrong-region collisions are a different capture (and
+    # so a different time), so this disambiguates where the folder name can't.
+    if collision_edits:
+        _resolved = 0
+        for pf in collision_edits:
+            edit_ts = _parse_exif_datetime(exif_edits.get(str(pf), {}).get('DateTimeOriginal'))
+            if edit_ts is None:
+                continue  # no reference time → keep the folder/rank pick
+            best = None
+            for r in raw_cand_map[pf]:
+                raw_ts = _parse_exif_datetime(exif_raws.get(str(r), {}).get('DateTimeOriginal'))
+                if raw_ts is None:
+                    continue
+                diff = abs((raw_ts - edit_ts).total_seconds())
+                if best is None or diff < best[0]:
+                    best = (diff, r)
+            if best is not None and raw_matches[pf] != best[1]:
+                raw_matches[pf] = best[1]
+                _resolved += 1
+        if _resolved:
+            click.echo(f"  Timestamp-resolved {_resolved} stem collision(s) to the matching raw")
+
     for photo_file in tqdm(photo_files, desc="Processing"):
         # Get photo timestamp — prefer the raw file's timestamp when available,
         # since edited JPGs sometimes carry corrupted DateTimeOriginal.
@@ -1926,22 +2233,52 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         if photo_time is None:
             photo_time = get_exif_datetime(photo_file)  # PIL fallback
 
+        forced_untimed = False
         if not photo_time:
-            failed_photos.append((photo_file, "No EXIF timestamp"))
-            skipped_records.append({
-                'id': photo_file.stem,
-                'source_filename': photo_file.name,
-                'reason': 'no_exif_timestamp',
-            })
-            continue
+            if untimed_to_fallback and fallback_gps is not None:
+                # Keep it: pin at the fallback (one cluster). Derive a date from the
+                # filename if it encodes one (e.g. img20201228_123040.tif), else sentinel.
+                _m = re.search(r'(20\d{6})[_-]?(\d{6})', photo_file.stem)
+                if _m:
+                    try:
+                        photo_time = datetime.strptime(_m.group(1) + _m.group(2), '%Y%m%d%H%M%S')
+                    except ValueError:
+                        photo_time = None
+                if photo_time is None:
+                    photo_time = datetime(2000, 1, 1)  # sentinel; placed at fallback regardless
+                forced_untimed = True
+            else:
+                failed_photos.append((photo_file, "No EXIF timestamp"))
+                skipped_records.append({
+                    'id': photo_file.stem,
+                    'source_filename': photo_file.name,
+                    'reason': 'no_exif_timestamp',
+                })
+                continue
 
         # Apply timezone offset
         if geosync:
             photo_time = apply_timezone_offset(photo_time, geosync)
 
         # Determine GPS source — priority: EXIF on the JPG, then DJI DNG, then GPX.
-        gps = _parse_exif_gps(exif_edits.get(str(photo_file), {}))
-        gps_source = 'exif' if gps else None
+        # Untimed-to-fallback photos skip the whole chain and pin at the labelled
+        # location (own cluster) if given + known, else the fallback.
+        # Geotag overrides take highest priority — bypass all GPS logic for matched IDs.
+        _override = apply_geotag_override(photo_file.stem, geotag_overrides_parsed)
+        if _override:
+            gps = _override
+            gps_source = 'geotag_override'
+        elif forced_untimed:
+            _uloc = building_coords.get(untimed_label.strip().lower()) if untimed_label else None
+            if _uloc:
+                gps = {'lat': _uloc['lat'], 'lon': _uloc['lon']}
+                gps_source = 'building'
+            else:
+                gps = {'lat': fallback_gps['lat'], 'lon': fallback_gps['lon']}
+                gps_source = 'fallback_centroid'
+        else:
+            gps = _parse_exif_gps(exif_edits.get(str(photo_file), {}))
+            gps_source = 'exif' if gps else None
 
         if not gps and raws and photo_file.stem.startswith('DJI_'):
             raw_path = find_dji_raw(photo_file, Path(raws))
@@ -1951,11 +2288,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 if gps:
                     gps_source = 'dng'
 
+        # Interpolate over the merged track (GPX + phone fixes, all in UTC). Phone fixes
+        # contribute as ordinary trackpoints, so this single pass uses whichever source is
+        # temporally closest and fills GPX recording gaps with nearby phone fixes. The
+        # result's 'src' tag reports which source anchored the photo.
         if not gps:
-            gps = interpolate_gps(trackpoints, photo_time, gpx_tolerance_seconds,
-                                  max_interp_gap_hours * 3600)
+            gps = interpolate_gps(combined_trackpoints, photo_time, gpx_tolerance_seconds,
+                                  max_interp_gap_hours * 3600, max_gap_interp_km)
             if gps:
-                gps_source = 'gpx'
+                gps_source = gps.pop('src', 'gpx')
 
         # Derive a building/location label from the raw folder whenever we can.
         # Used to NAME the cluster (independent of how GPS was resolved, so
@@ -1968,6 +2309,20 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # (e.g. /Edits/Trip Name/Subfolder/IMG_001.jpg → "Subfolder").
         if not building_name:
             building_name = building_from_raw(photo_file, photos_path)
+        # Single-location no-GPX trips point --raws-root AT the location folder itself,
+        # so there's no component *below* the root to extract — fall back to the root
+        # folder's own name (e.g. raws .../2019/An Teallach → "An Teallach"). Guarded:
+        # only no-GPX trips, and only a clean name (not generic, not a year/date-prefixed
+        # tree root like "2017" or "07.2024 Japan"), so broad GPX/multi-location roots
+        # don't mislabel route photos.
+        if not building_name and no_gpx_mode and raw_scan_root:
+            _root_name = Path(raw_scan_root).name
+            if _root_name and not _is_generic_component(_root_name) \
+                    and not re.match(r'\d', _root_name):
+                building_name = _root_name
+        # Untimed-to-fallback photos get their explicit label as the cluster title.
+        if forced_untimed and untimed_label:
+            building_name = untimed_label
 
         if exclude_building_set and building_name and building_name.strip().lower() in exclude_building_set:
             continue
@@ -2000,8 +2355,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 gps = clamped
                 gps_source = 'gpx'
 
-        # No real GPS yet — place at the building's coords derived from the raw folder.
-        if not on_route and not gps and building_coords and building_name:
+        # A resolved building coordinate is explicit location evidence — you were AT that
+        # named building — so it takes precedence over merged-track interpolation, which can
+        # otherwise snap a building shoot to a temporally-near phone/GPX fix elsewhere. It
+        # does NOT override real per-photo GPS (EXIF/DNG), a geotag_override, or on_route
+        # route placement. A folder whose name isn't in locations.json (e.g. "Day 3 …")
+        # doesn't resolve, so route photos keep their interpolated position.
+        if (not on_route and building_coords and building_name
+                and gps_source not in ('exif', 'dng', 'geotag_override')):
             bc = building_coords.get(building_name.strip().lower())
             # Generic building names (Marriott, Hilton, …) collide across cities in
             # locations.json. With --strict-building-distance, treat a match that's
@@ -2014,6 +2375,18 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             if bc:
                 gps = {'lat': bc['lat'], 'lon': bc['lon']}
                 gps_source = 'building'
+
+        # Phone-GPS last-resort snap: the merged-track interpolation above already uses
+        # phone fixes, but it can still reject a photo whose bracketing points span a long
+        # AND distant gap — even when one bracket is a phone fix only minutes away (the gap
+        # test compares the two brackets, not the nearest point). In that case, snap directly
+        # to the nearest phone fix if it's within threshold.
+        if not gps and phone_nearest is not None:
+            _pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
+            nb = phone_nearest(_pt.timestamp() + phone_gps_offset_hours * 3600)
+            if nb and nb[0] <= phone_gps_threshold_min * 60:
+                gps = {'lat': nb[1], 'lon': nb[2]}
+                gps_source = 'phone'
 
         # Compute how far out of the GPX window the photo is (for diagnostics either way)
         pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
@@ -2032,7 +2405,6 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
         # Building-derived coords are folder-level, not real GPS — mark approximate.
         placement = 'approximate' if gps_source == 'building' else 'exact'
-        pending_fallback = False
         if not gps:
             if fallback_gps is None:
                 failed_photos.append((photo_file, "No EXIF GPS and outside GPX window (fallback disabled)"))
@@ -2050,7 +2422,6 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             gps = {'lat': fallback_gps['lat'], 'lon': fallback_gps['lon']}
             gps_source = 'pending_fallback'
             placement = 'approximate'
-            pending_fallback = True
             skipped_records.append({
                 'id': photo_file.stem,
                 'source_filename': photo_file.name,
@@ -2253,8 +2624,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Public/on-route = GPX-interpolated, OR in the --gpx-route-subdir, OR snapped
     # to the track within --route-snap-public-hours. Everything else is off-route.
     off_route_photos = []
-    if split_offroute_private and not no_gpx_mode:
+    private_locs = {s.strip() for s in (private_locations or '').split(';') if s.strip()}
+    if (split_offroute_private or private_locs) and not no_gpx_mode:
         def _is_public(p):
+            # explicit private locations override everything
+            if private_locs and p.get('building') in private_locs:
+                return False
+            # without route-based splitting, everything else is public
+            if not split_offroute_private:
+                return True
             if p.get('on_route'):
                 return True
             if p['gps_source'] == 'gpx':
@@ -2266,8 +2644,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         public_photos = [p for p in processed_photos if _is_public(p)]
         off_route_photos = [p for p in processed_photos if not _is_public(p)]
         processed_photos = public_photos
-        click.echo(f"\nSplit: {len(processed_photos)} on-route (public), "
-                   f"{len(off_route_photos)} off-route (private)")
+        click.echo(f"\nSplit: {len(processed_photos)} public, "
+                   f"{len(off_route_photos)} private")
         from collections import Counter as _Counter
         gps_source_counts = dict(_Counter(p['gps_source'] for p in processed_photos))
 
@@ -2295,7 +2673,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     # Generate clusters (after all position refinements)
     click.echo("\nGenerating clusters...")
-    clusters = cluster_photos(processed_photos, cluster_radius)
+    clusters = cluster_photos(processed_photos, cluster_radius,
+                              burst_time_window * 60, burst_max_spread)
     click.echo(f"Created {len(clusters)} clusters")
 
     # Detect countries
@@ -2343,7 +2722,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             # Delete hosted images for sources no longer in the manifest (deleted edits).
             # Skipped for split trips: off-route images move to a separate -private dir,
             # so the main manifest doesn't list them and they'd be wrongly culled.
-            if not split_offroute_private:
+            if not split_offroute_private and not private_locations:
                 kept_ids = {p['id'] for p in processed_photos}
                 removed = 0
                 for sub in ('thumbnails', 'display'):
@@ -2391,12 +2770,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         click.echo(f"Generated year page: {year_page}")
         click.echo(f"Generated trip page: {trip_page}")
 
-        # Write the off-route photos as a separate private trip
-        if split_offroute_private and off_route_photos:
+        # Write the off-route / private-location photos as a separate private trip
+        if off_route_photos:
             result = write_private_trip(
                 off_route_photos, output_path, hosted_photos_path, image_ext,
                 private_cluster_radius, format_name, quality, display_longest, thumbnail_longest,
-                name, photos_path)
+                name, photos_path,
+                burst_time_window=burst_time_window, burst_max_spread=burst_max_spread)
             if result:
                 ps, pn_photos, pn_clusters, pcc = result
                 click.echo(f"Wrote private split: {ps} "

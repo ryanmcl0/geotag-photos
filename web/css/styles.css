@@ -1098,15 +1098,19 @@ details[open] .country-summary::after {
     border: 1px solid rgba(255,255,255,0.12);
     border-radius: 10px;
     padding: 6px;
-    width: 340px;
+    width: 540px;
     max-width: calc(100vw - 24px);
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    max-height: min(70vh, 560px);
+    /* Grow with content; only scroll if the list ever exceeds the viewport. */
+    max-height: calc(100vh - 80px);
     overflow-y: auto;
-    /* Always show a scrollbar so it's obvious the list scrolls (macOS hides
-       overlay scrollbars by default, which made later countries look missing). */
     scrollbar-width: thin;
     scrollbar-color: rgba(255,255,255,0.3) transparent;
+}
+
+@media (max-width: 560px) {
+    .country-filter-menu { width: 360px; }
+    .country-filter-options { column-count: 2; }
 }
 
 .country-filter-menu::-webkit-scrollbar { width: 8px; }
@@ -1117,11 +1121,11 @@ details[open] .country-summary::after {
 
 .country-filter-menu.open { display: block; }
 
-/* Two-column grid so all ~30 countries fit with minimal scrolling */
+/* Multi-column layout: items flow top-to-bottom then across, so each column
+   reads alphabetically. Grows in height automatically as countries are added. */
 .country-filter-options {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1px 4px;
+    column-count: 3;
+    column-gap: 8px;
 }
 
 .country-filter-actions {
@@ -1159,12 +1163,13 @@ details[open] .country-summary::after {
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 6px 8px;
+    padding: 5px 8px;
     border-radius: 6px;
     color: #999;
     cursor: pointer;
     font-size: 12.5px;
     transition: background 0.12s, color 0.12s;
+    break-inside: avoid;
 }
 
 .country-filter-option:hover { background: rgba(255,255,255,0.08); color: #fff; }

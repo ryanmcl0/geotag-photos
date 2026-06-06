@@ -150,6 +150,9 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--burst-time-window', str(opts['burst_time_window'])]
     if opts.get('burst_max_spread') is not None:
         cmd += ['--burst-max-spread', str(opts['burst_max_spread'])]
+    if opts.get('geotag_overrides'):
+        import json as _json
+        cmd += ['--geotag-overrides', _json.dumps(opts['geotag_overrides'])]
     if trip.get('kmz'):
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):

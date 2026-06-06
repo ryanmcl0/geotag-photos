@@ -190,6 +190,35 @@ def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
     return None
 
 
+def load_geotag_overrides(raw_overrides: list) -> list:
+    """
+    Parse geotag_overrides from trip config. Each entry has ids_from, ids_to (strings
+    with numeric suffix, e.g. "RM101884"), lat, lon. Returns list of
+    (from_num, to_num, lat, lon) tuples for fast range checks.
+    """
+    result = []
+    for o in (raw_overrides or []):
+        try:
+            from_num = int(''.join(filter(str.isdigit, str(o['ids_from']))))
+            to_num   = int(''.join(filter(str.isdigit, str(o['ids_to']))))
+            result.append((from_num, to_num, float(o['lat']), float(o['lon'])))
+        except (KeyError, ValueError):
+            pass
+    return result
+
+
+def apply_geotag_override(photo_stem: str, overrides: list) -> Optional[dict]:
+    """Return fixed {lat, lon} if photo_stem's numeric ID falls in any override range."""
+    digits = ''.join(filter(str.isdigit, photo_stem))
+    if not digits or not overrides:
+        return None
+    num = int(digits)
+    for from_num, to_num, lat, lon in overrides:
+        if from_num <= num <= to_num:
+            return {'lat': lat, 'lon': lon}
+    return None
+
+
 def load_locations_file(path: Path) -> dict:
     """
     Load a building-name -> {lat, lon} map. Keys are normalised (lowercased,
@@ -1588,9 +1617,12 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--burst-max-spread', default=500.0, type=float,
               help='Stationary-burst detection: max spatial spread in metres within the time window '
                    'for photos to be considered the same location. (default: 500)')
+@click.option('--geotag-overrides', 'geotag_overrides_json', default=None,
+              help='JSON list of {ids_from, ids_to, lat, lon} to force specific photo ID ranges '
+                   'to fixed coordinates, bypassing all GPS logic.')
 @click.option('--raws', type=click.Path(exists=True), help='Path to original DNG files for DJI drone GPS data')
 @click.option('--format', 'format_name', default=DEFAULT_FORMAT,
-              type=click.Choice(['webp', 'jpeg'], case_sensitive=False),
+              type=click.Choice(['webp', 'jpeg', 'avif'], case_sensitive=False),
               help=f'Image format for thumbnails/display (default: {DEFAULT_FORMAT})')
 @click.option('--quality', default=DEFAULT_QUALITY, type=click.IntRange(1, 100),
               help=f'JPEG/WebP encoder quality 1-100 (default: {DEFAULT_QUALITY})')
@@ -1639,6 +1671,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  untimed_label: Optional[str],
                  nearest_photo_max_hours: float,
                  cluster_radius: float, burst_time_window: float, burst_max_spread: float,
+                 geotag_overrides_json: Optional[str],
                  raws: str,
                  format_name: str, quality: int, display_longest: int, thumbnail_longest: int,
                  fake_route_locations: Optional[str], no_fake_route: bool,
@@ -1875,6 +1908,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     if locations_file:
         building_coords = load_locations_file(locations_file)
         click.echo(f"Loaded {len(building_coords)} building locations from {locations_file.name}")
+
+    geotag_overrides_parsed: list = []
+    if geotag_overrides_json:
+        import json as _json
+        geotag_overrides_parsed = load_geotag_overrides(_json.loads(geotag_overrides_json))
+        if geotag_overrides_parsed:
+            click.echo(f"Loaded {len(geotag_overrides_parsed)} geotag override range(s)")
 
     # Discovery mode: report building names derived from the raw folders, then exit.
     if dump_buildings:
@@ -2218,7 +2258,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # Determine GPS source — priority: EXIF on the JPG, then DJI DNG, then GPX.
         # Untimed-to-fallback photos skip the whole chain and pin at the labelled
         # location (own cluster) if given + known, else the fallback.
-        if forced_untimed:
+        # Geotag overrides take highest priority — bypass all GPS logic for matched IDs.
+        _override = apply_geotag_override(photo_file.stem, geotag_overrides_parsed)
+        if _override:
+            gps = _override
+            gps_source = 'geotag_override'
+        elif forced_untimed:
             _uloc = building_coords.get(untimed_label.strip().lower()) if untimed_label else None
             if _uloc:
                 gps = {'lat': _uloc['lat'], 'lon': _uloc['lon']}

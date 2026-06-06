@@ -722,7 +722,11 @@ def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
         factor = photo_delta / total_delta if total_delta > 0 else 0
         lat = prev_point['lat'] + factor * (next_point['lat'] - prev_point['lat'])
         lon = prev_point['lon'] + factor * (next_point['lon'] - prev_point['lon'])
-        return {'lat': lat, 'lon': lon}
+        # Report which source the photo was anchored to (the temporally-closer
+        # bracketing point). Phone fixes merged into the track carry src='phone';
+        # GPX points have no src and default to 'gpx'.
+        closer = prev_point if photo_delta <= (total_delta - photo_delta) else next_point
+        return {'lat': lat, 'lon': lon, 'src': closer.get('src', 'gpx')}
 
     # Photo falls outside the GPX window. Only return a point if we're within
     # the tolerance — otherwise we'd pin it to a wildly wrong location.
@@ -734,7 +738,7 @@ def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
         endpoint_time = endpoint_time.replace(tzinfo=timezone.utc)
     if abs((photo_time - endpoint_time).total_seconds()) > max_time_delta_seconds:
         return None
-    return {'lat': endpoint['lat'], 'lon': endpoint['lon']}
+    return {'lat': endpoint['lat'], 'lon': endpoint['lon'], 'src': endpoint.get('src', 'gpx')}
 
 
 def interpolate_gps_clamped(trackpoints: list[dict], photo_time: datetime) -> Optional[dict]:
@@ -1408,6 +1412,18 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Override --max-interp-gap-hours when the gap is short in DISTANCE: still '
                    'interpolate across a long time-gap if its bracketing trackpoints are within '
                    'this many km (you stayed put / forgot to record). Set 0 to disable (default: 2)')
+@click.option('--phone-gps', is_flag=True,
+              help='Fallback: place no-GPS photos (outside the GPX track / no building) by matching '
+                   'their timestamp to GPS-tagged phone photos in <raws>/<--phone-gps-dir>. Only '
+                   'used when a phone photo is within --phone-gps-threshold-min.')
+@click.option('--phone-gps-dir', default='Phone',
+              help='Phone subfolder under raws for --phone-gps (default: Phone)')
+@click.option('--phone-gps-threshold-min', default=30.0, type=float,
+              help='Max minutes between a camera photo and the nearest phone photo to borrow its '
+                   'GPS (default: 30). Beyond this, the photo is NOT phone-placed.')
+@click.option('--phone-gps-offset-hours', default=0.0, type=float,
+              help='Hour offset added to camera timestamps before matching phone photos, if the '
+                   'camera clock differs from the phone tz (default: 0)')
 @click.option('--filter-by-raws-in', 'filter_by_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Only process edited photos whose stem exists somewhere under this folder. '
                    'Used to scope an Edits folder that bundles multiple trips.')
@@ -1500,6 +1516,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float, max_gap_interp_km: float,
+                 phone_gps: bool, phone_gps_dir: str, phone_gps_threshold_min: float,
+                 phone_gps_offset_hours: float,
                  filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
@@ -1807,6 +1825,40 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             link.symlink_to(os.path.relpath(target, output_path))
 
     # Process photos
+    # Optional phone-GPS fallback track (reuses the correlate_phone_gps module).
+    phone_track = None
+    phone_nearest = None
+    if phone_gps and raws:
+        try:
+            from correlate_phone_gps import build_phone_track, nearest_factory
+            phone_track = build_phone_track(str(raws), phone_gps_dir)
+            phone_nearest = nearest_factory(phone_track) if phone_track else None
+            click.echo(f"Phone-GPS fallback: {len(phone_track or [])} GPS points "
+                       f"(±{phone_gps_threshold_min:.0f}min, offset {phone_gps_offset_hours:+.0f}h)")
+        except Exception as e:
+            click.echo(f"Phone-GPS fallback unavailable: {e}", err=True)
+
+    # Merge phone GPS fixes into the trackpoint set as extra (UTC) trackpoints, so a
+    # single interpolation pass uses BOTH sources: between phone fixes it interpolates
+    # over them, where GPX is dense GPX wins (temporally-closest bracket), and in GPX
+    # recording gaps a nearby phone fix fills the hole instead of the photo snapping to
+    # the approach road. Degrades to GPX-only when there are no phone points.
+    #
+    # Phone EXIF is on the phone's local clock; convert to UTC by subtracting
+    # phone_gps_offset_hours (the phone's UTC offset, e.g. +8 in China) so it shares the
+    # GPX/photo UTC axis. build_phone_track's epoch round-trips the phone wall clock via
+    # fromtimestamp(), independent of the machine timezone.
+    combined_trackpoints = trackpoints
+    if phone_track:
+        phone_trackpoints = []
+        for epoch, la, lo in phone_track:
+            local_naive = datetime.fromtimestamp(epoch)
+            utc = (local_naive - timedelta(hours=phone_gps_offset_hours)).replace(tzinfo=timezone.utc)
+            phone_trackpoints.append({'lat': la, 'lon': lo, 'time': utc, 'src': 'phone'})
+        combined_trackpoints = sorted(trackpoints + phone_trackpoints, key=lambda p: p['time'])
+        click.echo(f"Merged {len(phone_trackpoints)} phone fixes into the track "
+                   f"({len(combined_trackpoints)} total trackpoints for interpolation)")
+
     click.echo("\nProcessing photos...")
     processed_photos = []
     failed_photos = []
@@ -2074,11 +2126,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 if gps:
                     gps_source = 'dng'
 
+        # Interpolate over the merged track (GPX + phone fixes, all in UTC). Phone fixes
+        # contribute as ordinary trackpoints, so this single pass uses whichever source is
+        # temporally closest and fills GPX recording gaps with nearby phone fixes. The
+        # result's 'src' tag reports which source anchored the photo.
         if not gps:
-            gps = interpolate_gps(trackpoints, photo_time, gpx_tolerance_seconds,
+            gps = interpolate_gps(combined_trackpoints, photo_time, gpx_tolerance_seconds,
                                   max_interp_gap_hours * 3600, max_gap_interp_km)
             if gps:
-                gps_source = 'gpx'
+                gps_source = gps.pop('src', 'gpx')
 
         # Derive a building/location label from the raw folder whenever we can.
         # Used to NAME the cluster (independent of how GPS was resolved, so
@@ -2137,8 +2193,14 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 gps = clamped
                 gps_source = 'gpx'
 
-        # No real GPS yet — place at the building's coords derived from the raw folder.
-        if not on_route and not gps and building_coords and building_name:
+        # A resolved building coordinate is explicit location evidence — you were AT that
+        # named building — so it takes precedence over merged-track interpolation, which can
+        # otherwise snap a building shoot to a temporally-near phone/GPX fix elsewhere. It
+        # does NOT override real per-photo GPS (EXIF/DNG), a geotag_override, or on_route
+        # route placement. A folder whose name isn't in locations.json (e.g. "Day 3 …")
+        # doesn't resolve, so route photos keep their interpolated position.
+        if (not on_route and building_coords and building_name
+                and gps_source not in ('exif', 'dng', 'geotag_override')):
             bc = building_coords.get(building_name.strip().lower())
             # Generic building names (Marriott, Hilton, …) collide across cities in
             # locations.json. With --strict-building-distance, treat a match that's
@@ -2151,6 +2213,18 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             if bc:
                 gps = {'lat': bc['lat'], 'lon': bc['lon']}
                 gps_source = 'building'
+
+        # Phone-GPS last-resort snap: the merged-track interpolation above already uses
+        # phone fixes, but it can still reject a photo whose bracketing points span a long
+        # AND distant gap — even when one bracket is a phone fix only minutes away (the gap
+        # test compares the two brackets, not the nearest point). In that case, snap directly
+        # to the nearest phone fix if it's within threshold.
+        if not gps and phone_nearest is not None:
+            _pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
+            nb = phone_nearest(_pt.timestamp() + phone_gps_offset_hours * 3600)
+            if nb and nb[0] <= phone_gps_threshold_min * 60:
+                gps = {'lat': nb[1], 'lon': nb[2]}
+                gps_source = 'phone'
 
         # Compute how far out of the GPX window the photo is (for diagnostics either way)
         pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
@@ -2169,7 +2243,6 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
         # Building-derived coords are folder-level, not real GPS — mark approximate.
         placement = 'approximate' if gps_source == 'building' else 'exact'
-        pending_fallback = False
         if not gps:
             if fallback_gps is None:
                 failed_photos.append((photo_file, "No EXIF GPS and outside GPX window (fallback disabled)"))
@@ -2187,7 +2260,6 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             gps = {'lat': fallback_gps['lat'], 'lon': fallback_gps['lon']}
             gps_source = 'pending_fallback'
             placement = 'approximate'
-            pending_fallback = True
             skipped_records.append({
                 'id': photo_file.stem,
                 'source_filename': photo_file.name,

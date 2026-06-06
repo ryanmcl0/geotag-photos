@@ -80,6 +80,16 @@ body {
     line-height: 1.5;
 }
 
+.sidebar-powered-by {
+    margin-top: 8px;
+    font-size: 0.72rem;
+    color: #777;
+}
+
+.sidebar-powered-by a {
+    color: #999;
+}
+
 .nav-list {
     list-style: none;
     padding: 12px 0;

@@ -583,7 +583,11 @@ async function loadTripData() {
         }
 
         for (const trip of trips) {
-            await loadSingleTrip(trip, basePath);
+            try {
+                await loadSingleTrip(trip, basePath);
+            } catch (e) {
+                console.warn(`Skipped trip ${trip.id}:`, e.message);
+            }
         }
 
         updateTripInfo();

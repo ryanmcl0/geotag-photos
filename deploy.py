@@ -28,6 +28,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from prune import prune_removed_trips
+
 try:
     import boto3
     from botocore.exceptions import ClientError
@@ -425,6 +427,8 @@ def main():
     parser = argparse.ArgumentParser(description='Deploy travel map to Cloudflare Pages + R2')
     parser.add_argument('--skip-images', action='store_true', help='Skip the R2 image sync (deploy code/manifests only)')
     parser.add_argument('--skip-pages', action='store_true', help='Skip Pages deployment')
+    parser.add_argument('--no-prune', action='store_true', help='Do not remove trips that are no longer in config/trips.json')
+    parser.add_argument('--prune-force', action='store_true', help='Allow pruning even when many trips would be removed (overrides the safety guard)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument('--trip', help='Upload only a specific trip slug')
     args = parser.parse_args()
@@ -451,6 +455,15 @@ def main():
     print("🏷️  Syncing public flags...")
     sync_public_flags(dry_run=args.dry_run)
     print()
+
+    # Step 1b: Prune trips removed from config/trips.json (index, web/trips,
+    # hosted-photos, R2). On by default; config is the source of truth.
+    if not args.no_prune:
+        print("🧹 Pruning trips removed from config...")
+        prune_s3 = None if (args.skip_images or args.dry_run) else R2Uploader(config).s3
+        prune_removed_trips(s3=prune_s3, r2_bucket=config.r2_bucket,
+                            dry_run=args.dry_run, force=args.prune_force)
+        print()
 
     # Step 2: Sync images to R2 (size-aware: skips unchanged, re-uploads changed,
     # deletes orphans). On by default; --skip-images for a code/manifest-only deploy.

@@ -227,8 +227,11 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
 @click.option('--reindex', 'reindex', is_flag=True,
               help='Stamp source-state baselines on the selected (already-processed) trips without '
                    'reprocessing — encodes only missing images. Pair with --trip to target one.')
+@click.option('--no-prune', 'no_prune', is_flag=True,
+              help='Do not remove trips deleted from config/trips.json from local web/trips + '
+                   'hosted-photos (full runs prune by default to keep localhost in sync).')
 def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existing_images: bool,
-                gps_only: bool, update: bool, reindex: bool):
+                gps_only: bool, update: bool, reindex: bool, no_prune: bool):
     """Process all trips listed in trips.json."""
     if gps_only:
         force = True
@@ -247,6 +250,16 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         if not all_trips:
             click.echo(f"No trips matching '{trip_filter}'", err=True)
             sys.exit(1)
+
+    # Keep local state in sync with config: remove trips deleted from trips.json from
+    # web/trips/index.json + web/trips/ + hosted-photos/ so the localhost preview reflects
+    # removals without a deploy. Runs before the "nothing to process" return so a pure
+    # removal still propagates. Scoped (--trip) runs skip it; R2 is left to deploy.py.
+    if not trip_filter and not no_prune:
+        from prune import prune_removed_trips
+        click.echo("Pruning trips removed from config...")
+        prune_removed_trips(dry_run=dry_run, echo=click.echo)
+        click.echo("")
 
     to_process, already_done = [], []
     for trip, is_public in all_trips:

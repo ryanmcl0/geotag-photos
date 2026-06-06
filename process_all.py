@@ -146,6 +146,10 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--untimed-label', opts['untimed_label']]
     if opts.get('cluster_radius'):
         cmd += ['--cluster-radius', str(opts['cluster_radius'])]
+    if opts.get('burst_time_window') is not None:
+        cmd += ['--burst-time-window', str(opts['burst_time_window'])]
+    if opts.get('burst_max_spread') is not None:
+        cmd += ['--burst-max-spread', str(opts['burst_max_spread'])]
     if trip.get('kmz'):
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):

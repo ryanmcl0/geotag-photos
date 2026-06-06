@@ -156,40 +156,66 @@ class R2Uploader:
             print(f"  ⚠️  hosted-photos/{trip_slug} not found, skipping")
             return {'skipped': True}
 
-        stats = {'uploaded': 0, 'skipped_existing': 0, 'errors': 0, 'bytes': 0}
+        stats = {'uploaded': 0, 'skipped_existing': 0, 'deleted': 0, 'errors': 0, 'bytes': 0}
 
-        # Get existing keys to skip re-uploads
-        existing = set()
+        # Map existing R2 objects to their size, so we re-upload files whose CONTENT
+        # changed (e.g. a quality re-encode keeps the same key but a different size) and
+        # skip only genuinely-unchanged files. Size-based, not just key-presence.
+        existing = {}
         try:
             paginator = self.s3.get_paginator('list_objects_v2')
             for page in paginator.paginate(Bucket=self.config.r2_bucket, Prefix=f"{trip_slug}/"):
                 for obj in page.get('Contents', []):
-                    existing.add(obj['Key'])
+                    existing[obj['Key']] = obj['Size']
         except Exception:
             pass  # If listing fails, upload everything
 
+        local_keys = set()
         for img_file in sorted(hosted_dir.rglob('*.webp')):
             s3_key = str(img_file.relative_to('hosted-photos'))
+            local_keys.add(s3_key)
+            local_size = img_file.stat().st_size
+            unchanged = existing.get(s3_key) == local_size
 
             if dry_run:
-                status = "(exists)" if s3_key in existing else "(new)"
+                status = "(unchanged)" if unchanged else ("(changed)" if s3_key in existing else "(new)")
                 print(f"    [dry-run] {s3_key} {status}")
                 continue
 
-            if s3_key in existing:
+            if unchanged:
                 stats['skipped_existing'] += 1
                 continue
 
             try:
                 self.s3.upload_file(str(img_file), self.config.r2_bucket, s3_key)
                 stats['uploaded'] += 1
-                stats['bytes'] += img_file.stat().st_size
+                stats['bytes'] += local_size
             except ClientError as e:
                 stats['errors'] += 1
                 print(f"    ✗ {s3_key}: {e}")
 
+        # Sync deletes: remove R2 objects under this trip that no longer exist locally
+        # (photos removed by reclustering / private-split / orphan cleanup). Keeps R2 a
+        # mirror of local hosted-photos so freed space is actually reclaimed.
+        stale = [k for k in existing if k not in local_keys]
+        if stale:
+            if dry_run:
+                for k in stale:
+                    print(f"    [dry-run] {k} (delete — no local file)")
+            else:
+                try:
+                    for i in range(0, len(stale), 1000):
+                        self.s3.delete_objects(
+                            Bucket=self.config.r2_bucket,
+                            Delete={'Objects': [{'Key': k} for k in stale[i:i + 1000]]})
+                    stats['deleted'] = len(stale)
+                except ClientError as e:
+                    stats['errors'] += 1
+                    print(f"    ✗ delete stale: {e}")
+
         if not dry_run:
-            msg = f"    ✓ {trip_slug}: {stats['uploaded']} uploaded, {stats['skipped_existing']} already exist"
+            msg = (f"    ✓ {trip_slug}: {stats['uploaded']} uploaded, "
+                   f"{stats['skipped_existing']} unchanged, {stats['deleted']} deleted")
             if stats['errors']:
                 msg += f", {stats['errors']} errors"
             print(msg)

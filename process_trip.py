@@ -669,15 +669,19 @@ def get_camera_settings(photo_path: Path) -> dict:
 
 def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
                     max_time_delta_seconds: float = 7200,
-                    max_interp_gap_seconds: float = 7200) -> Optional[dict]:
+                    max_interp_gap_seconds: float = 7200,
+                    max_gap_interp_km: float = 2.0) -> Optional[dict]:
     """
     Find GPS coordinates for a photo timestamp by interpolating between trackpoints.
 
     Returns None when:
       - the photo is more than max_time_delta_seconds outside the GPX window, OR
       - the two bracketing trackpoints are more than max_interp_gap_seconds apart
-        in time (recording was paused — interpolating across the gap would draw a
-        straight line through places the photographer never went).
+        in time AND more than max_gap_interp_km apart in space. A long *time* gap
+        where the endpoints are spatially close means recording was paused while
+        staying in one area (e.g. forgot to restart recording at a stop) — safe to
+        interpolate. A gap that is long in BOTH time and distance means the
+        photographer moved an unknown path, so we reject and let the fallback place it.
     In both cases the caller's fallback chain handles placement instead.
     """
     if not trackpoints:
@@ -706,9 +710,14 @@ def interpolate_gps(trackpoints: list[dict], photo_time: datetime,
         if next_time.tzinfo is None:
             next_time = next_time.replace(tzinfo=timezone.utc)
         total_delta = (next_time - prev_time).total_seconds()
-        # Recording gap — don't interpolate across it
+        # Recording gap: reject only if it spans both a long TIME and a real DISTANCE.
+        # If the bracketing points are close together, the photographer stayed put
+        # (just forgot to record) and interpolating between them is accurate.
         if total_delta > max_interp_gap_seconds:
-            return None
+            gap_km = haversine_distance(prev_point['lat'], prev_point['lon'],
+                                        next_point['lat'], next_point['lon']) / 1000.0
+            if gap_km > max_gap_interp_km:
+                return None
         photo_delta = (photo_time - prev_time).total_seconds()
         factor = photo_delta / total_delta if total_delta > 0 else 0
         lat = prev_point['lat'] + factor * (next_point['lat'] - prev_point['lat'])
@@ -1395,6 +1404,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Split route into separate lines when consecutive trackpoints are >X km apart (default: 5)')
 @click.option('--max-interp-gap-hours', default=2.0, type=float,
               help="Don't interpolate across GPX recording gaps longer than this; snap to nearest trackpoint by time instead (default: 2)")
+@click.option('--max-gap-interp-km', default=2.0, type=float,
+              help='Override --max-interp-gap-hours when the gap is short in DISTANCE: still '
+                   'interpolate across a long time-gap if its bracketing trackpoints are within '
+                   'this many km (you stayed put / forgot to record). Set 0 to disable (default: 2)')
 @click.option('--filter-by-raws-in', 'filter_by_raws_in', default=None, type=click.Path(exists=True, path_type=Path),
               help='Only process edited photos whose stem exists somewhere under this folder. '
                    'Used to scope an Edits folder that bundles multiple trips.')
@@ -1486,7 +1499,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
-                 max_interp_gap_hours: float,
+                 max_interp_gap_hours: float, max_gap_interp_km: float,
                  filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
@@ -2063,7 +2076,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
         if not gps:
             gps = interpolate_gps(trackpoints, photo_time, gpx_tolerance_seconds,
-                                  max_interp_gap_hours * 3600)
+                                  max_interp_gap_hours * 3600, max_gap_interp_km)
             if gps:
                 gps_source = 'gpx'
 

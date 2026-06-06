@@ -1310,6 +1310,31 @@ function initLightbox() {
     rebuildLightbox();
 }
 
+/** Escape text for safe insertion into the lightbox caption HTML. */
+function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+/**
+ * Build the fullscreen-lightbox caption from a photo's cluster + trip context,
+ * mirroring the popup header/subheader: location as the title, then trip name,
+ * country and year as a subtitle.
+ */
+function buildLightboxCaption({ year, tripName, location, country }) {
+    const countryStr = country ? countryName(country) : '';
+    const titleLine = location || tripName || '';
+    const subParts = [];
+    if (location && tripName && tripName !== location) subParts.push(tripName);
+    if (countryStr) subParts.push(countryStr);
+    if (year) subParts.push(year);
+    let html = '';
+    if (titleLine) html += `<div class="pswp-caption-title">${escapeHtml(titleLine)}</div>`;
+    if (subParts.length) html += `<div class="pswp-caption-sub">${escapeHtml(subParts.join(' · '))}</div>`;
+    return html;
+}
+
 function rebuildLightbox() {
     pswpItems = [];
     photoIndexMap = {};
@@ -1324,10 +1349,19 @@ function rebuildLightbox() {
     allManifests.forEach(manifest => {
         const ids = visiblePhotoIds[manifest.tripId];
         if (!ids) return;
+        const tripName = manifest.trip_name || '';
+        const startDate = manifest.dates && manifest.dates.start;
+        const year = startDate ? new Date(startDate).getFullYear() : '';
+        // photo id -> its cluster, so each slide carries its own location/country.
+        const clusterByPhoto = {};
+        (manifest.clusters || []).forEach(cluster => {
+            (cluster.photo_ids || []).forEach(pid => { clusterByPhoto[pid] = cluster; });
+        });
         manifest.photos.forEach(photo => {
             if (!ids.has(photo.id)) return;
             // Key by trip + id: photo ids (file stems like DJI_0099) collide across trips.
             photoIndexMap[`${manifest.tripId}::${photo.id}`] = pswpItems.length;
+            const cluster = clusterByPhoto[photo.id] || {};
             const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);
             // If the thumbnail is already in the browser cache (shown in map markers/popups),
             // use its aspect ratio to size the slide so msrc shows immediately.
@@ -1345,7 +1379,13 @@ function rebuildLightbox() {
                 msrc: thumbUrl,
                 w,
                 h,
-                _needsSize: needsSize
+                _needsSize: needsSize,
+                title: buildLightboxCaption({
+                    year,
+                    tripName,
+                    location: cluster.location,
+                    country: cluster.country
+                })
             });
         });
     });

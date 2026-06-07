@@ -80,6 +80,16 @@ body {
     line-height: 1.5;
 }
 
+.sidebar-powered-by {
+    margin-top: 8px;
+    font-size: 0.72rem;
+    color: #777;
+}
+
+.sidebar-powered-by a {
+    color: #999;
+}
+
 .nav-list {
     list-style: none;
     padding: 12px 0;
@@ -478,15 +488,15 @@ details[open] .country-summary::after {
     margin-top: -24px !important;
 }
 
-/* Photo popup styling */
+/* Photo popup styling (single-photo clusters) */
 .photo-popup {
-    min-width: 180px;
-    max-width: 220px;
+    width: 440px;
 }
 
 .photo-popup .popup-thumbnail {
     width: 100%;
-    height: auto;
+    height: 320px;
+    object-fit: cover;
     border-radius: 8px;
     cursor: pointer;
     transition: opacity 0.2s;
@@ -499,20 +509,20 @@ details[open] .country-summary::after {
 
 /* Cluster popup with multiple photos */
 .cluster-popup {
-    width: 282px;
+    width: 500px;
 }
 
 .cluster-popup .photo-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 5px;
+    gap: 6px;
 }
 
 .cluster-popup .photo-grid img {
     width: 100%;
-    height: 86px;
+    height: 150px;
     object-fit: cover;
-    border-radius: 6px;
+    border-radius: 8px;
     cursor: pointer;
     transition: opacity 0.2s;
 }
@@ -521,11 +531,15 @@ details[open] .country-summary::after {
     opacity: 0.85;
 }
 
+/* Fewer photos → larger, more prominent previews that fill the popup width. */
+.cluster-popup--cols-1 .photo-grid img { height: 340px; }
+.cluster-popup--cols-2 .photo-grid img { height: 200px; }
+
 .cluster-popup-header {
-    font-size: 13px;
+    font-size: 17px;
     font-weight: 600;
     color: #1a1a1a;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     line-height: 1.3;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -533,14 +547,34 @@ details[open] .country-summary::after {
 }
 
 .cluster-popup-subheader {
-    font-size: 11px;
+    font-size: 13px;
     color: #777;
     margin-top: -4px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     line-height: 1.3;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Fullscreen lightbox caption (year / trip / location / country) — default
+   PhotoSwipe bottom caption. */
+.pswp__caption .pswp__caption__center {
+    text-align: center;
+}
+
+.pswp-caption-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    line-height: 1.3;
+}
+
+.pswp-caption-sub {
+    font-size: 12px;
+    color: #bbb;
+    margin-top: 2px;
+    line-height: 1.3;
 }
 
 .cluster-popup-nav {
@@ -634,13 +668,30 @@ details[open] .country-summary::after {
     }
 
     .cluster-popup {
-        width: 300px;
-        max-width: calc(100vw - 40px);
+        width: 460px;
+        max-width: calc(100vw - 24px);
     }
 
     .cluster-popup .photo-grid {
         grid-template-columns: repeat(3, 1fr);
     }
+
+    /* Let thumbnails grow with the wider popup; min keeps them tappable when
+       the viewport caps the popup width on small phones. */
+    .cluster-popup .photo-grid img {
+        height: 120px;
+    }
+
+    /* Keep single/double previews prominent but not over-tall on phones. */
+    .cluster-popup--cols-1 .photo-grid img { height: 240px; }
+    .cluster-popup--cols-2 .photo-grid img { height: 150px; }
+
+    /* Single-photo cluster popup: fill the screen width, cap preview height. */
+    .photo-popup {
+        width: 440px;
+        max-width: calc(100vw - 24px);
+    }
+    .photo-popup .popup-thumbnail { height: 240px; }
 
     /* Larger tap targets for pagination on touch screens */
     .cluster-popup-navbtn {
@@ -648,10 +699,9 @@ details[open] .country-summary::after {
         height: 40px;
     }
 
-    /* Top filters — shift down slightly so they clear the hamburger */
-    .map-top-filters {
-        top: 70px;
-    }
+    /* Top-filter positioning overrides live at the bottom of this file, after the
+       base .map-top-filters / .route-filter-wrapper declarations, so they aren't
+       silently overridden by later base-style rules. */
 
     /* Map style control — icon-only, compact column at bottom-right */
     .map-style-control {
@@ -1015,8 +1065,18 @@ details[open] .country-summary::after {
     padding: 6px;
     min-width: 180px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    max-height: 320px;
+    max-height: min(70vh, 480px);
     overflow-y: auto;
+    /* Always show a scrollbar so it's obvious the list scrolls (macOS hides
+       overlay scrollbars by default, which made earlier years look missing). */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.3) transparent;
+}
+
+.year-filter-menu::-webkit-scrollbar { width: 8px; }
+.year-filter-menu::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.3);
+    border-radius: 4px;
 }
 
 .year-filter-menu.open { display: block; }
@@ -1088,16 +1148,17 @@ details[open] .country-summary::after {
     border: 1px solid rgba(255,255,255,0.12);
     border-radius: 10px;
     padding: 6px;
-    width: 340px;
+    width: 540px;
     max-width: calc(100vw - 24px);
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    max-height: min(70vh, 560px);
+    /* Grow with content; only scroll if the list ever exceeds the viewport. */
+    max-height: calc(100vh - 80px);
     overflow-y: auto;
-    /* Always show a scrollbar so it's obvious the list scrolls (macOS hides
-       overlay scrollbars by default, which made later countries look missing). */
     scrollbar-width: thin;
     scrollbar-color: rgba(255,255,255,0.3) transparent;
 }
+
+/* country-filter responsive overrides live at bottom of file (after base rules) */
 
 .country-filter-menu::-webkit-scrollbar { width: 8px; }
 .country-filter-menu::-webkit-scrollbar-thumb {
@@ -1107,11 +1168,11 @@ details[open] .country-summary::after {
 
 .country-filter-menu.open { display: block; }
 
-/* Two-column grid so all ~30 countries fit with minimal scrolling */
+/* Multi-column layout: items flow top-to-bottom then across, so each column
+   reads alphabetically. Grows in height automatically as countries are added. */
 .country-filter-options {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1px 4px;
+    column-count: 3;
+    column-gap: 8px;
 }
 
 .country-filter-actions {
@@ -1149,12 +1210,13 @@ details[open] .country-summary::after {
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 6px 8px;
+    padding: 5px 8px;
     border-radius: 6px;
     color: #999;
     cursor: pointer;
     font-size: 12.5px;
     transition: background 0.12s, color 0.12s;
+    break-inside: avoid;
 }
 
 .country-filter-option:hover { background: rgba(255,255,255,0.08); color: #fff; }
@@ -1269,4 +1331,46 @@ details[open] .country-summary::after {
 .map-style-icon {
     font-size: 14px;
     line-height: 1;
+}
+
+/* ─── Mobile filter overrides ───────────────────────────────────────────────
+   These MUST come after all base rules for .map-top-filters, .route-filter-*,
+   and .country-filter-* so the cascade doesn't silently discard them.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    /* Year+country bar: same row as the hamburger (top: 16px), starting just
+       after the 40px hamburger button.  max-width stops it from reaching the
+       All/GPX toggle on the right. */
+    .map-top-filters {
+        top: 16px;
+        left: 68px;   /* 16px hamburger left + 40px width + 12px gap */
+        transform: none;
+        /* reserve space for .route-filter-wrapper (≈104px) + 12px gap */
+        max-width: calc(100% - 68px - 12px - 116px);
+    }
+
+    /* Shrink buttons slightly so all four controls fit on one row */
+    .year-filter-btn,
+    .country-filter-btn {
+        padding: 7px 10px;
+        font-size: 12px;
+        gap: 6px;
+    }
+
+    /* All/GPX toggle: same row, pinned to right edge */
+    .route-filter-wrapper {
+        top: 16px;
+        right: 12px;
+    }
+}
+
+@media (max-width: 560px) {
+    /* Country dropdown: 2 columns and viewport-constrained width */
+    .country-filter-menu {
+        width: 360px;
+        max-width: calc(100vw - 24px);
+    }
+    .country-filter-options {
+        column-count: 2;
+    }
 }

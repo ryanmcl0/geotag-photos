@@ -25,7 +25,10 @@ import os
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from prune import prune_removed_trips
 
 try:
     import boto3
@@ -171,6 +174,7 @@ class R2Uploader:
             pass  # If listing fails, upload everything
 
         local_keys = set()
+        to_upload = []  # (img_file, s3_key, local_size) for files whose content changed
         for img_file in sorted(hosted_dir.rglob('*.webp')):
             s3_key = str(img_file.relative_to('hosted-photos'))
             local_keys.add(s3_key)
@@ -184,15 +188,28 @@ class R2Uploader:
 
             if unchanged:
                 stats['skipped_existing'] += 1
-                continue
+            else:
+                to_upload.append((img_file, s3_key, local_size))
 
-            try:
-                self.s3.upload_file(str(img_file), self.config.r2_bucket, s3_key)
-                stats['uploaded'] += 1
-                stats['bytes'] += local_size
-            except ClientError as e:
-                stats['errors'] += 1
-                print(f"    ✗ {s3_key}: {e}")
+        # Upload changed files concurrently — the job is latency-bound (many small PUTs),
+        # so a thread pool cuts wall-time ~10x. boto3 clients are thread-safe; ex.map
+        # yields results back on this thread so stat updates stay single-threaded.
+        if to_upload and not dry_run:
+            def _put(item):
+                img_file, s3_key, local_size = item
+                try:
+                    self.s3.upload_file(str(img_file), self.config.r2_bucket, s3_key)
+                    return (s3_key, local_size, None)
+                except ClientError as e:
+                    return (s3_key, 0, e)
+            with ThreadPoolExecutor(max_workers=32) as ex:
+                for s3_key, size, err in ex.map(_put, to_upload):
+                    if err:
+                        stats['errors'] += 1
+                        print(f"    ✗ {s3_key}: {err}")
+                    else:
+                        stats['uploaded'] += 1
+                        stats['bytes'] += size
 
         # Sync deletes: remove R2 objects under this trip that no longer exist locally
         # (photos removed by reclustering / private-split / orphan cleanup). Keeps R2 a
@@ -408,8 +425,10 @@ bucket_name = "{self.config.r2_bucket}"
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Deploy travel map to Cloudflare Pages + R2')
-    parser.add_argument('--upload-images', action='store_true', help='Upload images to R2 (skipped by default)')
+    parser.add_argument('--skip-images', action='store_true', help='Skip the R2 image sync (deploy code/manifests only)')
     parser.add_argument('--skip-pages', action='store_true', help='Skip Pages deployment')
+    parser.add_argument('--no-prune', action='store_true', help='Do not remove trips that are no longer in config/trips.json')
+    parser.add_argument('--prune-force', action='store_true', help='Allow pruning even when many trips would be removed (overrides the safety guard)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument('--trip', help='Upload only a specific trip slug')
     args = parser.parse_args()
@@ -437,9 +456,19 @@ def main():
     sync_public_flags(dry_run=args.dry_run)
     print()
 
-    # Step 2: Upload images to R2
-    if args.upload_images:
-        print("📤 Uploading images to R2...")
+    # Step 1b: Prune trips removed from config/trips.json (index, web/trips,
+    # hosted-photos, R2). On by default; config is the source of truth.
+    if not args.no_prune:
+        print("🧹 Pruning trips removed from config...")
+        prune_s3 = None if (args.skip_images or args.dry_run) else R2Uploader(config).s3
+        prune_removed_trips(s3=prune_s3, r2_bucket=config.r2_bucket,
+                            dry_run=args.dry_run, force=args.prune_force)
+        print()
+
+    # Step 2: Sync images to R2 (size-aware: skips unchanged, re-uploads changed,
+    # deletes orphans). On by default; --skip-images for a code/manifest-only deploy.
+    if not args.skip_images:
+        print("📤 Syncing images to R2...")
         uploader = R2Uploader(config)
         if args.trip:
             uploader.upload_trip(args.trip, dry_run=args.dry_run)

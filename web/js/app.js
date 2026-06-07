@@ -149,6 +149,76 @@ function getTopFilterBar() {
     return bar;
 }
 
+/**
+ * Close any open filter dropdown except `keep`, so the year and country menus
+ * never overlap each other when one is opened while the other is showing.
+ */
+function closeOtherFilterMenus(keep) {
+    document.querySelectorAll('.year-filter-menu.open, .country-filter-menu.open')
+        .forEach(m => { if (m !== keep) m.classList.remove('open'); });
+}
+
+// Position the country dropdown so it stays within the viewport.
+//
+// On mobile (≤768 px): the menu is re-parented to .map-container so it escapes
+// two clipping contexts — Leaflet's overflow:hidden on #map, and the
+// will-change:transform containing block on .map-top-filters that breaks fixed
+// positioning. .map-container is position:relative with no overflow or transform.
+//
+// On desktop: nudge left/right if the centered menu overflows the viewport edge.
+function clampMenuToViewport(menu) {
+    // Save the anchor button before any DOM move (previousElementSibling changes
+    // once the menu is re-parented out of its wrapper).
+    if (!menu._anchorBtn) menu._anchorBtn = menu.previousElementSibling;
+
+    menu.style.position  = '';
+    menu.style.top       = '';
+    menu.style.left      = '';
+    menu.style.right     = '';
+    menu.style.width     = '';
+    menu.style.maxHeight = '';
+    menu.style.transform = '';
+    menu.style.zIndex    = '';
+
+    const vw     = window.innerWidth;
+    const margin = 12;
+
+    if (vw > 768) {
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            if (rect.right <= vw - margin && rect.left >= margin) return;
+            const parentLeft = menu.offsetParent
+                ? menu.offsetParent.getBoundingClientRect().left : 0;
+            let left = rect.left - parentLeft;
+            if (rect.right > vw - margin) left -= rect.right - (vw - margin);
+            if (rect.left  < margin)      left += margin - rect.left;
+            menu.style.left      = left + 'px';
+            menu.style.transform = 'none';
+        });
+        return;
+    }
+
+    // Mobile: re-parent to .map-container if not already there
+    const container = document.querySelector('.map-container') || document.body;
+    if (menu.parentElement !== container) container.appendChild(menu);
+
+    requestAnimationFrame(() => {
+        const btn           = menu._anchorBtn;
+        const btnRect       = btn ? btn.getBoundingClientRect() : { bottom: 80 };
+        const containerTop  = container.getBoundingClientRect().top;
+        const menuTop       = Math.round(btnRect.bottom - containerTop) + 6;
+
+        menu.style.position  = 'absolute';
+        menu.style.top       = menuTop + 'px';
+        menu.style.left      = margin + 'px';
+        menu.style.right     = margin + 'px';
+        menu.style.width     = 'auto';
+        menu.style.maxHeight = (window.innerHeight - btnRect.bottom - 6 - margin) + 'px';
+        menu.style.transform = 'none';
+        menu.style.zIndex    = '2000';
+    });
+}
+
 function initYearFilter() {
     const years = [...new Set(allTrips.map(t => {
         const m = (t.name || '').match(/^(\d{4})/);
@@ -190,8 +260,14 @@ function initYearFilter() {
     const btn = wrapper.querySelector('#yearFilterBtn');
     const menu = wrapper.querySelector('#yearFilterMenu');
 
+    // The menu overlays the Leaflet map; without this, wheel-scrolling the menu
+    // zooms the map underneath instead of scrolling the (overflowing) list.
+    L.DomEvent.disableScrollPropagation(menu);
+    L.DomEvent.disableClickPropagation(menu);
+
     btn.addEventListener('click', e => {
         e.stopPropagation();
+        closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
     });
     document.addEventListener('click', () => menu.classList.remove('open'));
@@ -282,16 +358,22 @@ function rebuildCountryFilter() {
     const btn = wrapper.querySelector('#countryFilterBtn');
     const menu = wrapper.querySelector('#countryFilterMenu');
 
+    // Stop wheel/click over the menu from reaching the Leaflet map (zoom/pan).
+    L.DomEvent.disableScrollPropagation(menu);
+    L.DomEvent.disableClickPropagation(menu);
+
     btn.addEventListener('click', e => {
         e.stopPropagation();
+        closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
+        if (menu.classList.contains('open')) clampMenuToViewport(menu);
     });
     document.addEventListener('click', () => menu.classList.remove('open'));
     menu.addEventListener('click', e => e.stopPropagation());
 
     wrapper.querySelector('#countrySelectAll').addEventListener('click', () => {
         activeCountryFilter = null;
-        wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+        menu.querySelectorAll('.country-filter-option').forEach(opt => {
             opt.classList.add('country-filter-option--active');
             opt.querySelector('.country-filter-check').textContent = '✓';
         });
@@ -301,7 +383,7 @@ function rebuildCountryFilter() {
 
     wrapper.querySelector('#countrySelectNone').addEventListener('click', () => {
         activeCountryFilter = new Set();
-        wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+        menu.querySelectorAll('.country-filter-option').forEach(opt => {
             opt.classList.remove('country-filter-option--active');
             opt.querySelector('.country-filter-check').textContent = '';
         });
@@ -800,7 +882,9 @@ function buildMarkerLayer(manifest, hasGpx) {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
         const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
         const marker = L.marker([cluster.lat, cluster.lon]);
-        marker.bindPopup(() => buildMarkerPopup(marker));
+        // maxWidth overrides Leaflet's 300px default ceiling so the wider
+        // cluster popup (see .cluster-popup in styles.css) isn't clamped.
+        marker.bindPopup(() => buildMarkerPopup(marker), { maxWidth: 560 });
         marker.photoData = photos;
         marker.locationName = cluster.location;
         marker.country = cluster.country || null;
@@ -1047,6 +1131,12 @@ function createMultiPhotoPopup(marker, startPage) {
     grid.className = 'photo-grid';
     container.appendChild(grid);
 
+    // Fit the column count to the number of photos so a lone photo fills the
+    // popup width instead of sitting in a 1-of-3 cell. 1→1 col, 2→2 cols, 3+→3.
+    const cols = Math.min(3, photos.length);
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    container.classList.add(`cluster-popup--cols-${cols}`);
+
     const totalPages = Math.ceil(photos.length / CLUSTER_POPUP_PAGE_SIZE);
     let page = startPage === 'last' ? totalPages - 1 : (startPage || 0);
     if (page < 0 || page >= totalPages) page = 0;
@@ -1290,6 +1380,31 @@ function initLightbox() {
     rebuildLightbox();
 }
 
+/** Escape text for safe insertion into the lightbox caption HTML. */
+function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+/**
+ * Build the fullscreen-lightbox caption from a photo's cluster + trip context,
+ * mirroring the popup header/subheader: location as the title, then trip name,
+ * country and year as a subtitle.
+ */
+function buildLightboxCaption({ year, tripName, location, country }) {
+    const countryStr = country ? countryName(country) : '';
+    const titleLine = location || tripName || '';
+    const subParts = [];
+    if (location && tripName && tripName !== location) subParts.push(tripName);
+    if (countryStr) subParts.push(countryStr);
+    if (year) subParts.push(year);
+    let html = '';
+    if (titleLine) html += `<div class="pswp-caption-title">${escapeHtml(titleLine)}</div>`;
+    if (subParts.length) html += `<div class="pswp-caption-sub">${escapeHtml(subParts.join(' · '))}</div>`;
+    return html;
+}
+
 function rebuildLightbox() {
     pswpItems = [];
     photoIndexMap = {};
@@ -1304,10 +1419,19 @@ function rebuildLightbox() {
     allManifests.forEach(manifest => {
         const ids = visiblePhotoIds[manifest.tripId];
         if (!ids) return;
+        const tripName = manifest.trip_name || '';
+        const startDate = manifest.dates && manifest.dates.start;
+        const year = startDate ? new Date(startDate).getFullYear() : '';
+        // photo id -> its cluster, so each slide carries its own location/country.
+        const clusterByPhoto = {};
+        (manifest.clusters || []).forEach(cluster => {
+            (cluster.photo_ids || []).forEach(pid => { clusterByPhoto[pid] = cluster; });
+        });
         manifest.photos.forEach(photo => {
             if (!ids.has(photo.id)) return;
             // Key by trip + id: photo ids (file stems like DJI_0099) collide across trips.
             photoIndexMap[`${manifest.tripId}::${photo.id}`] = pswpItems.length;
+            const cluster = clusterByPhoto[photo.id] || {};
             const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);
             // If the thumbnail is already in the browser cache (shown in map markers/popups),
             // use its aspect ratio to size the slide so msrc shows immediately.
@@ -1325,7 +1449,13 @@ function rebuildLightbox() {
                 msrc: thumbUrl,
                 w,
                 h,
-                _needsSize: needsSize
+                _needsSize: needsSize,
+                title: buildLightboxCaption({
+                    year,
+                    tripName,
+                    location: cluster.location,
+                    country: cluster.country
+                })
             });
         });
     });
@@ -1396,6 +1526,52 @@ function addDoubleTapDragZoom(gallery, pswpEl) {
 }
 
 /**
+ * Trackpad / mouse-wheel zoom for desktop.
+ *
+ * On macOS a trackpad pinch arrives as a `wheel` event with ctrlKey=true; a
+ * regular two-finger scroll arrives as a plain wheel event. PhotoSwipe v4 has
+ * no desktop wheel-zoom, so by default the browser zooms the whole page and
+ * PhotoSwipe treats the scroll as a close gesture. We intercept at document
+ * level with capture:true (before PhotoSwipe's own listeners), preventDefault
+ * to stop the page zoom, and zoom the current slide centered on the cursor.
+ */
+function addWheelZoom(gallery, pswpEl) {
+    const MAX_ZOOM = 3;
+    // We can't read the live zoom back reliably between rapid wheel events
+    // (currItem.currZoomLevel stays at the fit level), so accumulate the target
+    // ourselves. Lazily seed from the actual zoom and reset on slide changes.
+    let targetZoom = null;
+
+    function minZoom() {
+        return (gallery.currItem && gallery.currItem.initialZoomLevel) || 0.1;
+    }
+
+    function onWheel(e) {
+        if (!pswpEl.classList.contains('pswp--open')) return;
+        // Always stop the browser page zoom and PhotoSwipe's close-on-scroll.
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (targetZoom === null) targetZoom = gallery.getZoomLevel();
+        // Trackpad pinch (ctrlKey) gives small deltas; mouse wheel gives large
+        // ones. Normalize so both feel reasonable.
+        const factor = e.ctrlKey ? 0.01 : 0.0025;
+        targetZoom = Math.min(MAX_ZOOM,
+            Math.max(minZoom(), targetZoom * Math.exp(-e.deltaY * factor)));
+        gallery.zoomTo(targetZoom, { x: e.clientX, y: e.clientY }, 0);
+    }
+
+    // Reset the accumulator whenever the displayed slide changes so the next
+    // wheel event re-seeds from that slide's real (fit) zoom.
+    function resetTarget() { targetZoom = null; }
+
+    document.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    gallery.listen('afterChange', resetTarget);
+    gallery.listen('destroy', () => {
+        document.removeEventListener('wheel', onWheel, { capture: true });
+    });
+}
+
+/**
  * Open PhotoSwipe gallery at a specific photo
  */
 function openGallery(photo) {
@@ -1436,6 +1612,7 @@ function openGallery(photo) {
 
     gallery.init();
     addDoubleTapDragZoom(gallery, pswpEl);
+    addWheelZoom(gallery, pswpEl);
 }
 
 function reinitLightbox() {

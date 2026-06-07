@@ -1856,16 +1856,24 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         _TIMESTAMP_COLLISION_DAYS = 30  # if raw timestamp differs from edit by >30 days, it's a stem collision
 
         def _raw_matches_edit(edit_path: Path) -> bool:
-            raw = find_raw(edit_path.stem, edit_path)
-            if raw is None:
+            # Check ALL same-stem raws, not just the folder-token/rank pick: the
+            # camera counter rolls over so a stem repeats across in-trip folders,
+            # and an edit may be mis-filed under a folder that points the pick at the
+            # wrong (different-date) raw. Keep the edit if ANY candidate matches its
+            # capture time; the timestamp-resolution pass below selects the right raw.
+            cands = raw_index.get(edit_path.stem) or raw_base_index.get(base_stem(edit_path.stem))
+            if not cands:
                 return False
-            raw_ts = get_exif_datetime_via_exiftool(raw)
-            if raw_ts is None:
-                return True  # can't verify, assume match
             edit_ts = get_exif_datetime(edit_path) or get_exif_datetime_via_exiftool(edit_path)
             if edit_ts is None:
                 return True  # can't verify, assume match
-            return abs((raw_ts - edit_ts).days) <= _TIMESTAMP_COLLISION_DAYS
+            for raw in cands:
+                raw_ts = get_exif_datetime_via_exiftool(raw)
+                if raw_ts is None:
+                    return True  # can't verify, assume match
+                if abs((raw_ts - edit_ts).days) <= _TIMESTAMP_COLLISION_DAYS:
+                    return True
+            return False
 
         photo_files = [p for p in photo_files if _raw_matches_edit(p)]
         click.echo(f"  Kept {len(photo_files)} of {before} photos with matching raw (timestamp-verified)")
@@ -2093,11 +2101,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # Build raw-match index upfront (needed for cache keys).
     raw_matches = {pf: find_raw(pf.stem, pf) for pf in photo_files}
 
-    # Stem collisions the folder name can't resolve (>1 candidate after token
-    # narrowing) — e.g. flat multi-region edits bundles where the camera counter
-    # repeated across regions. We read EVERY candidate's EXIF (below) and pick the
-    # one whose capture time matches the edit's, in a pass after the batch read.
-    raw_cand_map = {pf: _token_narrowed_cands(pf.stem, pf) for pf in photo_files}
+    # Stem collisions — the camera counter repeated a stem across in-trip folders.
+    # Consider ALL same-stem raws (not just the folder-token narrowing) so we can
+    # timestamp-resolve even when the edit's folder mis-points the token pick (e.g.
+    # an edit filed under the wrong region folder, or a province-named edit folder
+    # that shares no token with any city-named raw folder). We read EVERY
+    # candidate's EXIF (below) and pick the one whose capture time matches the
+    # edit's, in a pass after the batch read.
+    def _all_stem_cands(pf: Path) -> list:
+        return raw_index.get(pf.stem) or raw_base_index.get(base_stem(pf.stem)) or []
+    raw_cand_map = {pf: _all_stem_cands(pf) for pf in photo_files}
     collision_edits = [pf for pf in photo_files if len(raw_cand_map[pf]) > 1]
     if collision_edits:
         click.echo(f"Stem collisions to resolve by timestamp: {len(collision_edits)}")
@@ -2210,9 +2223,11 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 raw_ts = _parse_exif_datetime(exif_raws.get(str(r), {}).get('DateTimeOriginal'))
                 if raw_ts is None:
                     continue
-                diff = abs((raw_ts - edit_ts).total_seconds())
-                if best is None or diff < best[0]:
-                    best = (diff, r)
+                # Closest capture time wins; ties (a raw and its JPG mirror share a
+                # time) break by rank so the real raw / building-folder path wins.
+                key = (abs((raw_ts - edit_ts).total_seconds()), rank(r))
+                if best is None or key < best[0]:
+                    best = (key, r)
             if best is not None and raw_matches[pf] != best[1]:
                 raw_matches[pf] = best[1]
                 _resolved += 1

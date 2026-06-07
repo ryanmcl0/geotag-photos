@@ -7,10 +7,18 @@ Use --force to reprocess everything, or --trip NAME to target one trip.
 
 Usage:
   ./process_all.py                        # process new/unprocessed trips
+  ./process_all.py --update               # delta: reprocess only trips whose edits changed
   ./process_all.py --force                # reprocess all trips
   ./process_all.py --trip "Scotland"      # process one trip by name (partial match)
   ./process_all.py --dry-run              # show what would run without executing
   ./process_all.py --trip X --gps-only    # update GPS/clusters only (reuse images, bust EXIF cache)
+
+--update reprocesses only trips whose source edits changed since they were last processed —
+this includes a NEW or MODIFIED edit (newer than the manifest) AND a DELETED edit (e.g. after
+duplicate cleanup), detected by comparing the manifest's photos to the edits on disk. Each
+selected trip runs in process_trip --update mode (delta re-encode + orphan-image cleanup),
+so removed edits drop out of the manifest and hosted-photos; a following deploy then prunes
+them from R2. See trip_is_dirty().
 """
 
 import json
@@ -26,6 +34,9 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 TRIPS_CONFIG = PROJECT_ROOT / 'config' / 'trips.json'
 WEB_TRIPS_DIR = PROJECT_ROOT / 'web' / 'trips'
 
+# Source edit extensions that become photos (mirror process_trip.SUPPORTED_EXTENSIONS).
+IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'}
+
 
 def slugify(name: str) -> str:
     s = name.lower()
@@ -38,9 +49,14 @@ def is_processed(slug: str) -> bool:
 
 
 def trip_is_dirty(trip: dict, slug: str) -> bool:
-    """A processed trip is 'dirty' if any source edit is newer than its manifest.
-    Used by --update to select only trips whose edits changed. (Stat-only walk —
-    no content reads — but it does traverse the edits tree, so call only in --update.)"""
+    """A processed trip is 'dirty' if its source edits changed since it was last processed:
+      • any edit file is newer than the manifest (a new or modified edit), OR
+      • a photo in the manifest no longer has a matching source edit on disk (a deleted
+        edit — e.g. duplicate cleanup, which never bumps any mtime so the check above can't
+        see it). Manifest photo 'id' == edit-file stem (process_trip.py:2453), so we compare
+        manifest ids against the stems currently present under the edits tree.
+    Used by --update to select only trips whose edits changed. Stat-only walk (plus one
+    manifest read); call only in --update."""
     man = WEB_TRIPS_DIR / slug / 'manifest.json'
     if not man.exists():
         return True  # never processed → needs processing
@@ -48,13 +64,23 @@ def trip_is_dirty(trip: dict, slug: str) -> bool:
     edits = Path(trip['edits'])
     if not edits.exists():
         return False
+    current_stems = set()
     for p in edits.rglob('*'):
         try:
-            if p.is_file() and p.stat().st_mtime > man_mtime:
-                return True
+            if not p.is_file() or p.name.startswith('.'):
+                continue
+            if p.stat().st_mtime > man_mtime:
+                return True  # new or modified edit
+            if p.suffix.lower() in IMAGE_EXTS:
+                current_stems.add(p.stem)
         except OSError:
             continue
-    return False
+    # Deletions: any manifest photo whose source edit stem is gone from the edits tree.
+    try:
+        manifest = json.loads(man.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return any(ph.get('id') not in current_stems for ph in manifest.get('photos', []))
 
 
 def gather_gpx_files(gpx_entry) -> list[Path]:

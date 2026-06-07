@@ -7,10 +7,18 @@ Use --force to reprocess everything, or --trip NAME to target one trip.
 
 Usage:
   ./process_all.py                        # process new/unprocessed trips
+  ./process_all.py --update               # delta: reprocess only trips whose edits changed
   ./process_all.py --force                # reprocess all trips
   ./process_all.py --trip "Scotland"      # process one trip by name (partial match)
   ./process_all.py --dry-run              # show what would run without executing
   ./process_all.py --trip X --gps-only    # update GPS/clusters only (reuse images, bust EXIF cache)
+
+--update reprocesses only trips whose source edits changed since they were last processed —
+this includes a NEW or MODIFIED edit (newer than the manifest) AND a DELETED edit (e.g. after
+duplicate cleanup), detected by comparing the manifest's photos to the edits on disk. Each
+selected trip runs in process_trip --update mode (delta re-encode + orphan-image cleanup),
+so removed edits drop out of the manifest and hosted-photos; a following deploy then prunes
+them from R2. See trip_is_dirty().
 """
 
 import json

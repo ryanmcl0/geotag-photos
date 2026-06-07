@@ -363,6 +363,10 @@
             if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
             if (isMobile()) {
                 sidebar.style.display = 'flex';
+                // Force iOS to flush any stale GPU-cached content that accumulated
+                // while the sidebar was display:none, so filter-driven DOM updates
+                // (trip count, photo count) are always visible on reopen.
+                void sidebar.offsetHeight;
                 // Two rAFs: first renders display:flex at left:-280px,
                 // second adds .open to start the CSS left transition
                 requestAnimationFrame(() => requestAnimationFrame(() => {

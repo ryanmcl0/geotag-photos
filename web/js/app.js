@@ -882,7 +882,9 @@ function buildMarkerLayer(manifest, hasGpx) {
         const photos = cluster.photo_ids.map(id => photoLookup[id]);
         const thumbnailUrl = resolveUrl(manifest.tripPath, photos[0].thumbnail);
         const marker = L.marker([cluster.lat, cluster.lon]);
-        marker.bindPopup(() => buildMarkerPopup(marker));
+        // maxWidth overrides Leaflet's 300px default ceiling so the wider
+        // cluster popup (see .cluster-popup in styles.css) isn't clamped.
+        marker.bindPopup(() => buildMarkerPopup(marker), { maxWidth: 560 });
         marker.photoData = photos;
         marker.locationName = cluster.location;
         marker.country = cluster.country || null;
@@ -1128,6 +1130,12 @@ function createMultiPhotoPopup(marker, startPage) {
     const grid = document.createElement('div');
     grid.className = 'photo-grid';
     container.appendChild(grid);
+
+    // Fit the column count to the number of photos so a lone photo fills the
+    // popup width instead of sitting in a 1-of-3 cell. 1→1 col, 2→2 cols, 3+→3.
+    const cols = Math.min(3, photos.length);
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    container.classList.add(`cluster-popup--cols-${cols}`);
 
     const totalPages = Math.ceil(photos.length / CLUSTER_POPUP_PAGE_SIZE);
     let page = startPage === 'last' ? totalPages - 1 : (startPage || 0);

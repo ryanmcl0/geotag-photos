@@ -158,6 +158,67 @@ function closeOtherFilterMenus(keep) {
         .forEach(m => { if (m !== keep) m.classList.remove('open'); });
 }
 
+// Position the country dropdown so it stays within the viewport.
+//
+// On mobile (≤768 px): the menu is re-parented to .map-container so it escapes
+// two clipping contexts — Leaflet's overflow:hidden on #map, and the
+// will-change:transform containing block on .map-top-filters that breaks fixed
+// positioning. .map-container is position:relative with no overflow or transform.
+//
+// On desktop: nudge left/right if the centered menu overflows the viewport edge.
+function clampMenuToViewport(menu) {
+    // Save the anchor button before any DOM move (previousElementSibling changes
+    // once the menu is re-parented out of its wrapper).
+    if (!menu._anchorBtn) menu._anchorBtn = menu.previousElementSibling;
+
+    menu.style.position  = '';
+    menu.style.top       = '';
+    menu.style.left      = '';
+    menu.style.right     = '';
+    menu.style.width     = '';
+    menu.style.maxHeight = '';
+    menu.style.transform = '';
+    menu.style.zIndex    = '';
+
+    const vw     = window.innerWidth;
+    const margin = 12;
+
+    if (vw > 768) {
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            if (rect.right <= vw - margin && rect.left >= margin) return;
+            const parentLeft = menu.offsetParent
+                ? menu.offsetParent.getBoundingClientRect().left : 0;
+            let left = rect.left - parentLeft;
+            if (rect.right > vw - margin) left -= rect.right - (vw - margin);
+            if (rect.left  < margin)      left += margin - rect.left;
+            menu.style.left      = left + 'px';
+            menu.style.transform = 'none';
+        });
+        return;
+    }
+
+    // Mobile: re-parent to .map-container if not already there
+    const container = document.querySelector('.map-container') || document.body;
+    if (menu.parentElement !== container) container.appendChild(menu);
+
+    requestAnimationFrame(() => {
+        const btn           = menu._anchorBtn;
+        const btnRect       = btn ? btn.getBoundingClientRect() : { bottom: 80 };
+        const containerTop  = container.getBoundingClientRect().top;
+        const menuTop       = Math.round(btnRect.bottom - containerTop) + 6;
+
+        menu.style.position  = 'absolute';
+        menu.style.top       = menuTop + 'px';
+        menu.style.left      = margin + 'px';
+        menu.style.right     = margin + 'px';
+        menu.style.width     = 'auto';
+        menu.style.maxHeight = (window.innerHeight - btnRect.bottom - 6 - margin) + 'px';
+        menu.style.transform = 'none';
+        menu.style.zIndex    = '2000';
+    });
+}
+
 function initYearFilter() {
     const years = [...new Set(allTrips.map(t => {
         const m = (t.name || '').match(/^(\d{4})/);
@@ -305,13 +366,14 @@ function rebuildCountryFilter() {
         e.stopPropagation();
         closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
+        if (menu.classList.contains('open')) clampMenuToViewport(menu);
     });
     document.addEventListener('click', () => menu.classList.remove('open'));
     menu.addEventListener('click', e => e.stopPropagation());
 
     wrapper.querySelector('#countrySelectAll').addEventListener('click', () => {
         activeCountryFilter = null;
-        wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+        menu.querySelectorAll('.country-filter-option').forEach(opt => {
             opt.classList.add('country-filter-option--active');
             opt.querySelector('.country-filter-check').textContent = '✓';
         });
@@ -321,7 +383,7 @@ function rebuildCountryFilter() {
 
     wrapper.querySelector('#countrySelectNone').addEventListener('click', () => {
         activeCountryFilter = new Set();
-        wrapper.querySelectorAll('.country-filter-option').forEach(opt => {
+        menu.querySelectorAll('.country-filter-option').forEach(opt => {
             opt.classList.remove('country-filter-option--active');
             opt.querySelector('.country-filter-check').textContent = '';
         });

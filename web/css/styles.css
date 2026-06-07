@@ -678,10 +678,9 @@ details[open] .country-summary::after {
         height: 40px;
     }
 
-    /* Top filters — shift down slightly so they clear the hamburger */
-    .map-top-filters {
-        top: 70px;
-    }
+    /* Top-filter positioning overrides live at the bottom of this file, after the
+       base .map-top-filters / .route-filter-wrapper declarations, so they aren't
+       silently overridden by later base-style rules. */
 
     /* Map style control — icon-only, compact column at bottom-right */
     .map-style-control {
@@ -1138,10 +1137,7 @@ details[open] .country-summary::after {
     scrollbar-color: rgba(255,255,255,0.3) transparent;
 }
 
-@media (max-width: 560px) {
-    .country-filter-menu { width: 360px; }
-    .country-filter-options { column-count: 2; }
-}
+/* country-filter responsive overrides live at bottom of file (after base rules) */
 
 .country-filter-menu::-webkit-scrollbar { width: 8px; }
 .country-filter-menu::-webkit-scrollbar-thumb {
@@ -1314,4 +1310,46 @@ details[open] .country-summary::after {
 .map-style-icon {
     font-size: 14px;
     line-height: 1;
+}
+
+/* ─── Mobile filter overrides ───────────────────────────────────────────────
+   These MUST come after all base rules for .map-top-filters, .route-filter-*,
+   and .country-filter-* so the cascade doesn't silently discard them.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    /* Year+country bar: same row as the hamburger (top: 16px), starting just
+       after the 40px hamburger button.  max-width stops it from reaching the
+       All/GPX toggle on the right. */
+    .map-top-filters {
+        top: 16px;
+        left: 68px;   /* 16px hamburger left + 40px width + 12px gap */
+        transform: none;
+        /* reserve space for .route-filter-wrapper (≈104px) + 12px gap */
+        max-width: calc(100% - 68px - 12px - 116px);
+    }
+
+    /* Shrink buttons slightly so all four controls fit on one row */
+    .year-filter-btn,
+    .country-filter-btn {
+        padding: 7px 10px;
+        font-size: 12px;
+        gap: 6px;
+    }
+
+    /* All/GPX toggle: same row, pinned to right edge */
+    .route-filter-wrapper {
+        top: 16px;
+        right: 12px;
+    }
+}
+
+@media (max-width: 560px) {
+    /* Country dropdown: 2 columns and viewport-constrained width */
+    .country-filter-menu {
+        width: 360px;
+        max-width: calc(100vw - 24px);
+    }
+    .country-filter-options {
+        column-count: 2;
+    }
 }

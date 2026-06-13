@@ -19,9 +19,13 @@ Usage:
 import glob
 import os
 import subprocess
+import sys
+from pathlib import Path
 
 import click
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root (script lives in tools/)
 
 DEFAULT_VARIANTS = ("webp:90:2160", "avif:63:2160", "avif:80:2160",
                     "avif:80:1920", "avif:82:1600")

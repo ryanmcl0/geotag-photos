@@ -5,8 +5,8 @@ Strips scripts, styles, nav, and prints the body text.
 Useful for pulling out day-by-day route narrative.
 
 Usage:
-    python reconstruction/blog_extract.py "/path/to/blog.html"
-    python reconstruction/blog_extract.py "/path/to/blog.html" | grep -i "day\|drove\|train\|arrived"
+    python tools/reconstruction/blog_extract.py "/path/to/blog.html"
+    python tools/reconstruction/blog_extract.py "/path/to/blog.html" | grep -i "day\|drove\|train\|arrived"
 """
 import sys
 from html.parser import HTMLParser

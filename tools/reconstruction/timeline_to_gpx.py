@@ -4,7 +4,7 @@ Extract GPS points from Google Maps Timeline JSON export for a date range
 and write a GPX track file.
 
 Usage:
-    python reconstruction/timeline_to_gpx.py \
+    python tools/reconstruction/timeline_to_gpx.py \
         --start 2024-01-01 --end 2024-01-07 \
         --out /path/to/output/trip.gpx
 
@@ -53,7 +53,7 @@ def extract_points(timeline_path, start_dt, end_dt):
 def build_gpx(pts, name):
     gpx = ET.Element('gpx', {
         'version': '1.1',
-        'creator': 'geotag-photos/reconstruction/timeline_to_gpx.py',
+        'creator': 'geotag-photos/tools/reconstruction/timeline_to_gpx.py',
         'xmlns': 'http://www.topografix.com/GPX/1/1',
     })
     trk = ET.SubElement(gpx, 'trk')

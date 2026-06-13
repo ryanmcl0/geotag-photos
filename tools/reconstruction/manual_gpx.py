@@ -4,7 +4,7 @@ Template for building a GPX from manually identified waypoints
 (used as fallback when Timeline.json has no coverage).
 
 Edit the waypoints list below, then run:
-    python reconstruction/manual_gpx.py
+    python tools/reconstruction/manual_gpx.py
 
 Timestamps: write them in the camera's clock timezone (usually UK BST/GMT).
 The script converts to UTC. Set CAMERA_UTC_OFFSET to match the camera.
@@ -33,7 +33,7 @@ def to_utc(y, mo, d, h, mi):
     tz = timezone(timedelta(hours=CAMERA_UTC_OFFSET))
     return datetime(y, mo, d, h, mi, tzinfo=tz).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-gpx = ET.Element('gpx', {'version': '1.1', 'creator': 'geotag-photos/reconstruction/manual_gpx.py',
+gpx = ET.Element('gpx', {'version': '1.1', 'creator': 'geotag-photos/tools/reconstruction/manual_gpx.py',
                           'xmlns': 'http://www.topografix.com/GPX/1/1'})
 trk = ET.SubElement(gpx, 'trk')
 ET.SubElement(trk, 'name').text = TRIP_NAME

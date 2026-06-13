@@ -11,7 +11,10 @@
     let yearGroups = {};
 
     function hasAllAccess() {
-        return document.cookie.split(';').some(c => c.trim() === 'all_access=1');
+        return document.cookie.split(';').some(c => {
+            const t = c.trim();
+            return t.startsWith('all_access=') && t.length > 'all_access='.length;
+        });
     }
 
     // Strip leading "YYYY:MM " or "YYYY " prefix from trip names — these are

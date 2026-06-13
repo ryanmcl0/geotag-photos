@@ -49,6 +49,16 @@ def expected_slugs():
             s = _slugify(t['name'])
             expected.add(s)
             expected.add(f"{s}-private")
+    # Blog asset pseudo-trips (build_blogs.py) live in hosted-photos/ + web/trips/
+    # under 'blog-<slug>[-private]' but are registered in config/blogs.json, not trips.json.
+    blogs_cfg = PROJECT_ROOT / 'config' / 'blogs.json'
+    if blogs_cfg.exists():
+        try:
+            for b in json.loads(blogs_cfg.read_text()).get('blogs', []):
+                expected.add(f"blog-{b['slug']}")
+                expected.add(f"blog-{b['slug']}-private")
+        except Exception:
+            pass
     return expected
 
 

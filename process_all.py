@@ -197,6 +197,11 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--exclude-edits-under', excl]
     if opts.get('only_edits_dirs'):
         cmd += ['--only-edits-dirs']
+    if opts.get('exclude_raw_subdirs'):
+        subdirs = opts['exclude_raw_subdirs']
+        if isinstance(subdirs, list):
+            subdirs = ';'.join(subdirs)
+        cmd += ['--exclude-raw-subdirs', subdirs]
     if opts.get('max_interp_gap_hours') is not None:
         cmd += ['--max-interp-gap-hours', str(opts['max_interp_gap_hours'])]
     if opts.get('max_gap_interp_km') is not None:
@@ -378,6 +383,16 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         deploy.sync_public_flags()
     except Exception as e:
         click.echo(f"⚠ sync_public_flags failed: {e}", err=True)
+
+    # Refresh the collections (China hub etc.) so newly processed photos land in
+    # their bridges/provinces/roads galleries automatically. Derived facets only —
+    # no AI runs here; the category tile is carried forward. Run
+    # build_collections.py --category yourself to (re-)run CLIP.
+    try:
+        click.echo("\nUpdating collections (build_collections)...")
+        subprocess.run([sys.executable, 'build_collections.py'], cwd=str(PROJECT_ROOT))
+    except Exception as e:
+        click.echo(f"⚠ build_collections failed: {e}", err=True)
 
 
 if __name__ == '__main__':

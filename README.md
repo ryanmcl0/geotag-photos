@@ -26,7 +26,7 @@ The map didn't start full; it's being **backfilled** from a deep archive, and th
 | Folder structures that **changed over the years** (centralized edits vs. edits left in-tree next to raws, flat city folders vs. building-level) | folder-aware location extraction + `--only-edits-dirs` to ingest in-tree layouts without scooping up raws/camera dumps |
 | Older trips needing **coordinates** for named places | a coordinates file keyed by folder name, populated from a curated places list + lookups |
 | **Re-editing / adding / removing** photos in already-processed trips | incremental `--update` (delta re-encode + orphan cleanup) so a tweak doesn't re-run the whole trip |
-| The library **growing past free-tier storage** | tiered compression and retroactive `recompress.py` (see [Compression](#compression)) |
+| The library **growing past free-tier storage** | tiered compression and retroactive `tools/recompress.py` (see [Compression](#compression)) |
 
 So the project is less a one-shot script than a steadily generalizing toolset: every messy corner of the archive that gets mapped tends to leave behind a reusable feature.
 
@@ -64,10 +64,10 @@ This project is expected to grow well past 10,000 photos as more trips are added
 
 **R2 storage (10 GB free)** at Q90/2160px averages ~0.7 MB per display image. 10k photos ≈ 7 GB display + ~0.3 GB thumbnails = ~7.3 GB — still within the free tier. At ~14k photos you'd cross 10 GB and pay ~$0.015/GB/month beyond that (roughly $0.06/month per extra 4GB).
 
-**Compression strategy at scale** — if storage becomes a concern, re-encoding the whole library with `recompress.py` is a single command:
+**Compression strategy at scale** — if storage becomes a concern, re-encoding the whole library with `tools/recompress.py` is a single command:
 ```bash
 # Drop to Q85/1920px — cuts ~25% per image, ~5.5 GB for 10k photos
-./venv/bin/python recompress.py --trip all --quality 85 --display-longest 1920
+./venv/bin/python tools/recompress.py --trip all --quality 85 --display-longest 1920
 ```
 
 **Page load time** — at 10k+ photos, loading all manifests on the all-trips view gets heavy (~10 MB of JSON). Consider splitting into per-year lazy loading if initial load feels slow.
@@ -247,27 +247,27 @@ Cluster radii are baked into the manifest at process time, but you can change th
 
 ```bash
 # Re-cluster one trip
-./venv/bin/python recluster.py --trip <trip-slug> --cluster-radius 25
+./venv/bin/python tools/recluster.py --trip <trip-slug> --cluster-radius 25
 
 # Re-cluster every trip in web/trips/
-./venv/bin/python recluster.py --trip all --cluster-radius 20
+./venv/bin/python tools/recluster.py --trip all --cluster-radius 20
 ```
 
 Visual (Leaflet) clustering lives in `web/js/app.js` (`clusterRadius`, `disableClusteringAtZoom`) and is read on every page load — no rebuild needed, just refresh.
 
 ### Changing compression retroactively
 
-`process_trip.py` is destructive on re-run (it expects GPX + source photos). To re-encode an already-processed library at different quality/format/dimensions without re-doing GPX matching, use `recompress.py`:
+`process_trip.py` is destructive on re-run (it expects GPX + source photos). To re-encode an already-processed library at different quality/format/dimensions without re-doing GPX matching, use `tools/recompress.py`:
 
 ```bash
 # One trip, bump to WebP Q95
-./venv/bin/python recompress.py --trip <trip-slug> --quality 95
+./venv/bin/python tools/recompress.py --trip <trip-slug> --quality 95
 
 # Every trip in web/trips/, switch to JPEG for a host that doesn't support WebP
-./venv/bin/python recompress.py --trip all --format jpeg --quality 90
+./venv/bin/python tools/recompress.py --trip all --format jpeg --quality 90
 
 # Smaller library — re-encode at lower quality
-./venv/bin/python recompress.py --trip all --quality 82 --display-longest 1600
+./venv/bin/python tools/recompress.py --trip all --quality 82 --display-longest 1600
 ```
 
 It reads each manifest's `source.photos_path` (recorded at first process), regenerates only the thumbnail + display images, updates the manifest's `compression` block and the per-photo `thumbnail`/`display` paths (handling extension changes), and recreates the symlinks. If the originals have moved, pass `--photos /new/path` to override.

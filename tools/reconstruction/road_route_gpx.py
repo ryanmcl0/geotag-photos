@@ -10,7 +10,7 @@ No API key needed. Falls back to straight-line if OSRM fails for a segment.
 Usage:
     1. Edit WAYPOINTS below (lat, lon, utc_iso_string, label)
     2. Set OUT_PATH
-    3. python reconstruction/road_route_gpx.py
+    3. python tools/reconstruction/road_route_gpx.py
 
 Best for:
     - Trips with no Timeline.js coverage, reconstructed purely from named locations

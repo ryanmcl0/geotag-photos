@@ -19,6 +19,7 @@ from typing import Optional
 import click
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root (script lives in tools/)
 from process_trip import (
     DEFAULT_DISPLAY_LONGEST,
     DEFAULT_FORMAT,

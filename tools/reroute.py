@@ -14,6 +14,7 @@ from pathlib import Path
 
 import click
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root (script lives in tools/)
 from process_trip import DEFAULT_TRIPS_DIR, gpx_to_geojson
 
 

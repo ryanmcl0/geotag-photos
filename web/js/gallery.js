@@ -7,7 +7,15 @@ window.Gallery = (function () {
   // Local preview serves images through web/trips/<slug>/{thumbnails,display} symlinks
   // (which deploy never ships); in production the same keys live behind the /photos
   // R2 proxy. Pick by hostname; window.CHINA_PHOTO_BASE still overrides.
-  const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  // Match LAN IPs / *.local too, so the wrangler dev server reached from a phone
+  // (e.g. http://192.168.x.x:8788) still uses the /trips symlinks — otherwise every
+  // cover 404s through the (locally unbound) R2 proxy and shows a 🔒 placeholder.
+  // Production runs on *.pages.dev / a custom domain, none of which match these.
+  const HOST = location.hostname;
+  const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(HOST) ||
+    HOST.endsWith('.local') ||
+    /^10\./.test(HOST) || /^192\.168\./.test(HOST) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(HOST);
   const PHOTO_BASE = (window.CHINA_PHOTO_BASE || (LOCAL ? '/trips' : '/photos'));
 
   function photoUrl(ref, kind /* 'thumbnails' | 'display' */) {

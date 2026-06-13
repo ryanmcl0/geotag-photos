@@ -42,7 +42,10 @@ const tripLayers = {};
 const loadedTripIds = new Set();
 
 function checkAllAccess() {
-    return document.cookie.split(';').some(c => c.trim() === 'all_access=1');
+    return document.cookie.split(';').some(c => {
+        const t = c.trim();
+        return t.startsWith('all_access=') && t.length > 'all_access='.length;
+    });
 }
 
 const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
@@ -220,6 +223,10 @@ function clampMenuToViewport(menu) {
 }
 
 function initYearFilter() {
+    // Rebuilt after unlock/lock as the available years change (e.g. 2018 is entirely
+    // private — it must appear once those trips load). Drop any existing menu first.
+    document.querySelectorAll('.year-filter-wrapper').forEach(w => w.remove());
+
     const years = [...new Set(allTrips.map(t => {
         const m = (t.name || '').match(/^(\d{4})/);
         return m ? parseInt(m[1]) : t.year;
@@ -651,6 +658,31 @@ async function loadTripData() {
                 trips = trips.filter(t => (t.year || new Date(t.dates.start).getFullYear()) === VIEW_CONFIG.year);
             } else if (VIEW_CONFIG.mode === 'trip' && VIEW_CONFIG.tripId) {
                 trips = trips.filter(t => t.id === VIEW_CONFIG.tripId);
+            } else if (VIEW_CONFIG.mode === 'collection' && VIEW_CONFIG.collection) {
+                // Collection-filtered map (e.g. one province from the China hub):
+                // show only the photos referenced by the collection facet/subtile.
+                let cRes = null;
+                if (checkAllAccess()) {
+                    try {
+                        const r = await fetch(`${basePath}collections/${VIEW_CONFIG.collection}.all.json?t=${Date.now()}`);
+                        if (r.ok) cRes = r;
+                    } catch (e) { /* fall through to the public file */ }
+                }
+                if (!cRes) cRes = await fetch(`${basePath}collections/${VIEW_CONFIG.collection}.json?t=${Date.now()}`);
+                const cData = await cRes.json();
+                const tile = (cData.tiles || []).find(t => t.id === VIEW_CONFIG.facet);
+                const node = VIEW_CONFIG.sub
+                    ? ((tile && tile.subtiles) || []).find(s => s.id === VIEW_CONFIG.sub)
+                    : tile;
+                const refs = (node && node.photos) || [];
+                const pf = new Map();
+                refs.forEach(r => {
+                    if (!pf.has(r.trip)) pf.set(r.trip, new Set());
+                    pf.get(r.trip).add(r.id);
+                });
+                window._collectionPhotoFilter = pf;
+                if (!VIEW_CONFIG.filterTitle && node) VIEW_CONFIG.filterTitle = node.title;
+                trips = trips.filter(t => pf.has(t.id));
             }
         }
 
@@ -694,17 +726,38 @@ async function loadSingleTrip(trip, basePath) {
         fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
         fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
     ]);
-    const manifest = await manifestRes.json();
+    let manifest = await manifestRes.json();
     const routeData = await routeRes.json();
+
+    // A filtered manifest omits some photos; unlocked sessions fetch the full one.
+    if (manifest.filtered && checkAllAccess()) {
+        try {
+            const fullRes = await fetch(`${tripPath}/manifest.all.json?t=${Date.now()}`);
+            if (fullRes.ok) manifest = await fullRes.json();
+        } catch (e) { /* keep the filtered manifest */ }
+    }
 
     manifest.tripId = trip.id;
     manifest.tripIndex = colorIndex;
     manifest.tripPath = tripPath;
 
+    // Collection mode: keep only the photos in the collection's filter set, trim
+    // clusters accordingly, and skip the route (a whole-trip route is noise when
+    // viewing e.g. a single province's photos).
+    const pf = window._collectionPhotoFilter;
+    const inCollectionMode = Boolean(pf && pf.has(trip.id));
+    if (inCollectionMode) {
+        const allow = pf.get(trip.id);
+        manifest.photos = manifest.photos.filter(p => allow.has(p.id));
+        manifest.clusters = (manifest.clusters || [])
+            .map(c => Object.assign({}, c, { photo_ids: (c.photo_ids || []).filter(id => allow.has(id)) }))
+            .filter(c => c.photo_ids.length > 0);
+    }
+
     const hidden = loadHiddenTripIds();
     const hasGpx = Boolean(manifest.source && manifest.source.gpx_path);
     tripLayers[trip.id] = {
-        route: buildRouteLayer(routeData, color, trip.name),
+        route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip.name),
         markers: buildMarkerLayer(manifest, hasGpx),
         color,
         hasGpx,
@@ -731,9 +784,15 @@ async function unlockAllAccess() {
     if (unloaded.length === 0) return;
 
     for (const trip of unloaded) {
-        await loadSingleTrip(trip, basePath);
+        // Resilient: one trip failing to load must not block the rest.
+        try {
+            await loadSingleTrip(trip, basePath);
+        } catch (e) {
+            console.error(`Failed to load trip ${trip.id}:`, e);
+        }
     }
 
+    initYearFilter();        // 2018 etc. are entirely private — surface them now
     rebuildCountryFilter();
     updateTripInfo();
     reinitLightbox();
@@ -763,6 +822,7 @@ function lockAllAccess() {
     allTrips = allTrips.filter(t => !nonPublicIds.has(t.id));
     allManifests = allManifests.filter(m => !nonPublicIds.has(m.tripId));
 
+    initYearFilter();        // drop years that were only private
     rebuildCountryFilter();
     updateTripInfo();
     reinitLightbox();
@@ -794,7 +854,10 @@ function updateTripInfo() {
     let titleText = '';
     let subtitleText = '';
 
-    if (visibleTrips.length === 1) {
+    if (viewConfig.mode === 'collection' && viewConfig.filterTitle) {
+        titleText = viewConfig.filterTitle;
+        subtitleText = `${visibleTrips.length} trip${visibleTrips.length === 1 ? '' : 's'}`;
+    } else if (visibleTrips.length === 1) {
         titleText = visibleTrips[0].name;
         subtitleText = `${formatDate(visibleTrips[0].dates.start)} – ${formatDate(visibleTrips[0].dates.end)}`;
     } else if (viewConfig.mode === 'year' && viewConfig.year) {
@@ -959,8 +1022,11 @@ function buildMarkerPopup(marker) {
  */
 function openSiblingCluster(marker, dir) {
     const sibs = marker._sibs;
-    if (!sibs) return false;
-    const target = sibs[marker._sibIdx + dir];
+    if (!sibs || sibs.length < 2) return false;
+    // Wrap around: stepping past the trip's last cluster cycles back to the first
+    // (and before the first → to the last), so navigation never dead-ends.
+    const n = sibs.length;
+    const target = sibs[((marker._sibIdx + dir) % n + n) % n];
     if (!target) return false;
     target._pendingPage = dir > 0 ? 0 : 'last';
     map.closePopup();
@@ -977,14 +1043,29 @@ function openSiblingCluster(marker, dir) {
  * Show or hide all of a trip's content (route + markers). Called by the sidebar
  * checkbox handler. Persists the hidden set in localStorage.
  */
-function setTripVisibility(tripId, visible) {
-    const entry = tripLayers[tripId];
-    if (!entry || entry.visible === visible) return;
-    entry.visible = visible;
+async function setTripVisibility(tripId, visible) {
+    // Persist the choice regardless of load state.
     const hidden = loadHiddenTripIds();
-    if (visible) hidden.delete(tripId);
-    else hidden.add(tripId);
+    if (visible) hidden.delete(tripId); else hidden.add(tripId);
     saveHiddenTripIds(hidden);
+
+    let entry = tripLayers[tripId];
+    // The sidebar can list a trip that app.js hasn't loaded yet (e.g. a private
+    // trip when the all_access cookie is present but unlockAllAccess didn't run, or
+    // a load that failed). Turning it on should still work — load it on demand.
+    if (!entry && visible) {
+        const meta = allTripsMeta.find(t => t.id === tripId);
+        if (meta) {
+            try {
+                await loadSingleTrip(meta);
+                entry = tripLayers[tripId];
+            } catch (e) {
+                console.error(`Failed to load trip ${tripId} on demand:`, e);
+            }
+        }
+    }
+    if (!entry) return;
+    entry.visible = visible;
     syncVisibleTripLayers();
 }
 window.setTripVisibility = setTripVisibility;

@@ -20,6 +20,10 @@ echo "----------------------------------------------------"
 
 # Run wrangler with bindings for site and private trip passwords
 # --ip 0.0.0.0 allows mobile access on the local network
+# --live-reload reloads the browser on file changes; the middleware also sends
+# Cache-Control: no-store on localhost, so the dev server is never stale.
 npx wrangler pages dev web --ip 0.0.0.0 \
+    --compatibility-date=2026-06-10 \
+    --live-reload \
     --binding CF_SITE_PASSWORD="$CF_SITE_PASSWORD" \
     --binding CF_ALL_PASSWORD="$CF_ALL_PASSWORD"

@@ -1,0 +1,109 @@
+/* Blog post + blog index styling (layers on china.css tokens). */
+
+/* ── post page ── */
+/* The cover should read clearly behind the title (the shared .hero dims to .35,
+   which left dark covers looking black on a tall blog hero). */
+.blog-hero { min-height: 52vh; }
+.blog-hero.hero[data-cover]::before { opacity: .62; }
+.blog-hero.hero::after {
+  background: linear-gradient(180deg, rgba(17,17,17,.35), rgba(17,17,17,.82));
+}
+.blog-meta {
+  margin-top: 14px;
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .18em;
+  color: var(--muted); font-size: 13px;
+}
+
+.blog-wrap { padding: 0 var(--margin) 90px; max-width: 1500px; margin: 0 auto; }
+@media (max-width: 800px) { .blog-wrap { padding: 0 16px 60px; } }
+
+#blog h2, #blog h3 {
+  font-family: var(--head); text-transform: uppercase; color: var(--text);
+  letter-spacing: .05em; line-height: 1.05;
+  max-width: 760px; margin: 64px auto 8px;
+}
+#blog h2 { font-size: clamp(26px, 3vw, 38px); }
+#blog h3 { font-size: clamp(21px, 2.4vw, 30px); }
+
+#blog p {
+  max-width: 760px; margin: 0 auto 18px;
+  color: var(--muted-2); font-size: 17px; line-height: 1.75;
+}
+#blog p strong { color: var(--text); }
+
+#blog .blog-grid { margin: 30px 0 36px; }
+#blog > :first-child { margin-top: 36px; }
+
+/* ── v2 layout experiment (per-blog opt-in: "ui": "v2" in config/blogs.json) ── */
+
+.read-progress {
+  position: fixed; top: 0; left: 0; height: 2px; width: 0; z-index: 60;
+  background: #fff; opacity: .85; transition: width .12s linear;
+}
+
+.day-rail {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(17,17,17,.92); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.day-rail-inner {
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  padding: 10px var(--margin); max-width: 1500px; margin: 0 auto;
+}
+.day-rail-inner::-webkit-scrollbar { display: none; }
+.day-chip {
+  flex: 0 0 auto; font-family: var(--head); text-transform: uppercase;
+  letter-spacing: .14em; font-size: 12px; color: var(--muted);
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.day-chip:hover { color: var(--text); border-color: #444; }
+.day-chip.active { color: #111; background: #e8e8e8; border-color: #e8e8e8; }
+
+.blog-v2 .day-strip {
+  max-width: 760px; margin: 130px auto 20px; padding-top: 34px;
+  border-top: 2px solid #333;
+  scroll-margin-top: 64px;
+}
+.day-eyebrow {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .42em;
+  font-size: 17px; color: #8a8a8a;
+}
+.blog-v2 .day-title {
+  margin: 12px 0 0; font-family: var(--head); text-transform: uppercase;
+  letter-spacing: .03em; color: var(--text); line-height: 1.0;
+  font-size: clamp(40px, 6vw, 76px); max-width: none;
+}
+.day-km {
+  display: inline-block; margin-top: 14px; font-family: var(--head);
+  letter-spacing: .2em; font-size: 14px; color: #e2e2e2;
+  border: 1px solid #444; padding: 6px 14px; border-radius: 999px;
+}
+
+.to-top {
+  position: fixed; right: 22px; bottom: 22px; z-index: 55;
+  width: 42px; height: 42px; border-radius: 50%;
+  border: 1px solid #3a3a3a; background: rgba(24,24,24,.9); color: var(--muted-2);
+  font-size: 18px; cursor: pointer; opacity: 0; pointer-events: none;
+  transition: opacity .25s ease;
+}
+.to-top.show { opacity: 1; pointer-events: auto; }
+.to-top:hover { color: var(--text); border-color: #555; }
+
+/* ── index page ── */
+.page-heading {
+  margin: 48px 0 0; font-family: var(--head); text-transform: uppercase;
+  letter-spacing: .05em; color: var(--text);
+  font-size: clamp(40px, 6vw, 72px); line-height: .96;
+}
+.page-sub { margin: 10px 0 0; color: var(--muted); font-size: 16px; }
+.page-sub--note { font-size: 14px; font-style: italic; margin-top: 6px; white-space: nowrap; }
+@media (max-width: 1100px) { .page-sub--note { white-space: normal; max-width: 640px; } }
+
+.blog-tiles { margin-top: 30px; }
+.blog-tiles .tile-sub { letter-spacing: .12em; }
+@media (max-width: 860px) {
+  /* the stats line is long — keep it inside the tile on small screens */
+  .blog-tiles .tile-sub { font-size: 12px; letter-spacing: .08em; white-space: normal; }
+  .blog-meta { font-size: 11px; letter-spacing: .12em; }
+}

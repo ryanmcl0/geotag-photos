@@ -17,6 +17,8 @@ Environment variables (set in .env.deploy):
   CF_SITE_PASSWORD   Password to protect the site (optional)
   CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional)
   CF_PAGES_GIT_REPO  Path to the local git repo for the site (optional)
+  CF_CONFIG_BACKUP_REPO  Path to a private git repo that source-controls
+                         config/ (gitignored in this public repo) (optional)
 
 CF_CDN_BASE_URL is auto-derived as https://<pages-project>.pages.dev/photos
 """
@@ -127,6 +129,63 @@ def sync_public_flags(dry_run: bool = False):
         print(f"    ✓ Updated public flags for {changed} trips")
     else:
         print(f"    ✓ Public flags up to date")
+
+
+def sync_config_backup(dry_run: bool = False):
+    """Source-control config/ in a separate private repo.
+
+    config/*.json are gitignored in this (public) repo because they expose
+    private trip data — drive paths, building coordinates, classifications.
+    This mirrors config/ into the private repo at CF_CONFIG_BACKUP_REPO and
+    commits, so the source-of-truth files stay version-controlled somewhere.
+
+    Caches (.classify_cache.json, .dims_cache.json), .bak backups and
+    .DS_Store are excluded — they're regenerable / noise.
+    """
+    target = os.getenv('CF_CONFIG_BACKUP_REPO')
+    if not target:
+        print("  ⚠️  CF_CONFIG_BACKUP_REPO not set, skipping config backup")
+        return
+    target_path = Path(target)
+    if not target_path.exists():
+        print(f"  ✗ Config backup repo path does not exist: {target_path}")
+        return
+    if not (target_path / '.git').exists():
+        print(f"  ✗ Not a git repo (run `git init`): {target_path}")
+        return
+
+    src = Path('config')
+    if dry_run:
+        print(f"    [dry-run] would rsync {src}/ to {target_path}/ and commit")
+        return
+
+    try:
+        subprocess.run([
+            'rsync', '-av', '--delete',
+            '--exclude', '.git',
+            '--exclude', '.DS_Store',
+            '--exclude', '.classify_cache.json',
+            '--exclude', '.dims_cache.json',
+            '--exclude', '*.bak',
+            str(src) + '/', str(target_path) + '/'
+        ], check=True, capture_output=True)
+        print(f"    ✓ Synced config/ → {target_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"    ✗ Config sync failed: {e.stderr.decode()}")
+        return
+
+    try:
+        status = subprocess.run(['git', 'status', '--porcelain'],
+                                cwd=str(target_path), capture_output=True, text=True)
+        if not status.stdout.strip():
+            print("    ✓ No config changes to commit")
+            return
+        subprocess.run(['git', 'add', '.'], cwd=str(target_path), check=True, capture_output=True)
+        subprocess.run(['git', 'commit', '-m', 'Sync config from geotag-photos'],
+                       cwd=str(target_path), check=True, capture_output=True)
+        print("    ✓ Committed config changes (remember to push!)")
+    except subprocess.CalledProcessError as e:
+        print(f"    ✗ Config commit failed: {e.stderr.decode()}")
 
 
 def write_wrangler_toml(config: DeployConfig):
@@ -249,7 +308,8 @@ class ManifestPatcher:
         self._originals: dict[Path, str] = {}
 
     def patch_all(self, dry_run: bool = False):
-        for manifest_file in sorted(Path('web/trips').rglob('manifest.json')):
+        # manifest.json + manifest.all.json (the gated full variant of split trips)
+        for manifest_file in sorted(Path('web/trips').rglob('manifest*.json')):
             trip_slug = manifest_file.parent.name
             original = manifest_file.read_text()
             manifest = json.loads(original)
@@ -335,9 +395,6 @@ class GitSyncer:
         print(f"📂 Syncing to git repo: {self.target_path}")
 
         # 1. Copy web contents to root of target repo.
-        # _middleware.ts must NOT be copied to the repo root — CF Pages only
-        # executes middleware from inside functions/, not from the static output root.
-        # It's handled explicitly in step 2 below.
         web_src = Path('web')
         if dry_run:
             print(f"    [dry-run] would rsync {web_src}/* to {self.target_path}/")
@@ -360,12 +417,11 @@ class GitSyncer:
                 print(f"    ✗ Sync failed: {e.stderr.decode()}")
                 return False
 
-        # 2. Copy functions (including _middleware.ts mapped from web/ root)
+        # 2. Copy functions/ (middleware + the R2 photo proxy and its access index)
         func_src = Path('functions')
         target_functions = self.target_path / 'functions'
         if dry_run:
             print(f"    [dry-run] would rsync {func_src}/ to {target_functions}/")
-            print(f"    [dry-run] would copy web/_middleware.ts → functions/_middleware.ts")
         else:
             target_functions.mkdir(parents=True, exist_ok=True)
             if func_src.exists():
@@ -379,13 +435,6 @@ class GitSyncer:
                 except subprocess.CalledProcessError as e:
                     print(f"    ✗ Functions sync failed: {e.stderr.decode()}")
                     return False
-            # web/_middleware.ts → functions/_middleware.ts (CF Pages only runs
-            # middleware from inside the functions/ directory, not from the static root)
-            middleware_src = web_src / '_middleware.ts'
-            if middleware_src.exists():
-                import shutil as _shutil
-                _shutil.copy2(str(middleware_src), str(target_functions / '_middleware.ts'))
-                print("    ✓ Copied _middleware.ts → functions/_middleware.ts")
 
         # 3. Write wrangler.toml for the git repo (pages_build_output_dir = ".")
         if dry_run:
@@ -428,6 +477,7 @@ def main():
     parser.add_argument('--skip-images', action='store_true', help='Skip the R2 image sync (deploy code/manifests only)')
     parser.add_argument('--skip-pages', action='store_true', help='Skip Pages deployment')
     parser.add_argument('--no-prune', action='store_true', help='Do not remove trips that are no longer in config/trips.json')
+    parser.add_argument('--skip-config-backup', action='store_true', help='Skip syncing config/ to the private backup repo (CF_CONFIG_BACKUP_REPO)')
     parser.add_argument('--prune-force', action='store_true', help='Allow pruning even when many trips would be removed (overrides the safety guard)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument('--trip', help='Upload only a specific trip slug')
@@ -451,9 +501,22 @@ def main():
         print(f"   Mode:     DRY RUN")
     print()
 
+    # Step 0: Back up config/ to the private repo (gitignored here for privacy)
+    if not args.skip_config_backup:
+        print("🗄️  Backing up config/ to private repo...")
+        sync_config_backup(dry_run=args.dry_run)
+        print()
+
     # Step 1: Sync public flags from public.json → index.json
     print("🏷️  Syncing public flags...")
     sync_public_flags(dry_run=args.dry_run)
+    print()
+
+    # Step 1a: Per-photo privacy — split public-trip manifests and refresh the
+    # image-proxy access index, so a deploy never ships an unsplit manifest.
+    print("🔒 Syncing photo privacy...")
+    import photo_privacy
+    photo_privacy.sync(dry_run=args.dry_run)
     print()
 
     # Step 1b: Prune trips removed from config/trips.json (index, web/trips,

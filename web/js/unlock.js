@@ -73,6 +73,10 @@ window.Unlock = (function () {
     function refreshLocks() {
         const u = unlocked();
         document.querySelectorAll('.lock-badge').forEach(l => { l.style.display = u ? 'none' : ''; });
+        // Static pages (e.g. Blogs) hard-code `tile--locked` in markup; once unlocked,
+        // drop it so the cover un-dims and the padlock overlay disappears. (Locked
+        // visitors keep it; re-locking reloads the page, restoring the markup.)
+        if (u) document.querySelectorAll('.tile--locked').forEach(t => t.classList.remove('tile--locked'));
     }
 
     function lock() {

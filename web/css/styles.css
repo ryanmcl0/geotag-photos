@@ -45,19 +45,38 @@ body {
     border-bottom: 1px solid #e5e5e5;
 }
 
-.sidebar-home {
-    display: inline-block;
+.sidebar-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     margin-bottom: 12px;
+}
+.sidebar-back {
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    font: inherit;
     font-size: 0.82rem;
     font-weight: 600;
     letter-spacing: .04em;
     text-transform: uppercase;
     color: inherit;
     opacity: .65;
-    text-decoration: none;
-    transition: opacity .15s;
+    transition: opacity .15s, color .15s;
 }
-.sidebar-home:hover { opacity: 1; color: #e11d48; }
+.sidebar-back:hover { opacity: 1; color: #e11d48; }
+.sidebar-homeicon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    opacity: .65;
+    text-decoration: none;
+    transition: opacity .15s, color .15s;
+}
+.sidebar-homeicon:hover { opacity: 1; color: #e11d48; }
 
 .sidebar-header h2 {
     font-size: 1.1rem;

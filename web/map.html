@@ -26,7 +26,14 @@
         <!-- Sidebar navigation -->
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <a class="sidebar-home" href="/index.html">&larr; Home</a>
+                <div class="sidebar-nav">
+                    <button type="button" class="sidebar-back" id="sidebar-back">&larr; Back</button>
+                    <a class="sidebar-homeicon" href="/index.html" title="Home" aria-label="Home">
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                            <path d="M3 11.5 12 4l9 7.5M5.5 9.7V20h13V9.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </a>
+                </div>
                 <h2><a href="https://ryanmcl.myportfolio.com/home" target="_blank" rel="noopener">Exploring Far and Wide</a></h2>
                 <a class="sidebar-portfolio-link" href="https://ryanmcl.myportfolio.com/home" target="_blank" rel="noopener">ryanmcl.myportfolio.com</a>
                 <p class="sidebar-note">Work in progress - an interactive map with photos placed as close to their specific locations as possible. Many trips and countries are still missing, this is what I've been able to backfill so far, with more to come as I catch up on editing!</p>
@@ -130,6 +137,25 @@
             filterTitle: _q.get('title') || null,
             basePath: ''
         };
+
+        // "Back" returns to whatever in-site page opened the map (a China province
+        // tile, a blog, etc.) rather than always going Home. If the map was opened
+        // directly (no same-origin referrer to go back to), Back falls back to Home.
+        document.addEventListener('DOMContentLoaded', () => {
+            const back = document.getElementById('sidebar-back');
+            if (!back) return;
+            let sameOriginReferrer = false;
+            try {
+                sameOriginReferrer = !!document.referrer &&
+                    new URL(document.referrer).origin === location.origin;
+            } catch (e) { /* malformed referrer */ }
+            const canGoBack = sameOriginReferrer && history.length > 1;
+            if (!canGoBack) back.textContent = '← Home';
+            back.addEventListener('click', () => {
+                if (canGoBack) history.back();
+                else location.href = '/index.html';
+            });
+        });
     </script>
 
     <!-- Leaflet JS -->

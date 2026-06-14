@@ -103,8 +103,9 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         if (!authed) return Response.redirect(new URL('/login', context.request.url), 302);
     }
 
-    if (allPassword && await needsAllAccess(path, context)) {
-        const ok = cookieVal('all_access') === await tokenFor(allPassword);
+    if (await needsAllAccess(path, context)) {
+        const expected = allPassword ? await tokenFor(allPassword) : null;
+        const ok = expected !== null && cookieVal('all_access') === expected;
         if (!ok) {
             const isData = /\.(json|geojson)$/.test(path);
             return isData

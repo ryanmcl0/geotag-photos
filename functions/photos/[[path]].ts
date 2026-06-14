@@ -30,13 +30,12 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD
 
     if (restricted) {
         const pass = context.env.CF_ALL_PASSWORD;
-        if (pass) {
-            const cookies = context.request.headers.get('Cookie') || '';
-            const match = cookies.split(';').map(c => c.trim()).find(c => c.startsWith('all_access='));
-            const val = match ? match.split('=').slice(1).join('=') : null;
-            if (val !== await tokenFor(pass)) {
-                return new Response('Not found', { status: 404 });
-            }
+        const cookies = context.request.headers.get('Cookie') || '';
+        const match = cookies.split(';').map(c => c.trim()).find(c => c.startsWith('all_access='));
+        const val = match ? match.split('=').slice(1).join('=') : null;
+        const expected = pass ? await tokenFor(pass) : null;
+        if (expected === null || val !== expected) {
+            return new Response('Not found', { status: 404 });
         }
     }
 

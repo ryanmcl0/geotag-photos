@@ -265,6 +265,10 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
   .bridge-rank { order: -2; text-align: left; font-size: 44px; }
   .bridge-row--flip .bridge-media { order: 0; }
   .bridge-row--pending { grid-template-columns: 56px 1fr; gap: 12px; align-items: baseline; }
+  /* full-width tiles: the write-up link(s) sit at bottom-right by default, which
+     collides with the now-full-width bottom-centered title block — move them to the
+     top-right (clear of the bottom-aligned text) so they never overlap on mobile */
+  .tile-bloglinks { top: 12px; bottom: auto; right: 12px; align-items: flex-end; }
 }
 @media (max-width: 460px) {
   .nav-name { display: none; }

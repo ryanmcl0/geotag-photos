@@ -36,8 +36,8 @@
         if (st.countries) parts.push(stat(st.countries, 'countries'));
         if (st.flights && st.flights.total) parts.push(stat(st.flights.total, 'flights'));
         if (st.flown_km) parts.push(stat(st.flown_km.toLocaleString() + '<span class="stat-frac"> km</span>', 'flown'));
-        if (st.driven_km) parts.push(stat(st.driven_km.toLocaleString() + '<span class="stat-frac"> km</span>', 'driven'));
         if (st.road_trips) parts.push(stat(st.road_trips, 'road trips'));
+        if (st.driven_km) parts.push(stat(st.driven_km.toLocaleString() + '<span class="stat-frac"> km</span>', 'driven'));
         document.getElementById('home-stats').innerHTML = parts.join('');
         if (st.buildings) document.getElementById('rooftopping-sub').textContent = `${st.buildings} buildings`;
         // tile covers from config/tile_covers.json (resolved by build_collections.py)

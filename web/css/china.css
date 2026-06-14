@@ -284,4 +284,6 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
 .tile--locked { background: #161616; }
 .tile--locked .tile-img { filter: brightness(.42); }
 .tile--locked:hover .tile-img { filter: brightness(.52); transform: scale(1.04); }
-.tile--locked::before { content: '🔒'; position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; font-size: 40px; opacity: .9; pointer-events: none; }
+/* padlock centred in the UPPER area (bottom inset clears the bottom-anchored title
+   block) so it never lands on the title/meta — esp. on full-width mobile tiles */
+.tile--locked::before { content: '🔒'; position: absolute; left: 0; right: 0; top: 0; bottom: 42%; z-index: 1; display: flex; align-items: center; justify-content: center; font-size: 40px; opacity: .9; pointer-events: none; }

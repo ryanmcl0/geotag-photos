@@ -46,7 +46,7 @@
     if (st.provinces) parts.push(stat(`${st.provinces.visited}<span class="stat-frac">/${st.provinces.total}</span>`, 'provinces'));
     if (st.km) parts.push(stat(`${st.km.toLocaleString()}<span class="stat-frac"> km</span>`, 'on the road'));
     if (st.bridges) parts.push(stat(String(st.bridges.visited), `bridges · ${st.bridges.ranked_done}/${st.bridges.ranked_total} highest`));
-    if (st.buildings) parts.push(stat(String(st.buildings), 'buildings climbed'));
+    if (st.buildings) parts.push(stat(String(st.buildings), 'buildings'));
     if (st.cities) parts.push(stat(String(st.cities), 'cities'));
     if (st.countries) parts.push(stat(String(st.countries), 'countries'));
     if (st.places) parts.push(stat(String(st.places), 'cities & regions'));
@@ -201,23 +201,44 @@
         ${zh}${sub}${stat}${count}
       </div>`;
 
-    // No write-ups → the whole tile is one link (the common case).
-    if (!(s.blogs && s.blogs.length)) {
+    const blogs = s.blogs || [];
+    const isProvince = tile.id === 'provinces';
+
+    // No on-tile buttons → the whole tile is one link (the common case).
+    if (!isProvince && !blogs.length) {
       const card = el('a', 'tile');
       card.href = href;
       card.innerHTML = inner;
       return card;
     }
-    // With write-up(s): the tile is a <div> (nested <a> is invalid) holding a
-    // full-bleed primary link (map/gallery) + a separate write-up link on top.
+    // Province tiles (Map/Gallery toggle) and/or tiles with write-up(s): the tile is
+    // a <div> (nested <a> is invalid) holding a full-bleed primary link — the default
+    // action, which is the map for provinces — plus buttons layered on top.
     const card = el('div', 'tile tile--haslink');
     const main = el('a', 'tile-mainlink');
     main.href = href;
     main.innerHTML = inner;
     card.appendChild(main);
     const links = el('div', 'tile-bloglinks');
-    const multi = s.blogs.length > 1;
-    s.blogs.forEach(b => {
+
+    // Province tiles get a Map/Gallery view toggle controlling how the photos open:
+    // Map (the default, matching the full-tile link) sends to the filtered map;
+    // Gallery opens the in-hub photo grid. Grouped as a segmented pair so it reads
+    // as one control. On mobile .tile-bloglinks shifts to the top-right, clear of the
+    // bottom-anchored title/meta.
+    if (isProvince) {
+      const toggle = el('div', 'tile-viewtoggle');
+      const mapBtn = el('a', 'tile-viewbtn is-active', 'Map');
+      mapBtn.href = href;
+      const galBtn = el('a', 'tile-viewbtn', 'Gallery');
+      galBtn.href = `#${tile.id}/${s.id}`;
+      toggle.appendChild(mapBtn);
+      toggle.appendChild(galBtn);
+      links.appendChild(toggle);
+    }
+
+    const multi = blogs.length > 1;
+    blogs.forEach(b => {
       const link = el('a', 'tile-bloglink' + (b.public ? '' : ' is-gated'));
       link.href = `blogs/${b.slug}.html`;
       // with multiple write-ups, name each; with one, the generic label reads cleaner

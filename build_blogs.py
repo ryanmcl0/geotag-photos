@@ -302,6 +302,13 @@ class AssetStore:
 
 # ---------------------------------------------------------------- build
 
+# Read-time model: prose at READ_WPM words/min, plus dwell time per photo. These
+# blogs are photo-heavy and people actually flick through and linger on the images,
+# so the per-photo dwell dominates the estimate and must not be undercounted.
+READ_WPM = 200
+SECONDS_PER_PHOTO = 8
+
+
 def humanize_minutes(m):
     if m < 60:
         return f'~{int(round(m / 5) * 5)} min'
@@ -365,7 +372,7 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
     if not dry_run and assets.used_ids:
         ensure_asset_links(aslug)
 
-    read_minutes = words / 200 + n_photos * 4 / 60
+    read_minutes = words / READ_WPM + n_photos * SECONDS_PER_PHOTO / 60
     data = {
         'slug': blog['slug'], 'title': blog['title'], 'display_title': display_title,
         'year': blog['year'],

@@ -1535,3 +1535,47 @@ details[open] .country-summary::after {
     .gallery-view .photo-grid { gap: 6px; }
     .gallery-view .photo-row { gap: 6px; }
 }
+
+/* ============================================================
+   DARK MAIN AREA — gallery.html carries <body class="theme-dark">.
+   Only the gallery's photo area goes dark; the sidebar (and the rest
+   of the map stack) stays light. map.html omits the class entirely.
+   ============================================================ */
+.theme-dark .gallery-view {
+    background: #111;
+}
+
+.theme-dark .gallery-toolbar .gallery-title {
+    color: #f2f2f2;
+}
+
+.theme-dark .gallery-switch {
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.theme-dark .gallery-switch a {
+    color: #b0b0b0;
+}
+
+.theme-dark .gallery-switch a + a {
+    border-left-color: rgba(255, 255, 255, 0.12);
+}
+
+.theme-dark .gallery-switch a:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f2f2f2;
+}
+
+.theme-dark .gallery-switch a.active {
+    background: #e11d48;
+    color: #fff;
+}
+
+.theme-dark .gallery-view .photo-cell {
+    background: #161616;
+}
+
+.theme-dark .gallery-view .gallery-empty,
+.theme-dark .gallery-view .gallery-loading {
+    color: #999;
+}

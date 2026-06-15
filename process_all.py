@@ -396,6 +396,14 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
     except Exception as e:
         click.echo(f"⚠ build_collections failed: {e}", err=True)
 
+    # Tag each manifest photo with its aspect ratio so the trip gallery view can
+    # lay out justified rows without probing images client-side.
+    try:
+        click.echo("\nTagging photo aspect ratios (backfill_manifest_ar)...")
+        subprocess.run([sys.executable, 'tools/backfill_manifest_ar.py'], cwd=str(PROJECT_ROOT))
+    except Exception as e:
+        click.echo(f"⚠ backfill_manifest_ar failed: {e}", err=True)
+
 
 if __name__ == '__main__':
     process_all()

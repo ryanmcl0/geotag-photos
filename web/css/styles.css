@@ -63,6 +63,7 @@ body {
     letter-spacing: .04em;
     text-transform: uppercase;
     color: inherit;
+    text-decoration: none;
     opacity: .65;
     transition: opacity .15s, color .15s;
 }
@@ -212,23 +213,44 @@ body {
 }
 
 .trip-item {
+    list-style: none;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding-left: 12px;
 }
 
 .trip-item .nav-link {
-    padding: 8px 12px 8px 0;
     flex: 1;
+    min-width: 0;
 }
 
-.trip-toggle {
-    width: 14px;
-    height: 14px;
-    cursor: pointer;
-    accent-color: #e11d48;
+/* The trip whose page is currently open — highlight the whole row */
+.trip-item.trip-active {
+    background: #fbe9ee;
+    box-shadow: inset 3px 0 0 #e11d48;
+}
+
+.trip-item.trip-active .trip-map-link {
+    color: #e11d48;
+    font-weight: 600;
+}
+
+/* Per-trip "Gallery" link — opens the trip's photos as a grid instead of a map */
+.trip-gallery-link {
     flex-shrink: 0;
+    margin-right: 16px;
+    padding: 3px 9px;
+    font-size: 0.7rem;
+    color: #999;
+    text-decoration: none;
+    border: 1px solid #e5e5e5;
+    border-radius: 999px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.trip-gallery-link:hover,
+.trip-gallery-link.active {
+    color: #e11d48;
+    border-color: #e11d48;
 }
 
 /* Mobile sidebar toggle */
@@ -1406,4 +1428,110 @@ details[open] .country-summary::after {
     .country-filter-options {
         column-count: 2;
     }
+}
+
+/* ============================================================
+   Trip photo gallery (gallery.html) — justified grid + lightbox,
+   light theme to match the map sidebar.
+   ============================================================ */
+.gallery-view {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #fff;
+    padding: 18px 22px 64px;
+}
+
+.gallery-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.gallery-toolbar .gallery-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin-right: auto;
+}
+
+.gallery-switch {
+    display: inline-flex;
+    border: 1px solid #e5e5e5;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.gallery-switch a {
+    padding: 5px 14px;
+    font-size: 0.8rem;
+    color: #666;
+    text-decoration: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.gallery-switch a + a {
+    border-left: 1px solid #e5e5e5;
+}
+
+.gallery-switch a:hover {
+    background: #f5f5f5;
+}
+
+.gallery-switch a.active {
+    background: #e11d48;
+    color: #fff;
+}
+
+.gallery-view .photo-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.gallery-view .photo-row {
+    display: flex;
+    gap: 8px;
+}
+
+.gallery-view .photo-cell {
+    padding: 0;
+    border: 0;
+    background: #f0f0f0;
+    cursor: pointer;
+    overflow: hidden;
+    flex: 0 0 auto;
+    border-radius: 2px;
+}
+
+.gallery-view .photo-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: opacity 0.3s ease;
+}
+
+.gallery-view .photo-cell:hover img {
+    opacity: 0.85;
+}
+
+.gallery-view .gallery-empty,
+.gallery-view .gallery-loading {
+    color: #888;
+    padding: 26px 0;
+    font-style: italic;
+}
+
+@media (max-width: 768px) {
+    .gallery-view {
+        padding: 14px 12px 64px;
+    }
+    /* Clear the floating hamburger toggle (top-left) */
+    .gallery-toolbar { padding-left: 52px; }
+    .gallery-view .photo-grid { gap: 6px; }
+    .gallery-view .photo-row { gap: 6px; }
 }

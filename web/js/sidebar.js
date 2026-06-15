@@ -39,11 +39,36 @@
      * Initialize sidebar
      */
     async function initSidebar() {
+        ensureSidebarNav();
         await loadTripsData();
         renderNavigation();
         renderSeeAllSection();
         initMobileToggle();
         highlightCurrentPage();
+    }
+
+    /**
+     * Generated trip/year pages ship with a bare header. Inject a Back (to the
+     * full map) + Home nav so they match the main map page. Pages that already
+     * provide their own .sidebar-nav (map.html, gallery.html) are left alone.
+     */
+    function ensureSidebarNav() {
+        const header = document.querySelector('.sidebar-header');
+        if (!header || header.querySelector('.sidebar-nav')) return;
+        // VIEW_CONFIG is a global `const`, so it's a bare binding — NOT a window
+        // property. Read it directly (window.VIEW_CONFIG is always undefined).
+        const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+        const nav = document.createElement('div');
+        nav.className = 'sidebar-nav';
+        nav.innerHTML = `
+            <a class="sidebar-back" href="${basePath}map.html">&larr; All maps</a>
+            <a class="sidebar-homeicon" href="${basePath}index.html" title="Home" aria-label="Home">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                    <path d="M3 11.5 12 4l9 7.5M5.5 9.7V20h13V9.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </a>
+        `;
+        header.insertBefore(nav, header.firstChild);
     }
 
     /**
@@ -88,38 +113,35 @@
         // Get years sorted descending (most recent first)
         const years = Object.keys(yearGroups).sort((a, b) => b - a);
 
-        // Only "all" and "year" views support the toggle — single-trip pages
-        // don't load other trips so toggling them is meaningless.
-        const showToggles = VIEW_CONFIG.mode === 'all' || VIEW_CONFIG.mode === 'year';
-        const hidden = readHiddenTrips();
+        // Restore which years were left open, so navigating into a trip doesn't
+        // collapse the dropdowns the user opened.
+        const expanded = readExpandedYears();
 
         years.forEach(year => {
             const trips = yearGroups[year];
             const tripsHtml = trips.map(trip => {
                 const tripSlug = trip.id.replace(/-\d{4}$/, '');
-                const isHidden = hidden.has(trip.id);
-                const checkbox = showToggles
-                    ? `<input type="checkbox" class="trip-toggle"
-                              data-trip-id="${trip.id}"
-                              ${isHidden ? '' : 'checked'}
-                              aria-label="Toggle ${formatTripName(trip.name)}">`
-                    : '';
+                const galleryHref = `${basePath}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
                 return `
                     <li class="trip-item">
-                        ${checkbox}
                         <a href="${basePath}${year}/${tripSlug}/index.html"
-                           class="nav-link"
+                           class="nav-link trip-map-link"
                            data-trip-id="${trip.id}">
                             ${formatTripName(trip.name)}
                         </a>
+                        <a href="${galleryHref}"
+                           class="trip-gallery-link"
+                           data-gallery-id="${trip.id}"
+                           title="View photos as a gallery">Gallery</a>
                     </li>
                 `;
             }).join('');
 
+            const isOpen = expanded.has(String(year)) ? ' expanded' : '';
             html += `
-                <li class="year-section" data-year="${year}">
-                    <div class="year-header">
-                        <a href="${basePath}${year}/index.html" class="nav-link year-link">${year}</a>
+                <li class="year-section${isOpen}" data-year="${year}">
+                    <div class="year-header" role="button" tabindex="0" aria-label="Toggle ${year}">
+                        <span class="year-label">${year}</span>
                         <span class="arrow">▶</span>
                     </div>
                     <ul class="trip-list">
@@ -131,65 +153,84 @@
 
         navList.innerHTML = html;
 
+        // Clicking a year just expands/collapses the trips it contains, and we
+        // remember that choice so it survives navigation. Year selection
+        // (filtering the map) is handled by the top dropdown.
         document.querySelectorAll('.year-header').forEach(header => {
-            header.addEventListener('click', (e) => {
-                if (e.target.classList.contains('year-link')) return;
-                if (e.target.classList.contains('trip-toggle')) return;
+            const toggle = () => {
                 const section = header.closest('.year-section');
-                section.classList.toggle('expanded');
-            });
-        });
-
-        // Wire checkbox -> map visibility toggle.
-        document.querySelectorAll('.trip-toggle').forEach(cb => {
-            cb.addEventListener('click', (e) => e.stopPropagation());
-            cb.addEventListener('change', (e) => {
-                const tripId = e.target.dataset.tripId;
-                if (typeof window.setTripVisibility === 'function') {
-                    window.setTripVisibility(tripId, e.target.checked);
-                }
+                const open = section.classList.toggle('expanded');
+                setYearExpanded(section.dataset.year, open);
+            };
+            header.addEventListener('click', toggle);
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
             });
         });
     }
 
-    function readHiddenTrips() {
+    // Expanded year sections persist for the session so trip navigation keeps
+    // the same dropdowns open.
+    const EXPANDED_YEARS_KEY = 'geotagPhotos.expandedYears';
+
+    function readExpandedYears() {
         try {
-            return new Set(JSON.parse(localStorage.getItem('geotagPhotos.hiddenTrips')) || []);
+            return new Set(JSON.parse(sessionStorage.getItem(EXPANDED_YEARS_KEY)) || []);
         } catch (e) {
             return new Set();
         }
+    }
+
+    function setYearExpanded(year, open) {
+        const set = readExpandedYears();
+        if (open) set.add(String(year)); else set.delete(String(year));
+        try { sessionStorage.setItem(EXPANDED_YEARS_KEY, JSON.stringify([...set])); } catch (e) {}
     }
 
     /**
      * Highlight current page in navigation
      */
     function highlightCurrentPage() {
-        const config = window.VIEW_CONFIG || {};
+        // VIEW_CONFIG is a global `const` (a lexical binding), not a window
+        // property, so window.VIEW_CONFIG is always undefined — read it directly.
+        const config = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG) || {};
 
         // Remove all active states first
-        document.querySelectorAll('.nav-link.active, .year-header.active').forEach(el => {
+        document.querySelectorAll('.nav-link.active, .year-header.active, .trip-gallery-link.active').forEach(el => {
             el.classList.remove('active');
         });
+        document.querySelectorAll('.trip-item.trip-active').forEach(el => el.classList.remove('trip-active'));
 
         if (config.mode === 'all') {
             // Highlight "All Trips"
             const allLink = document.querySelector('.nav-all');
             if (allLink) allLink.classList.add('active');
         } else if (config.mode === 'year') {
-            // Highlight year and expand it
+            // Highlight year and expand it (and remember it stays open)
             const yearSection = document.querySelector(`.year-section[data-year="${config.year}"]`);
             if (yearSection) {
                 yearSection.classList.add('expanded');
+                setYearExpanded(config.year, true);
                 const yearHeader = yearSection.querySelector('.year-header');
                 if (yearHeader) yearHeader.classList.add('active');
             }
         } else if (config.mode === 'trip') {
-            // Highlight specific trip and expand its year
-            const tripLink = document.querySelector(`[data-trip-id="${config.tripId}"]`);
+            // Highlight specific trip (map or gallery) and expand its year
+            const tripLink = document.querySelector(`.trip-map-link[data-trip-id="${config.tripId}"]`);
             if (tripLink) {
-                tripLink.classList.add('active');
+                // Highlight the whole row via .trip-active (don't also add
+                // .active to the link — its grey background would split the row).
+                const item = tripLink.closest('.trip-item');
+                if (item) item.classList.add('trip-active');
+                if (config.view === 'gallery') {
+                    const galLink = document.querySelector(`.trip-gallery-link[data-gallery-id="${config.tripId}"]`);
+                    if (galLink) galLink.classList.add('active');
+                }
                 const yearSection = tripLink.closest('.year-section');
-                if (yearSection) yearSection.classList.add('expanded');
+                if (yearSection) {
+                    yearSection.classList.add('expanded');
+                    setYearExpanded(yearSection.dataset.year, true);
+                }
             }
         }
     }

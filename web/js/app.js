@@ -48,21 +48,8 @@ function checkAllAccess() {
     });
 }
 
-const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
 let activeRouteFilter = 'all'; // 'all' | 'gpx'
 let activeCountryFilter = null; // null = all countries, Set<string> = filter by country codes
-
-function loadHiddenTripIds() {
-    try {
-        return new Set(JSON.parse(localStorage.getItem(HIDDEN_TRIPS_STORAGE_KEY)) || []);
-    } catch (e) {
-        return new Set();
-    }
-}
-
-function saveHiddenTripIds(hiddenSet) {
-    localStorage.setItem(HIDDEN_TRIPS_STORAGE_KEY, JSON.stringify([...hiddenSet]));
-}
 
 /**
  * Initialize the application
@@ -755,14 +742,13 @@ async function loadSingleTrip(trip, basePath) {
             .filter(c => c.photo_ids.length > 0);
     }
 
-    const hidden = loadHiddenTripIds();
     const hasGpx = Boolean(manifest.source && manifest.source.gpx_path);
     tripLayers[trip.id] = {
         route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip.name),
         markers: buildMarkerLayer(manifest, hasGpx),
         color,
         hasGpx,
-        visible: !hidden.has(trip.id),
+        visible: true,
     };
 
     allTrips.push(trip);
@@ -1063,37 +1049,6 @@ function openSiblingCluster(marker, dir) {
     }
     return true;
 }
-
-/**
- * Show or hide all of a trip's content (route + markers). Called by the sidebar
- * checkbox handler. Persists the hidden set in localStorage.
- */
-async function setTripVisibility(tripId, visible) {
-    // Persist the choice regardless of load state.
-    const hidden = loadHiddenTripIds();
-    if (visible) hidden.delete(tripId); else hidden.add(tripId);
-    saveHiddenTripIds(hidden);
-
-    let entry = tripLayers[tripId];
-    // The sidebar can list a trip that app.js hasn't loaded yet (e.g. a private
-    // trip when the all_access cookie is present but unlockAllAccess didn't run, or
-    // a load that failed). Turning it on should still work — load it on demand.
-    if (!entry && visible) {
-        const meta = allTripsMeta.find(t => t.id === tripId);
-        if (meta) {
-            try {
-                await loadSingleTrip(meta);
-                entry = tripLayers[tripId];
-            } catch (e) {
-                console.error(`Failed to load trip ${tripId} on demand:`, e);
-            }
-        }
-    }
-    if (!entry) return;
-    entry.visible = visible;
-    syncVisibleTripLayers();
-}
-window.setTripVisibility = setTripVisibility;
 
 function resolveUrl(tripPath, photoPath) {
     return photoPath.startsWith('http') ? photoPath : `${tripPath}/${photoPath}`;

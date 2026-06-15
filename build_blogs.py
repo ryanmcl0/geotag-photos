@@ -455,7 +455,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <header class="hero blog-hero"{hero_style}>
         <div class="hero-inner">
             <h1>{title}</h1>
-            <div class="blog-meta">{year}{km} · {words:,} words · {photos:,} photos · {read} read</div>
+            <div class="blog-meta">{year}{km}<span class="blog-meta-line">{words:,} words · {photos:,} photos · {read} read</span></div>
         </div>
     </header>
 
@@ -548,7 +548,8 @@ def render_index(built, pending):
                 {img}{lock}
                 <div class="tile-overlay">
                     <div class="tile-title">{html.escape(d['title'], quote=False)}</div>
-                    <div class="tile-sub">{d['year']}{km} · {s['words']:,} words · {s['photos']:,} photos · {s['read']} read</div>
+                    <div class="tile-sub">{d['year']}{km}</div>
+                    <div class="tile-sub blog-tile-stats">{s['words']:,} words · {s['photos']:,} photos · {s['read']} read</div>
                 </div>
             </a>''')
     for b in pending:

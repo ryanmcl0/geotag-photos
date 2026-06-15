@@ -13,6 +13,10 @@
   font-family: var(--head); text-transform: uppercase; letter-spacing: .18em;
   color: var(--muted); font-size: 13px;
 }
+/* year · km on the first line; words · photos · read on its own line below */
+.blog-meta-line { display: block; margin-top: 5px; }
+/* index tiles: the stats line sits tighter under the year · km line */
+.blog-tiles .blog-tile-stats { margin-top: -3px; }
 
 .blog-wrap { padding: 0 var(--margin) 90px; max-width: 1500px; margin: 0 auto; }
 @media (max-width: 800px) { .blog-wrap { padding: 0 16px 60px; } }

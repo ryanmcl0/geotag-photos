@@ -692,6 +692,11 @@ async function loadTripData() {
             }
         }
 
+        // Build the cross-cluster paging chain now, so the popup ‹ › navigation
+        // works on first click without needing to touch a filter first. (Filter
+        // changes rebuild it via syncVisibleTripLayers; initial load doesn't go
+        // through there.)
+        rebuildGlobalSiblingChain();
         updateTripInfo();
         fitMapToBounds();
 

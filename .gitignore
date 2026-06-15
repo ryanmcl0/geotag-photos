@@ -85,3 +85,5 @@ config/tile_covers.json
 tools/blog_migration/
 web/blogs/
 web/blogs.html
+
+_public_gallery.html

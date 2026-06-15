@@ -960,6 +960,10 @@ function buildMarkerLayer(manifest, hasGpx) {
     });
     group._allMarkers = allMarkers;
     group._hasGpx = hasGpx;
+    // Round trips (start == end, e.g. an out-and-back from a home base) have no
+    // meaningful first/last stop — suppress START/END badges so they don't land on
+    // the turnaround point.
+    group._roundTrip = Boolean(manifest.round_trip);
     refreshMarkerGroup(group);
     return group;
 }
@@ -991,7 +995,7 @@ function refreshMarkerGroup(group) {
         // Only flag start/end for GPX trips where route order is meaningful,
         // and only when there's more than one stop.
         let endpoint = null;
-        if (group._hasGpx && lastIdx > 0) {
+        if (group._hasGpx && !group._roundTrip && lastIdx > 0) {
             if (i === 0) endpoint = 'start';
             else if (i === lastIdx) endpoint = 'end';
         }

@@ -197,6 +197,11 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         if isinstance(excl, list):
             excl = ';'.join(excl)
         cmd += ['--exclude-edits-under', excl]
+    if opts.get('exclude_photos'):
+        excl = opts['exclude_photos']
+        if isinstance(excl, list):
+            excl = ';'.join(excl)
+        cmd += ['--exclude-photos', excl]
     if opts.get('only_edits_dirs'):
         cmd += ['--only-edits-dirs']
     if opts.get('exclude_raw_subdirs'):

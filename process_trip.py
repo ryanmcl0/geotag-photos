@@ -1607,6 +1607,11 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--exclude-edits-under', 'exclude_edits_under', default=None, metavar='NAME,NAME,...',
               help='Comma-separated edit-folder names; drop any edit whose path contains one as a '
                    'component. Carves region subfolders out of a multi-region edits bundle.')
+@click.option('--exclude-photos', 'exclude_photos', default=None, metavar='ID;ID;...',
+              help='Semicolon-separated photo ids/stems (e.g. "RM108669-Enhanced-NR") to drop '
+                   'entirely — never placed, never included, no derivatives generated. Unlike the '
+                   'public/private split this removes the photo from the dataset altogether. Matches '
+                   'the full edit stem or its base stem.')
 @click.option('--only-edits-dirs', 'only_edits_dirs', is_flag=True,
               help='Keep only photos that live under a folder literally named "Edits". Used for the '
                    'pre-2019 in-tree backfill, where the edits sit in <year>/<Building>/Edits/ '
@@ -1705,6 +1710,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
+                 exclude_photos: Optional[str],
                  only_edits_dirs: bool, exclude_raw_subdirs: Optional[str],
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
@@ -1939,6 +1945,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         photo_files = [p for p in photo_files
                        if not any(part.lower() in excl for part in p.parts)]
         click.echo(f"  Excluded edits under {excl}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
+
+    # Drop specific photos by id/stem — a hard exclusion, separate from the public/private
+    # split: these never enter the manifest or get derivatives. Matches the full edit stem
+    # or its base stem (so "RM108669" or "RM108669-Enhanced-NR" both hit).
+    if exclude_photos:
+        excl_ids = {e.strip() for e in re.split(r'[;,]', exclude_photos) if e.strip()}
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if p.stem not in excl_ids and base_stem(p.stem) not in excl_ids]
+        click.echo(f"  Excluded photos {sorted(excl_ids)}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
 
     # Drop edits whose stem appears under an excluded raws folder — carves a region
     # out of a bundled Edits folder by raw membership (inverse of --filter-by-raws-in).

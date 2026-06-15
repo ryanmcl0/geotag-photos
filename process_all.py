@@ -179,6 +179,8 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
     if opts.get('geotag_overrides'):
         import json as _json
         cmd += ['--geotag-overrides', _json.dumps(opts['geotag_overrides'])]
+    if opts.get('round_trip'):
+        cmd += ['--round-trip']
     if trip.get('kmz'):
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):

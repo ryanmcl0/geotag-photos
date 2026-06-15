@@ -1691,6 +1691,9 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Write/refresh <output>/source_state.json from the current sources WITHOUT '
                    'reprocessing (adopt-baseline only; encodes only missing images). Use to stamp a '
                    'baseline on already-processed trips so a later --update detects real deltas.')
+@click.option('--round-trip', is_flag=True,
+              help='Mark this trip as an out-and-back/loop (start == end). Suppresses the '
+                   'START/END map badges, which are meaningless for a round trip.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
 @click.option('--dry-run', is_flag=True, help='Preview without writing files')
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
@@ -1716,6 +1719,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  fake_route_locations: Optional[str], no_fake_route: bool,
                  strict_building_distance: bool, kmz_path_str: Optional[str],
                  skip_existing_images: bool, update: bool, reindex: bool,
+                 round_trip: bool,
                  test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
@@ -2771,6 +2775,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         'clusters': clusters,
         'skipped': skipped_records,
     }
+    if round_trip:
+        manifest['round_trip'] = True
 
     if not dry_run:
         # Save manifest

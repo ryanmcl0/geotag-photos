@@ -893,14 +893,18 @@ def build_collection(coll, do_category, force, private_map):
         result, pool = FACET_BUILDERS[facet['rule']](facet, pub_records, quiet)
         result['id'] = facet['id']
         result['title'] = facet['title']
-        result['cover'] = resolve_cover(spec, pub_index, pool)
-        apply_subtile_covers(result, pub_index)
+        # Hand-pinned covers (config/tile_covers.json) resolve against the FULL index,
+        # so a private pick still resolves to the intended photo — it's served cover-only
+        # via photo_privacy.cover_serve_map and never enters the public manifests/map.
+        # The public `pool`/records remain the fallback for auto ('auto'/None) covers.
+        result['cover'] = resolve_cover(spec, id_index, pool)
+        apply_subtile_covers(result, id_index)
         _mark_not_public(result, full_tile, id_index)
         pub_tiles.append(result)
 
     pub_path = OUT_DIR / f"{coll['id']}.json"
     pub_path.write_text(json.dumps(
-        {**base, 'hero_cover': resolve_cover(hero_spec, pub_index, pub_records),
+        {**base, 'hero_cover': resolve_cover(hero_spec, id_index, pub_records),
          'tiles': pub_tiles}, indent=2, ensure_ascii=False))
     locked_n = sum(1 for t in pub_tiles if t.get('locked'))
     click.echo(f"✓ Wrote {pub_path.relative_to(ROOT)} (public: {len(pub_records)}/{len(records)} photos, "

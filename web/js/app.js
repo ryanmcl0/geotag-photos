@@ -63,7 +63,15 @@ async function init() {
     initYearFilter();
     initCountryFilter();
     initRouteFilter();
+    syncControlsLayout();
     initMobileControls();
+
+    // Re-place the filter controls when the viewport crosses the mobile breakpoint.
+    let resizeRaf;
+    window.addEventListener('resize', () => {
+        cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(syncControlsLayout);
+    });
 }
 
 function tripMatchesYearFilter(trip) {
@@ -126,11 +134,119 @@ function syncVisibleTripLayers({ fit = false } = {}) {
     if (fit) fitMapToBounds();
 }
 
+// On phones/tablets the year + country + route controls collapse behind a single
+// ⚙ Filters button; on desktop they stay inline. The breakpoint matches the mobile
+// CSS overrides in styles.css.
+function isMobileControls() {
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
+/**
+ * The ⚙ Filters button + animated panel (mobile only). Created once, on demand.
+ * The panel is the home for the filter pills when collapsed; syncControlsLayout()
+ * reparents them in/out as the viewport crosses the breakpoint.
+ */
+function ensureSettingsUI() {
+    let settings = document.querySelector('.map-settings');
+    if (settings) return settings;
+    settings = document.createElement('div');
+    settings.className = 'map-settings';
+    settings.innerHTML = `
+        <button class="map-settings-btn" id="mapSettingsBtn" aria-expanded="false" aria-label="Filters">
+            <svg class="map-settings-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                <path d="M2 4.5h7M11 4.5h3M2 11.5h3M7 11.5h7" stroke="currentColor"
+                      stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                <circle cx="10" cy="4.5" r="1.8" fill="currentColor"/>
+                <circle cx="5" cy="11.5" r="1.8" fill="currentColor"/>
+            </svg>
+            <span class="map-settings-label">Filters</span>
+            <span class="map-settings-dot" hidden></span>
+        </button>
+        <div class="map-settings-panel" id="mapSettingsPanel" role="group" aria-label="Map filters"></div>
+    `;
+    document.getElementById('map').appendChild(settings);
+
+    settings.querySelector('.map-settings-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        toggleSettingsPanel();
+    });
+    // Close on tap/click outside — but treat the reparented year/country dropdown
+    // menus (which escape to .map-container on mobile) as "inside".
+    document.addEventListener('click', e => {
+        if (!e.target.closest('.map-settings, .year-filter-menu, .country-filter-menu')) {
+            closeSettingsPanel();
+        }
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeSettingsPanel();
+    });
+    return settings;
+}
+
+function settingsPanelBody() {
+    return ensureSettingsUI().querySelector('.map-settings-panel');
+}
+
+function openSettingsPanel() {
+    const s = ensureSettingsUI();
+    s.querySelector('.map-settings-panel').classList.add('open');
+    const btn = s.querySelector('.map-settings-btn');
+    btn.classList.add('active');
+    btn.setAttribute('aria-expanded', 'true');
+}
+
+function closeSettingsPanel() {
+    const s = document.querySelector('.map-settings');
+    if (!s) return;
+    s.querySelector('.map-settings-panel').classList.remove('open');
+    const btn = s.querySelector('.map-settings-btn');
+    btn.classList.remove('active');
+    btn.setAttribute('aria-expanded', 'false');
+    closeOtherFilterMenus(null);   // also collapse any open year/country dropdown
+}
+
+function toggleSettingsPanel() {
+    const open = settingsPanelBody().classList.contains('open');
+    open ? closeSettingsPanel() : openSettingsPanel();
+}
+
+/** Show the ⚙ button's "active filter" dot when any filter is non-default. */
+function updateSettingsDot() {
+    const dot = document.querySelector('.map-settings-dot');
+    if (!dot) return;
+    const active = !!activeYearFilter || !!activeCountryFilter || activeRouteFilter !== 'all';
+    dot.hidden = !active;
+}
+
+/**
+ * Place the filter pills for the current viewport: stacked inside the ⚙ panel on
+ * mobile, inline (year+country in the centered bar, route top-right) on desktop.
+ * Safe to call repeatedly — used on init, after filter rebuilds, and on resize.
+ */
+function syncControlsLayout() {
+    const year = document.querySelector('.year-filter-wrapper');
+    const country = document.querySelector('.country-filter-wrapper');
+    const route = document.querySelector('.route-filter-wrapper');
+    if (isMobileControls()) {
+        const panel = settingsPanelBody();
+        [year, country, route].forEach(w => { if (w) panel.appendChild(w); });
+    } else {
+        closeSettingsPanel();
+        const bar = getTopFilterBar();
+        if (year) bar.appendChild(year);
+        if (country) bar.appendChild(country);
+        if (route) document.getElementById('map').appendChild(route);
+    }
+    updateSettingsDot();
+}
+
 /**
  * Shared centered container at the top of the map holding the year + country
- * dropdowns side by side. Created on demand by whichever filter initialises first.
+ * dropdowns side by side (desktop). On mobile the pills live in the ⚙ Filters
+ * panel instead, so return that. Created on demand by whichever filter initialises first.
  */
 function getTopFilterBar() {
+    if (isMobileControls()) return settingsPanelBody();
     let bar = document.querySelector('.map-top-filters');
     if (!bar) {
         bar = document.createElement('div');
@@ -264,6 +380,9 @@ function initYearFilter() {
         e.stopPropagation();
         closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
+        // Escape the (collapsed) settings panel + Leaflet clipping on mobile and keep
+        // the list within the viewport — same handling as the country menu.
+        if (menu.classList.contains('open')) clampMenuToViewport(menu);
     });
     document.addEventListener('click', () => menu.classList.remove('open'));
     menu.addEventListener('click', e => e.stopPropagation());
@@ -289,6 +408,7 @@ function setYearFilter(year, wrapper) {
         opt.querySelector('.year-filter-check').textContent = active ? '✓' : '';
     });
 
+    updateSettingsDot();
     syncVisibleTripLayers({ fit: true });
 }
 
@@ -426,6 +546,7 @@ function rebuildCountryFilter() {
 }
 
 function updateCountryFilterLabel(wrapper, filter) {
+    updateSettingsDot();
     const label = wrapper.querySelector('#countryFilterLabel');
     if (!filter) {
         label.textContent = 'All countries';
@@ -443,7 +564,7 @@ function initRouteFilter() {
         <button class="route-filter-btn" data-filter="all">All</button>
         <button class="route-filter-btn" data-filter="gpx">GPX</button>
     `;
-    document.getElementById('map').appendChild(wrapper);
+    (isMobileControls() ? settingsPanelBody() : document.getElementById('map')).appendChild(wrapper);
 
     wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
@@ -456,6 +577,7 @@ function setRouteFilter(filter, wrapper) {
     wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
     });
+    updateSettingsDot();
     syncVisibleTripLayers({ fit: true });
 }
 
@@ -786,6 +908,7 @@ async function unlockAllAccess() {
 
     initYearFilter();        // 2018 etc. are entirely private — surface them now
     rebuildCountryFilter();
+    syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
@@ -816,6 +939,7 @@ function lockAllAccess() {
 
     initYearFilter();        // drop years that were only private
     rebuildCountryFilter();
+    syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
@@ -1407,7 +1531,7 @@ async function mobileSubmitPassword() {
 
 function repaintFixedControls() {
     const ids = ['sidebar-toggle', 'mobile-see-all-trigger'];
-    const selectors = ['.map-style-control', '.map-top-filters', '.route-filter-wrapper'];
+    const selectors = ['.map-style-control', '.map-top-filters', '.route-filter-wrapper', '.map-settings'];
     const els = [
         ...ids.map(id => document.getElementById(id)),
         ...selectors.map(s => document.querySelector(s)),

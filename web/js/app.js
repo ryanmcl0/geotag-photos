@@ -133,6 +133,7 @@ function syncVisibleTripLayers({ fit = false } = {}) {
         }
     });
 
+    rebuildGlobalSiblingChain(); // one chain across all now-visible trips
     updateTripInfo();
     reinitLightbox();
     if (fit) fitMapToBounds();
@@ -976,9 +977,10 @@ function markerMatchesCountryFilter(marker) {
 
 /**
  * Rebuild a cluster group's membership from its full marker set, keeping only
- * markers that pass the country filter. Endpoint rings (start/end) and the
- * sibling chain used for cross-cluster paging are recomputed over the visible
- * subset so they stay correct after filtering.
+ * markers that pass the country filter. Endpoint rings (start/end) are per-trip
+ * and recomputed here over the visible subset. The cross-cluster paging chain is
+ * GLOBAL (spans all visible trips) and rebuilt separately in
+ * rebuildGlobalSiblingChain after every group has been refreshed.
  */
 function refreshMarkerGroup(group) {
     const all = group._allMarkers || [];
@@ -994,10 +996,28 @@ function refreshMarkerGroup(group) {
             else if (i === lastIdx) endpoint = 'end';
         }
         marker.setIcon(createPhotoIcon(marker._photoCount, marker._thumbnailUrl, endpoint));
-        marker._sibs = visible;
-        marker._sibIdx = i;
     });
     group.addLayers(visible);
+}
+
+/**
+ * Build one ordered sibling chain spanning every currently-displayed cluster
+ * across ALL visible trips — each trip in allTrips order, its markers in route
+ * order (START→END), country-filtered. Cross-cluster paging then flows
+ * continuously from one trip's END into the next trip's START, wrapping at the
+ * global ends so it never dead-ends. (START/END badges stay per-trip.)
+ */
+function rebuildGlobalSiblingChain() {
+    const chain = [];
+    allTrips.forEach(trip => {
+        if (!shouldDisplayTrip(trip)) return;
+        const layer = tripLayers[trip.id];
+        if (!layer) return;
+        (layer.markers._allMarkers || [])
+            .filter(markerMatchesCountryFilter)
+            .forEach(m => chain.push(m));
+    });
+    chain.forEach((m, i) => { m._sibs = chain; m._sibIdx = i; });
 }
 
 /**
@@ -1023,8 +1043,9 @@ function buildMarkerPopup(marker) {
 function openSiblingCluster(marker, dir) {
     const sibs = marker._sibs;
     if (!sibs || sibs.length < 2) return false;
-    // Wrap around: stepping past the trip's last cluster cycles back to the first
-    // (and before the first → to the last), so navigation never dead-ends.
+    // The chain spans all visible trips, so next/prev flows from one trip's END
+    // straight into the next trip's START. Wrap around at the global ends (past the
+    // very last cluster → back to the very first), so navigation never dead-ends.
     const n = sibs.length;
     const target = sibs[((marker._sibIdx + dir) % n + n) % n];
     if (!target) return false;
@@ -1141,9 +1162,10 @@ function createSinglePhotoPopup(marker) {
     container.appendChild(img);
 
     // If this single-photo cluster has neighbours, allow paging onward to them
-    // so cross-cluster navigation stays continuous.
-    const hasPrevCluster = marker._sibs && marker._sibIdx > 0;
-    const hasNextCluster = marker._sibs && marker._sibIdx < marker._sibs.length - 1;
+    // so cross-cluster navigation stays continuous. openSiblingCluster wraps
+    // cyclically, so prev/next always exist once the trip has >1 cluster.
+    const hasPrevCluster = marker._sibs && marker._sibs.length > 1;
+    const hasNextCluster = marker._sibs && marker._sibs.length > 1;
     if (hasPrevCluster || hasNextCluster) {
         const nav = document.createElement('div');
         nav.className = 'cluster-popup-nav';
@@ -1222,8 +1244,11 @@ function createMultiPhotoPopup(marker, startPage) {
     let page = startPage === 'last' ? totalPages - 1 : (startPage || 0);
     if (page < 0 || page >= totalPages) page = 0;
 
-    const hasPrevCluster = marker._sibs && marker._sibIdx > 0;
-    const hasNextCluster = marker._sibs && marker._sibIdx < marker._sibs.length - 1;
+    // Sibling paging wraps cyclically (openSiblingCluster), so an adjacent cluster
+    // always exists once the trip has >1 cluster — the boundary buttons stay live
+    // and stepping past the last cluster cycles back to the first.
+    const hasPrevCluster = marker._sibs && marker._sibs.length > 1;
+    const hasNextCluster = marker._sibs && marker._sibs.length > 1;
 
     const renderPage = () => {
         grid.innerHTML = '';
@@ -1262,7 +1287,8 @@ function createMultiPhotoPopup(marker, startPage) {
             const start = page * CLUSTER_POPUP_PAGE_SIZE;
             const end = Math.min(start + CLUSTER_POPUP_PAGE_SIZE, photos.length);
             counter.textContent = `${start + 1}–${end} of ${photos.length}`;
-            // Enabled at a boundary when an adjacent cluster exists to page into.
+            // At a page boundary, stay enabled if a sibling cluster exists to wrap
+            // into; only truly disabled when this is the trip's sole cluster.
             prevBtn.disabled = page === 0 && !hasPrevCluster;
             nextBtn.disabled = page >= totalPages - 1 && !hasNextCluster;
         };

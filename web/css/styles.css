@@ -704,7 +704,8 @@ details[open] .country-summary::after {
     .mobile-see-all-trigger,
     .map-style-control,
     .map-top-filters,
-    .route-filter-wrapper {
+    .route-filter-wrapper,
+    .map-settings {
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
         will-change: transform;
@@ -1340,6 +1341,98 @@ details[open] .country-summary::after {
     color: #fff;
 }
 
+/* ─── Mobile settings (⚙ Filters) ───────────────────────────────────────────
+   On phones/tablets the year + country + route controls collapse behind a single
+   Filters button that reveals them in an animated panel. Hidden on desktop, where
+   the controls stay inline; app.js reparents the wrappers between the two layouts. */
+.map-settings {
+    display: none;   /* shown only at ≤768px (see media query) */
+    position: absolute;
+    top: 16px;
+    right: 12px;
+    z-index: 1100;
+}
+
+.map-settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 13px;
+    background: rgba(20, 20, 20, 0.94);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: #fff;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    transition: background 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.map-settings-btn:hover { background: rgba(35,35,35,0.95); }
+
+.map-settings-btn.active {
+    background: rgba(40,40,40,0.97);
+    border-color: rgba(255,255,255,0.35);
+}
+
+.map-settings-icon {
+    color: #cfcfcf;
+    transition: transform 0.25s cubic-bezier(0.2,0.8,0.2,1);
+}
+.map-settings-btn.active .map-settings-icon { transform: rotate(90deg); }
+
+/* Small dot badge shown when any filter is active (non-default). */
+.map-settings-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(20,20,20,0.94);
+}
+.map-settings-dot[hidden] { display: none; }
+
+.map-settings-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: rgba(18, 18, 18, 0.97);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+    transform-origin: top right;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.2,0.8,0.2,1);
+}
+
+.map-settings-panel.open {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+}
+
+/* Route toggle fills the panel width, each option splitting it evenly. */
+.map-settings-panel .route-filter-wrapper {
+    position: static;
+    top: auto;
+    right: auto;
+    width: 100%;
+    box-shadow: none;
+}
+.map-settings-panel .route-filter-btn {
+    flex: 1;
+}
+
 /* Map style switcher */
 .map-style-control {
     position: absolute;
@@ -1393,29 +1486,29 @@ details[open] .country-summary::after {
    and .country-filter-* so the cascade doesn't silently discard them.
    ─────────────────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
-    /* Year+country bar: same row as the hamburger (top: 16px), starting just
-       after the 40px hamburger button.  max-width stops it from reaching the
-       All/GPX toggle on the right. */
+    /* On mobile the year/country/route controls collapse into the ⚙ Filters panel
+       (.map-settings). app.js reparents the existing wrappers into the panel, so the
+       centered top bar is empty here — hide it. */
     .map-top-filters {
-        top: 16px;
-        left: 68px;   /* 16px hamburger left + 40px width + 12px gap */
-        transform: none;
-        /* reserve space for .route-filter-wrapper (≈104px) + 12px gap */
-        max-width: calc(100% - 68px - 12px - 116px);
+        display: none;
     }
 
-    /* Shrink buttons slightly so all four controls fit on one row */
-    .year-filter-btn,
-    .country-filter-btn {
-        padding: 7px 10px;
-        font-size: 12px;
-        gap: 6px;
+    /* Reveal the ⚙ Filters button + panel. */
+    .map-settings {
+        display: block;
     }
 
-    /* All/GPX toggle: same row, pinned to right edge */
-    .route-filter-wrapper {
-        top: 16px;
-        right: 12px;
+    /* Inside the panel the dropdown pills are full width and the labels push their
+       chevrons to the right edge. */
+    .map-settings-panel .year-filter-btn,
+    .map-settings-panel .country-filter-btn {
+        width: 100%;
+        justify-content: space-between;
+        font-size: 13px;
+    }
+    .map-settings-panel .year-filter-wrapper,
+    .map-settings-panel .country-filter-wrapper {
+        width: 100%;
     }
 }
 

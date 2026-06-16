@@ -89,6 +89,18 @@ def sync_public_flags(dry_run: bool = False):
     # "2024 China (March)" sharing /Edits/2024 China with the public Xinjiang trip).
     explicit_private_slugs = {_slugify(t['name']) for t in trips_config.get('private', [])}
 
+    # publish-from-private: trips that stay in the private block but expose an allowlist
+    # of photos publicly (config/public_from_private.json). They must read as public so
+    # the map shows them; photo_privacy keeps everything but the allowlist gated. Single
+    # switch — remove the entry and the trip reverts to fully private.
+    pfp_path = Path('config/public_from_private.json')
+    pfp_slugs = set()
+    if pfp_path.exists():
+        try:
+            pfp_slugs = set(json.loads(pfp_path.read_text()).get('trips', {}))
+        except (OSError, json.JSONDecodeError):
+            pass
+
     # Build slug → source Edits path from each trip's manifest
     slug_to_source: dict[str, str] = {}
     for manifest_file in sorted(Path('web/trips').rglob('manifest.json')):
@@ -107,11 +119,14 @@ def sync_public_flags(dry_run: bool = False):
         source_path = slug_to_source.get(trip['id'], '')
         # Priority order:
         # 1. Slugs ending in '-private' → always private (off-route splits)
-        # 2. Slug appears in trips.json private block → private
-        # 3. source.photos_path matches a public edits path → public
-        # 4. Otherwise → private
+        # 2. Slug in public_from_private → public (partial publish from a private trip)
+        # 3. Slug appears in trips.json private block → private
+        # 4. source.photos_path matches a public edits path → public
+        # 5. Otherwise → private
         if trip['id'].endswith('-private'):
             is_public = False
+        elif trip['id'] in pfp_slugs:
+            is_public = True
         elif trip['id'] in explicit_private_slugs:
             is_public = False
         else:

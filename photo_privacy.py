@@ -41,6 +41,7 @@ OVERRIDES_PATH = ROOT / 'config' / 'photo_privacy.json'
 ROOF_ROSTERS = [ROOT / 'config' / 'china_roofs.json', ROOT / 'config' / 'world_roofs.json']
 BRIDGES_ROSTER = ROOT / 'config' / 'china_bridges.json'
 BRIDGE_VISITS = ROOT / 'config' / 'bridge_visits.json'
+PUBLIC_FROM_PRIVATE = ROOT / 'config' / 'public_from_private.json'
 PRIVATE_INDEX = ROOT / 'functions' / 'photos' / 'private_index.json'
 
 
@@ -58,6 +59,25 @@ def load_overrides() -> dict:
         except json.JSONDecodeError as e:
             print(f"⚠ {OVERRIDES_PATH} is invalid JSON ({e}) — ignoring overrides", file=sys.stderr)
     return {}
+
+
+def load_public_from_private() -> dict:
+    """slug → set of photo ids to surface publicly from an otherwise-private trip.
+
+    These trips stay in trips.json's `private` block (the safe default); this file is
+    the ONLY switch that promotes them to a partial-public view — the allowlist shows
+    on the public map/gallery, everything else stays gated behind See All, and the trip
+    carries no route line. Fail-closed: delete an entry and the trip reverts to fully
+    private. config/public_from_private.json is gitignored (it reveals which private
+    trips expose photos)."""
+    if not PUBLIC_FROM_PRIVATE.exists():
+        return {}
+    try:
+        data = json.loads(PUBLIC_FROM_PRIVATE.read_text())
+    except json.JSONDecodeError as e:
+        print(f"⚠ {PUBLIC_FROM_PRIVATE} is invalid JSON ({e}) — ignoring", file=sys.stderr)
+        return {}
+    return {k: set(v) for k, v in (data.get('trips') or {}).items()}
 
 
 def load_trip_meta() -> dict:
@@ -146,6 +166,7 @@ def compute_private_map(echo=lambda *a: None) -> dict:
     """trip slug → set of private photo ids, for PUBLIC trips only.
     (Private trips are gated wholesale at the trip level.)"""
     trip_public = load_trip_meta()
+    pfp = load_public_from_private()
     roof_match = _roof_matcher()
     fences = _bridge_fences()
     bridge_labels = load_bridge_labels()
@@ -156,10 +177,21 @@ def compute_private_map(echo=lambda *a: None) -> dict:
     private_map = {}
     for trip_dir in sorted(WEB_TRIPS.iterdir()):
         slug = trip_dir.name
-        if not trip_dir.is_dir() or not trip_public.get(slug, False):
+        # publish-from-private trips are gated in index.json but treated as public here
+        if not trip_dir.is_dir() or not (trip_public.get(slug, False) or slug in pfp):
             continue
         manifest = load_full_manifest(trip_dir)
         if not manifest:
+            continue
+        all_ids = {p['id'] for p in manifest.get('photos', [])}
+        if slug in pfp:
+            # inverse rule: ONLY the allowlist is public; everything else is gated.
+            allow = pfp[slug] & all_ids
+            priv = ((all_ids - allow - force_public.get(slug, set()))
+                    | (force_private.get(slug, set()) & all_ids))
+            if priv:
+                private_map[slug] = priv
+            echo(f"  {slug}: publish-from-private — {len(allow)} public / {len(priv)} gated")
             continue
         fp = force_public.get(slug, set())
         if '*' in fp:
@@ -205,9 +237,10 @@ def split_manifests(private_map: dict, dry_run=False, echo=lambda *a: None) -> i
     """Write the public (filtered) manifest.json + full manifest.all.json for every
     public trip with private photos; restore unaffected trips to a single manifest."""
     trip_public = load_trip_meta()
+    pfp = load_public_from_private()
     changed = 0
     for trip_dir in sorted(WEB_TRIPS.iterdir()):
-        if not trip_dir.is_dir() or not trip_public.get(trip_dir.name, False):
+        if not trip_dir.is_dir() or not (trip_public.get(trip_dir.name, False) or trip_dir.name in pfp):
             continue
         full = load_full_manifest(trip_dir)
         if not full:
@@ -224,6 +257,8 @@ def split_manifests(private_map: dict, dry_run=False, echo=lambda *a: None) -> i
                     for c in full.get('clusters', [])
                 ) if c2['photo_ids']
             ]
+            if trip_dir.name in pfp:
+                public['route'] = []   # no itinerary line for a publish-from-private trip
             public['filtered'] = True
             if dry_run:
                 echo(f"  [dry-run] {trip_dir.name}: would split "
@@ -333,13 +368,16 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
     (cover_serve_map) — so a locked tile's cover loads while the photo stays off the
     map (the map is driven by the manifests, which are unaffected by this list)."""
     trip_public = load_trip_meta()
+    pfp = load_public_from_private()
     overrides = load_overrides()
     private_blogs = _private_blogs()
     serve = {k: set(v) for k, v in (overrides.get('force_public') or {}).items()}
     for trip, ids in cover_serve_map().items():
         serve.setdefault(trip, set()).update(ids)
     index = {
-        'private_trips': sorted({s for s, pub in trip_public.items() if not pub} |
+        # publish-from-private trips are NOT wholesale-private: their gated photos are
+        # listed per-photo in private_photos (via private_map), the allowlist serves.
+        'private_trips': sorted(({s for s, pub in trip_public.items() if not pub} - set(pfp)) |
                                 {f'blog-{s}-private' for s in private_blogs}),
         'private_photos': {s: sorted(ids) for s, ids in sorted(private_map.items())},
         'force_public': {k: sorted(v) for k, v in sorted(serve.items())},
@@ -356,6 +394,32 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
          f"{sum(len(v) for v in index['private_photos'].values())} private photos in public trips")
 
 
+def suppress_pfp_routes(dry_run=False, echo=lambda *a: None):
+    """publish-from-private trips appear on the public map with NO route line — the full
+    itinerary of an otherwise-private trip must not leak. Blank route.geojson (the file
+    the map fetches), preserving any real track to route.geojson.orig once so it survives
+    without re-reading the drive. Idempotent."""
+    empty = {'type': 'FeatureCollection', 'features': []}
+    for slug in load_public_from_private():
+        rg = WEB_TRIPS / slug / 'route.geojson'
+        if not rg.exists():
+            continue
+        try:
+            cur = json.loads(rg.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not cur.get('features'):
+            continue  # already empty
+        if dry_run:
+            echo(f"  [dry-run] {slug}: would suppress route ({len(cur['features'])} features)")
+            continue
+        orig = WEB_TRIPS / slug / 'route.geojson.orig'
+        if not orig.exists():
+            orig.write_text(rg.read_text())
+        rg.write_text(json.dumps(empty))
+        echo(f"  ✓ {slug}: route suppressed (original kept in route.geojson.orig)")
+
+
 def sync(dry_run=False, echo=print) -> dict:
     """Compute the private map, split manifests, refresh the proxy index.
     Returns the private map (used by build_collections for the public variants)."""
@@ -363,6 +427,7 @@ def sync(dry_run=False, echo=print) -> dict:
     n = split_manifests(private_map, dry_run, echo)
     echo(f"  {'would update' if dry_run else 'updated'} {n} trip manifest(s)" if n
          else "  manifests already in sync")
+    suppress_pfp_routes(dry_run, echo)
     write_private_index(private_map, dry_run, echo)
     return private_map
 

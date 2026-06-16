@@ -103,12 +103,9 @@
 
         const basePath = VIEW_CONFIG.basePath || '';
 
-        // Build navigation HTML
-        let html = `
-            <li class="nav-item">
-                <a href="${basePath}index.html" class="nav-link nav-all">All Trips</a>
-            </li>
-        `;
+        // Build navigation HTML. (No "All Trips" link — it pointed at the all-trips
+        // map you're already on; the year sections below are the nav.)
+        let html = '';
 
         // Get years sorted descending (most recent first)
         const years = Object.keys(yearGroups).sort((a, b) => b - a);
@@ -201,11 +198,7 @@
         });
         document.querySelectorAll('.trip-item.trip-active').forEach(el => el.classList.remove('trip-active'));
 
-        if (config.mode === 'all') {
-            // Highlight "All Trips"
-            const allLink = document.querySelector('.nav-all');
-            if (allLink) allLink.classList.add('active');
-        } else if (config.mode === 'year') {
+        if (config.mode === 'year') {
             // Highlight year and expand it (and remember it stays open)
             const yearSection = document.querySelector(`.year-section[data-year="${config.year}"]`);
             if (yearSection) {

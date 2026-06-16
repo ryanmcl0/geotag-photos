@@ -453,7 +453,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <title>{title} · Ryan's Travels</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
-    <link rel="stylesheet" href="/css/china.css"/>
+    <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
 </head>
 <body>
@@ -489,7 +489,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Blogs · Ryan's Travels</title>
-    <link rel="stylesheet" href="/css/china.css"/>
+    <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
 </head>
 <body>

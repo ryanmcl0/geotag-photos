@@ -706,6 +706,7 @@ def main(collection, do_category, force):
     for coll in colls:
         build_collection(coll, do_category, force, private_map)
     emit_site_stats(click.echo)
+    emit_gallery_covers(click.echo)
     save_dims_cache()
 
 
@@ -911,6 +912,81 @@ def build_collection(coll, do_category, force, private_map):
                f"{locked_n} locked tiles)")
 
 
+_COVER_IDX = None
+
+
+def _cover_id_index():
+    """{id / normalised-stem / trip-qualified → {trip,id}} across every processed
+    trip's FULL manifest — resolves tile-cover filepaths from tile_covers.json.
+    Built once and cached."""
+    global _COVER_IDX
+    if _COVER_IDX is None:
+        idx = {}
+        for mf in sorted(WEB_TRIPS.glob('*/manifest.json')):
+            man = photo_privacy.load_full_manifest(mf.parent)
+            for ph in (man or {}).get('photos', []):
+                rec = {'trip': mf.parent.name, 'id': ph['id']}
+                norm = re.split(r'-Enhanced|-NR|-SAI|-2$', ph['id'])[0]
+                idx.setdefault(ph['id'], rec)
+                idx.setdefault(norm, rec)
+                idx[f"{rec['trip']}/{ph['id']}"] = rec
+                idx.setdefault(f"{rec['trip']}/{norm}", rec)
+        _COVER_IDX = idx
+    return _COVER_IDX
+
+
+def resolve_tile_cover(spec, dest_prefix, key, echo):
+    """Resolve one tile_covers.json value:
+      - a local edit filepath / bare stem → {trip, id} (matched by filename);
+      - an existing web-relative asset (e.g. previews/foo.jpg) → {src: spec};
+      - any other local image file → copied into web/previews/ → {src: ...}.
+    Returns None (and warns) if the spec is empty or unresolvable."""
+    if not spec:
+        return None
+    idx = _cover_id_index()
+    stem = Path(spec).stem
+    norm = re.split(r'-Enhanced|-NR|-SAI', stem)[0]
+    rec = None
+    for slug in (trips_for_spec(spec) if '/' in spec else []):
+        rec = idx.get(f'{slug}/{stem}') or idx.get(f'{slug}/{norm}')
+        if rec:
+            break
+    rec = rec or idx.get(stem) or idx.get(norm)
+    if rec:
+        return rec
+    if (ROOT / 'web' / spec).exists():               # already a web-relative asset
+        return {'src': spec}
+    p = Path(spec)
+    if p.exists() and p.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp'):
+        import shutil
+        dest_dir = ROOT / 'web' / 'previews'
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f'{dest_prefix}-{key}{p.suffix.lower()}'
+        shutil.copy2(p, dest)
+        return {'src': f'previews/{dest.name}'}
+    echo(f"  ⚠ {dest_prefix} cover '{key}': could not resolve {spec!r}")
+    return None
+
+
+def emit_gallery_covers(echo):
+    """Per-trip cover overrides for the Galleries index (galleries.html), from
+    config/tile_covers.json 'galleries' (keyed by trip id, e.g. '2024-japan').
+    Trips with no entry auto-pick a cover client-side, so this file only carries
+    the pinned ones → web/collections/gallery_covers.json."""
+    section = TILE_COVERS.get('galleries') or {}
+    covers = {}
+    for key, spec in section.items():
+        if key.startswith('_') or not spec:
+            continue
+        rec = resolve_tile_cover(spec, 'gallery', key, echo)
+        if rec:
+            covers[key] = rec
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / 'gallery_covers.json').write_text(json.dumps(covers, indent=2))
+    echo(f"✓ Wrote web/collections/gallery_covers.json ({len(covers)} pinned cover"
+         f"{'' if len(covers) == 1 else 's'})")
+
+
 def emit_site_stats(echo):
     """All-time travel stats for the landing page → web/collections/site_stats.json.
     Flights from config/travel_stats.json (user-maintained); driven km summed from the
@@ -948,46 +1024,11 @@ def emit_site_stats(echo):
     # landing-page tile covers from config/tile_covers.json 'home': a photo
     # filepath resolves to {trip, id}; any other image file (e.g. a map
     # screenshot) is copied into web/previews/ and referenced by path.
-    home = TILE_COVERS.get('home') or {}
     covers = {}
-    if any(home.values()):
-        idx = {}
-        for mf in sorted(WEB_TRIPS.glob('*/manifest.json')):
-            man = photo_privacy.load_full_manifest(mf.parent)
-            for ph in (man or {}).get('photos', []):
-                rec = {'trip': mf.parent.name, 'id': ph['id']}
-                norm = re.split(r'-Enhanced|-NR|-SAI|-2$', ph['id'])[0]
-                idx.setdefault(ph['id'], rec)
-                idx.setdefault(norm, rec)
-                idx[f"{rec['trip']}/{ph['id']}"] = rec
-                idx.setdefault(f"{rec['trip']}/{norm}", rec)
-        for key, spec in home.items():
-            if not spec:
-                continue
-            stem = Path(spec).stem
-            norm = re.split(r'-Enhanced|-NR|-SAI', stem)[0]
-            rec = None
-            for slug in (trips_for_spec(spec) if '/' in spec else []):
-                rec = idx.get(f'{slug}/{stem}') or idx.get(f'{slug}/{norm}')
-                if rec:
-                    break
-            rec = rec or idx.get(stem) or idx.get(norm)
-            if rec:
-                covers[key] = rec
-                continue
-            if (ROOT / 'web' / spec).exists():           # already a web-relative asset
-                covers[key] = {'src': spec}
-                continue
-            p = Path(spec)
-            if p.exists() and p.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp'):
-                import shutil
-                dest_dir = ROOT / 'web' / 'previews'
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                dest = dest_dir / f'home-{key}{p.suffix.lower()}'
-                shutil.copy2(p, dest)
-                covers[key] = {'src': f'previews/{dest.name}'}
-            else:
-                echo(f"  ⚠ home cover '{key}': could not resolve {spec!r}")
+    for key, spec in (TILE_COVERS.get('home') or {}).items():
+        rec = resolve_tile_cover(spec, 'home', key, echo)
+        if rec:
+            covers[key] = rec
     if covers:
         stats['covers'] = covers
     (OUT_DIR / 'site_stats.json').write_text(json.dumps(stats, indent=2))

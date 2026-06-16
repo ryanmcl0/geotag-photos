@@ -86,4 +86,8 @@ tools/blog_migration/
 web/blogs/
 web/blogs.html
 
-_public_gallery.html
+# Privacy audit galleries (tools/public_photo_audit.py [--private])
+_public_photo_audit.html
+_private_photo_audit.html
+
+*.txt

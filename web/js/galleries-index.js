@@ -65,11 +65,13 @@
         const tripId = card.dataset.tripId;
         if (!img) return;
 
-        // Pinned cover from config wins — no manifest fetch needed.
+        // Pinned cover from config wins — no manifest fetch needed. Tiles render
+        // ~300–900px wide, so use the 2160px display webp (like the China hub),
+        // not the 400px thumbnail, or covers look soft/upscaled.
         const pinned = COVERS[tripId];
         if (pinned && pinned.src) { img.src = `${BASE}${pinned.src}`; return; }
         if (pinned && pinned.id) {
-            img.src = Gallery.photoUrl({ trip: pinned.trip || tripId, id: pinned.id }, 'thumbnails');
+            img.src = Gallery.photoUrl({ trip: pinned.trip || tripId, id: pinned.id }, 'display');
             return;
         }
 
@@ -80,7 +82,7 @@
             const manifest = await res.json();
             const cover = pickCover(manifest.photos);
             if (!cover) { Gallery.lockedCover(img); return; }
-            img.src = Gallery.photoUrl({ trip: tripId, id: cover.id }, 'thumbnails');
+            img.src = Gallery.photoUrl({ trip: tripId, id: cover.id }, 'display');
         } catch (e) {
             Gallery.lockedCover(img);
         }

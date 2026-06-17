@@ -252,7 +252,10 @@ header.top button.navtoggle{margin-left:auto;background:#26262a;color:var(--fg);
   border-radius:12px;padding:3px 11px;font-size:12px;cursor:pointer}
 header.top button.navtoggle:hover{background:#34343a}
 .sec{padding:16px 18px;border-bottom:1px solid var(--line)}
-.sec h2{font-size:15px;margin:0 0 2px;font-weight:600}
+.sec h2{font-size:15px;margin:0 0 2px;font-weight:600;cursor:pointer;user-select:none}
+.sec h2 .caret{display:inline-block;width:1em;color:var(--muted);transition:transform .1s}
+.sec.collapsed h2 .caret{transform:rotate(-90deg)}
+.sec.collapsed .grid,.sec.collapsed .more{display:none}
 .sec .meta{color:var(--muted);font-size:12px;margin-bottom:9px}
 .sec .meta .pin{color:var(--pin)}
 .sec .meta .picked{color:var(--ok)}
@@ -313,8 +316,11 @@ def render(section, cands):
 
     for i, (key, info) in enumerate(cands.items()):
         photos, total, cur, note = info['photos'], info['total'], info['current'], info['note']
-        P.append(f'<section class=sec id="s{i}" data-key="{html.escape(key)}">')
-        P.append(f'<h2>{html.escape(key)}</h2>')
+        # Tiles that already have a pin start collapsed (title only) — click to expand;
+        # their hidden grids also skip loading images until opened.
+        collapsed = ' collapsed' if cur else ''
+        P.append(f'<section class="sec{collapsed}" id="s{i}" data-key="{html.escape(key)}">')
+        P.append(f'<h2><span class=caret>▾</span> {html.escape(key)}</h2>')
         bits = [f'{total} landscape photo{"s" if total != 1 else ""}']
         if cur:
             bits.append(f'<span class=pin>pinned: {html.escape(Path(cur).name)}</span>')
@@ -363,7 +369,12 @@ const nav=document.getElementById('nav'), navBtn=document.getElementById('navtog
 navBtn.onclick=()=>{const o=nav.classList.toggle('open');navBtn.setAttribute('aria-expanded',o);
   navBtn.textContent=`jump to tile (${nav.children.length}) `+(o?'▴':'▾');};
 nav.addEventListener('click',e=>{if(e.target.tagName==='A'){nav.classList.remove('open');
-  navBtn.setAttribute('aria-expanded',false);navBtn.textContent=`jump to tile (${nav.children.length}) ▾`;}});
+  navBtn.setAttribute('aria-expanded',false);navBtn.textContent=`jump to tile (${nav.children.length}) ▾`;
+  document.getElementById('s'+e.target.dataset.jump)?.classList.remove('collapsed');}});  // expand on jump
+// collapse/expand a tile by clicking its title (pinned tiles start collapsed)
+document.querySelectorAll('.sec h2').forEach(h=>{
+  h.addEventListener('click',()=>h.closest('.sec').classList.toggle('collapsed'));
+});
 // per-tile "Show more / Show all" — reveal hidden overflow cells incrementally
 document.querySelectorAll('.more').forEach(bar=>{
   const grid=bar.previousElementSibling, step=+bar.dataset.step;

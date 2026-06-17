@@ -40,7 +40,8 @@ function tripFlags(context: EventContext<Env, string, unknown>): Promise<Record<
     return tripFlagsCache;
 }
 
-const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json'];
+const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json',
+    '/collections/gallery_covers.json'];
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
     if (['/rooftopping', '/rooftopping.html'].includes(path)) return true;

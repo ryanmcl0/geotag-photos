@@ -63,6 +63,21 @@ async function needsAllAccess(path: string, context: EventContext<Env, string, u
     return false;
 }
 
+const AUTH_WINDOW_MS = 60_000;   // sliding window length
+const AUTH_MAX_HITS = 10;        // auth POSTs per IP per window before 429
+const authHits = new Map<string, number[]>();
+
+function authRetryAfter(ip: string): number {
+    const now = Date.now();
+    const hits = (authHits.get(ip) || []).filter(t => now - t < AUTH_WINDOW_MS);
+    hits.push(now);
+    authHits.set(ip, hits);
+    if (authHits.size > 5000) {   // opportunistic cleanup so the map can't grow unbounded
+        for (const [k, v] of authHits) if (v.every(t => now - t >= AUTH_WINDOW_MS)) authHits.delete(k);
+    }
+    return hits.length > AUTH_MAX_HITS ? Math.ceil((AUTH_WINDOW_MS - (now - hits[0])) / 1000) : 0;
+}
+
 export const onRequest: PagesFunction<Env> = async (context) => {
     const url = new URL(context.request.url);
     const path = url.pathname;
@@ -71,6 +86,17 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         const m = cookies.split(';').map(c => c.trim()).find(c => c.startsWith(name + '='));
         return m ? m.split('=').slice(1).join('=') : null;
     };
+
+    if (context.request.method === 'POST' && (path === '/auth' || path === '/auth-all')) {
+        const ip = context.request.headers.get('CF-Connecting-IP') || 'local';
+        const retry = authRetryAfter(ip);
+        if (retry) {
+            return new Response('Too many attempts. Try again later.', {
+                status: 429,
+                headers: { 'Retry-After': String(retry) }
+            });
+        }
+    }
 
     if (path === '/auth-all' && context.request.method === 'POST') {
         const allPassword = context.env.CF_ALL_PASSWORD;

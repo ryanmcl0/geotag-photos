@@ -119,7 +119,9 @@ function syncVisibleTripLayers({ fit = false } = {}) {
         if (!layer) return;
         const show = shouldDisplayTrip(trip);
         if (show) {
-            refreshMarkerGroup(layer.markers); // apply current country filter to markers
+            // Placeholder layers hold one static pin (no _allMarkers) — refreshMarkerGroup
+            // would clear it. Skip; the pin is already in place.
+            if (!layer.pending) refreshMarkerGroup(layer.markers); // apply current country filter to markers
             if (!map.hasLayer(layer.route)) layer.route.addTo(map);
             if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
         } else {
@@ -837,6 +839,33 @@ async function loadSingleTrip(trip, basePath) {
     const tripPath = `${basePath}${trip.path}`;
     const color = CONFIG.routeColors[colorIndex % CONFIG.routeColors.length];
 
+    // Placeholder ("Photos pending") trip: visited but not edited yet, so it has no
+    // manifest/route. Drop a single greyed pin at trip.location and register it like any
+    // other trip so it counts toward the on-map country tally (updateTripInfo folds in
+    // trip.countries). It has no photo markers, so visibleMarkersForTrip returns [].
+    if (trip.pending) {
+        const markers = L.featureGroup();
+        if (Array.isArray(trip.location) && trip.location.length === 2) {
+            L.marker(trip.location, { icon: createPendingIcon(), keyboard: false })
+                .bindPopup(`<div class="pending-popup"><strong>${trip.name}</strong>` +
+                           `<span>Photos pending</span></div>`)
+                .addTo(markers);
+        }
+        tripLayers[trip.id] = {
+            route: L.featureGroup(),
+            markers,
+            color,
+            hasGpx: false,
+            visible: true,
+            pending: true,
+        };
+        allTrips.push(trip);
+        allManifests.push({ tripId: trip.id, photos: [], clusters: [] });
+        loadedTripIds.add(trip.id);
+        if (shouldDisplayTrip(trip)) tripLayers[trip.id].markers.addTo(map);
+        return;
+    }
+
     const [manifestRes, routeRes] = await Promise.all([
         fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
         fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
@@ -990,9 +1019,11 @@ function updateTripInfo() {
     document.getElementById('photo-count').textContent =
         `${totalPhotos.toLocaleString()} photos`;
 
+    // Countries visited but still entirely off the map. Albania, Belgium, Bosnia, Croatia,
+    // Luxembourg, Netherlands and Tunisia now have placeholder pins (config/trips.json
+    // pending trips), so they count as "on map" and have moved out of this list.
     const PENDING_COUNTRIES = [
-        'Albania','Belgium','Bosnia','Croatia',
-        'Ireland','Luxembourg','Montenegro','Netherlands','Slovakia','Tunisia',
+        'Ireland','Montenegro','Slovakia',
     ];
     const TOTAL_COUNTRIES = 55;
 
@@ -1213,6 +1244,20 @@ function createPhotoIcon(count, thumbnailUrl, endpoint) {
         iconSize: L.point(44, 44),
         iconAnchor: L.point(22, 22),
         popupAnchor: L.point(0, -22)
+    });
+}
+
+/**
+ * Marker for a placeholder ("Photos pending") trip — a muted dashed pill so it reads as
+ * "been here, photos not up yet" rather than a photo cluster.
+ */
+function createPendingIcon() {
+    return L.divIcon({
+        html: `<div class="pending-marker"><span class="pending-marker-glyph">📷</span>Photos pending</div>`,
+        className: 'pending-marker-icon',
+        iconSize: L.point(132, 28),
+        iconAnchor: L.point(66, 14),
+        popupAnchor: L.point(0, -12)
     });
 }
 

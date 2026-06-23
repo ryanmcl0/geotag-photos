@@ -117,6 +117,18 @@
         years.forEach(year => {
             const trips = yearGroups[year];
             const tripsHtml = trips.map(trip => {
+                // Placeholder ("Photos pending") trip: no per-trip map page and no gallery
+                // yet, so render a non-navigating label with a pending badge.
+                if (trip.pending) {
+                    return `
+                    <li class="trip-item trip-item--pending">
+                        <span class="nav-link trip-pending" data-trip-id="${trip.id}">
+                            ${formatTripName(trip.name)}
+                        </span>
+                        <span class="trip-pending-badge">Pending</span>
+                    </li>
+                `;
+                }
                 const tripSlug = trip.id.replace(/-\d{4}$/, '');
                 const galleryHref = `${basePath}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
                 return `

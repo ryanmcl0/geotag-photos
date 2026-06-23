@@ -299,8 +299,20 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         prune_removed_trips(dry_run=dry_run, echo=click.echo)
         click.echo("")
 
+    # Inject "Photos pending" placeholder trips (config entries flagged pending: true) into
+    # the index. Done here so it runs even when there's nothing else to process (the user
+    # may have only added a placeholder) and survives the early return below.
+    if not trip_filter and not dry_run:
+        from placeholder_trips import apply_placeholders
+        click.echo("Applying placeholder trips...")
+        apply_placeholders(WEB_TRIPS_DIR / 'index.json', echo=click.echo)
+        click.echo("")
+
     to_process, already_done = [], []
     for trip, is_public in all_trips:
+        # Placeholders have no edits to process — they're injected into the index above.
+        if trip.get('pending'):
+            continue
         slug = slugify(trip['name'])
         if reindex:
             # Baseline-stamp every selected trip (only meaningful for processed ones,

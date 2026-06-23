@@ -166,23 +166,46 @@ class PhotoResolver:
     def __init__(self):
         self.records = load_all_records()
         self.index = bc.build_id_index(self.records)
+        # Stem can't uniquely identify a photo: Sony's RM###### counter rolls over, so
+        # the same id is reused for a different photo in a later trip. Keep ALL records
+        # per id/normalised-id and disambiguate at resolve time with the file's path.
+        self.by_id, self.by_norm = {}, {}
+        for r in self.records:
+            self.by_id.setdefault(r['id'], []).append(r)
+            self.by_norm.setdefault(re.split(r'-Enhanced|-NR|-SAI|-2$', r['id'])[0],
+                                    []).append(r)
 
     def resolve(self, path, preferred_trips):
-        """Edit filepath → manifest photo ref, preferring the blog's trips (and their
-        -private halves), then the trip owning the file's edits dir, then any trip."""
+        """Edit filepath → manifest photo ref. A bare stem is ambiguous (Sony's counter
+        rolls over, reusing an id for a different photo in a later trip), so candidates
+        are ranked by, in order:
+          1. relevant — the trip whose edits dir owns the file (`trips_for_spec`) OR a
+             blog-declared trip. Relevance always wins, so an unrelated trip holding the
+             exact bare id can't hijack a photo the blog's own trip stores suffixed.
+          2. exact id match (full suffix) — tiebreak within relevant trips, so a shared
+             bundle's registered owner holding only a colliding bare stem loses to the
+             trip carrying the exact suffixed id (RM102531-2).
+          3. owner over merely-declared, then edits-dir/declared order."""
         stem = Path(path).stem
         norm = STEM_NORM.split(stem)[0]
-        prefs = []
+        owners = set(bc.trips_for_spec(path))
+        prefs = set()
+        pref_list = []
         for t in preferred_trips:
-            prefs += [t] if t.endswith('-private') else [t, f'{t}-private']
-        keys = [f'{t}/{s}' for t in prefs for s in (stem, norm)]
-        keys += [f'{t}/{s}' for t in bc.trips_for_spec(path) for s in (stem, norm)]
-        keys += [stem, norm]
-        for k in keys:
-            rec = self.index.get(k)
-            if rec:
-                return bc._photo_ref(rec)
-        return None
+            halves = [t] if t.endswith('-private') else [t, f'{t}-private']
+            prefs.update(halves)
+            pref_list += halves
+        ordered = bc.trips_for_spec(path) + [t for t in pref_list if t not in owners]
+        rank = {t: i for i, t in enumerate(ordered)}
+        cands = {id(r): r for r in self.by_id.get(stem, []) + self.by_norm.get(norm, [])}
+        if not cands:
+            return None
+        # sorted() makes ties deterministic (alphabetical trip) before max picks
+        best = max(sorted(cands.values(), key=lambda r: (r['trip'], r['id'])),
+                   key=lambda r: (r['trip'] in owners or r['trip'] in prefs,
+                                  r['id'] == stem, r['trip'] in owners,
+                                  r['trip'] in prefs, -rank.get(r['trip'], len(ordered))))
+        return bc._photo_ref(best)
 
 
 # ---------------------------------------------------------------- blog assets

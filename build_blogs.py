@@ -410,6 +410,15 @@ def photo_url(ref, kind):
     return f"/trips/{ref['trip']}/{kind}/{quote(ref['id'])}.webp"
 
 
+def photo_path(ref, kind):
+    """Bare '<slug>/<kind>/<id>.webp' (no /trips|/photos prefix). The page's inline script
+    prefixes it with the host-aware base — local web/trips symlinks (never deployed) vs the
+    /photos R2 proxy in production — mirroring js/gallery.js. Static covers/heroes must use
+    this, or they 404 on *.pages.dev (the symlinked image dirs aren't shipped)."""
+    from urllib.parse import quote
+    return f"{ref['trip']}/{kind}/{quote(ref['id'])}.webp"
+
+
 NAV = '''    <nav class="topnav">
         <div class="nav-links">
             <a href="/index.html">Home</a>
@@ -479,6 +488,17 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <script src="/js/unlock.js"></script>
     <script src="/js/gallery.js"></script>
     <script src="/js/blog.js"></script>
+    <script>
+    (function () {{
+        const el = document.querySelector('.blog-hero[data-cover-src]');
+        if (!el) return;
+        const H = location.hostname;
+        const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(H) || H.endsWith('.local') ||
+            /^10\\./.test(H) || /^192\\.168\\./.test(H) || /^172\\.(1[6-9]|2\\d|3[01])\\./.test(H);
+        const PB = LOCAL ? '/trips' : '/photos';
+        el.style.setProperty('--hero-img', "url('" + PB + '/' + el.dataset.coverSrc + "')");
+    }})();
+    </script>
 </body>
 </html>
 '''
@@ -505,14 +525,23 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
 
     <script src="/js/unlock.js"></script>
     <script>
-    document.querySelectorAll('.tile-img').forEach(img => {{
-        img.addEventListener('error', () => {{
-            const d = document.createElement('div');
-            d.className = 'tile-cover-locked';
-            d.innerHTML = '<span class="pad">🔒</span>Locked';
-            img.replaceWith(d);
+    (function () {{
+        const H = location.hostname;
+        const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(H) || H.endsWith('.local') ||
+            /^10\\./.test(H) || /^192\\.168\\./.test(H) || /^172\\.(1[6-9]|2\\d|3[01])\\./.test(H);
+        const PB = LOCAL ? '/trips' : '/photos';
+        document.querySelectorAll('.tile-img[data-cover]').forEach(img => {{
+            img.src = PB + '/' + img.dataset.cover;
         }});
-    }});
+        document.querySelectorAll('.tile-img').forEach(img => {{
+            img.addEventListener('error', () => {{
+                const d = document.createElement('div');
+                d.className = 'tile-cover-locked';
+                d.innerHTML = '<span class="pad">🔒</span>Locked';
+                img.replaceWith(d);
+            }});
+        }});
+    }})();
     </script>
 </body>
 </html>
@@ -523,7 +552,7 @@ def render_post(data):
     cover = data.get('cover')
     hero_style = ''
     if cover:
-        hero_style = f' style="--hero-img: url(\'{photo_url(cover, "display")}\')" data-cover'
+        hero_style = f' data-cover-src="{photo_path(cover, "display")}" data-cover'
     return POST_TEMPLATE.format(
         title=html.escape(data.get('display_title') or data['title'], quote=False),
         nav=NAV.format(blogs_active=' class="active"'),
@@ -544,7 +573,7 @@ def render_index(built, pending):
     for d in built:
         cover = d.get('cover')
         img = (f'<img class="tile-img" loading="lazy" alt="" '
-               f'onerror="this.style.display=\'none\'" src="{photo_url(cover, "display")}">'
+               f'onerror="this.style.display=\'none\'" data-cover="{photo_path(cover, "display")}">'
                if cover else '')
         lock = '' if d['public'] else '<div class="lock-badge">🔒 See All</div>'
         gated = '' if d['public'] else ' data-gated'

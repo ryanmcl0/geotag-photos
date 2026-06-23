@@ -82,7 +82,8 @@ def sync_public_flags(dry_run: bool = False):
         return s.strip('-')
 
     trips_config = json.loads(trips_config_path.read_text())
-    public_edits_paths = set(t['edits'] for t in trips_config.get('public', []))
+    # Placeholder ("pending") trips have no edits path — skip them here.
+    public_edits_paths = set(t['edits'] for t in trips_config.get('public', []) if t.get('edits'))
 
     # Explicit private slugs — trips in the private block, keyed by slug.
     # These always win over path matching (handles shared edits paths like
@@ -116,6 +117,11 @@ def sync_public_flags(dry_run: bool = False):
     index = json.loads(index_path.read_text())
     changed = 0
     for trip in index.get('trips', []):
+        # Placeholder ("pending") trips have no manifest source — their public flag is set
+        # by placeholder_trips.apply_placeholders; don't let the source-path match below
+        # (which would see an empty path and force private) override it.
+        if trip.get('pending'):
+            continue
         source_path = slug_to_source.get(trip['id'], '')
         # Priority order:
         # 1. Slugs ending in '-private' → always private (off-route splits)
@@ -541,6 +547,14 @@ def main():
         prune_s3 = None if (args.skip_images or args.dry_run) else R2Uploader(config).s3
         prune_removed_trips(s3=prune_s3, r2_bucket=config.r2_bucket,
                             dry_run=args.dry_run, force=args.prune_force)
+        print()
+
+    # Step 1c: (Re-)assert "Photos pending" placeholder trips into the index so every
+    # deploy ships them, even if the index was regenerated. Idempotent.
+    if not args.dry_run:
+        print("📍 Applying placeholder trips...")
+        from placeholder_trips import apply_placeholders
+        apply_placeholders(Path('web/trips/index.json'))
         print()
 
     # Step 2: Sync images to R2 (size-aware: skips unchanged, re-uploads changed,

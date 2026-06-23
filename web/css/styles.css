@@ -253,6 +253,22 @@ body {
     border-color: #e11d48;
 }
 
+/* Placeholder ("Photos pending") trip — visited but not edited yet. A muted, non-clickable
+   label plus a dashed "Pending" badge. */
+.trip-pending {
+    color: #9aa0a6;
+    cursor: default;
+}
+.trip-pending-badge {
+    flex-shrink: 0;
+    margin-right: 16px;
+    padding: 3px 9px;
+    font-size: 0.7rem;
+    color: #9aa0a6;
+    border: 1px dashed #d4d4d4;
+    border-radius: 999px;
+}
+
 /* Mobile sidebar toggle */
 .sidebar-toggle {
     display: none;
@@ -500,6 +516,34 @@ details[open] .country-summary::after {
 .photo-marker-icon.photo-marker-end {
     z-index: 600 !important;
 }
+
+/* Placeholder ("Photos pending") trip pin — a muted dashed pill, visually distinct from
+   photo-cluster markers so visited-but-not-yet-edited trips read at a glance. */
+.pending-marker-icon { cursor: pointer; }
+.pending-marker {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    box-sizing: border-box;
+    width: 132px;
+    height: 28px;
+    padding: 0 10px;
+    white-space: nowrap;
+    background: rgba(42, 45, 51, 0.82);
+    color: #e7e9ee;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px dashed rgba(255, 255, 255, 0.6);
+    border-radius: 14px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(2px);
+    transition: background 0.2s ease;
+}
+.pending-marker-glyph { font-size: 13px; filter: grayscale(0.4); }
+.pending-marker-icon:hover .pending-marker { background: rgba(42, 45, 51, 0.96); }
+.pending-popup { text-align: center; }
+.pending-popup strong { display: block; margin-bottom: 2px; }
+.pending-popup span { color: #8a8f98; font-size: 12px; }
 
 
 /* Custom cluster markers - clean minimal style */

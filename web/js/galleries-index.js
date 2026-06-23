@@ -90,6 +90,21 @@
 
     function buildTile(trip) {
         const year = tripYear(trip);
+
+        // Placeholder ("Photos pending") trip: visited but not edited yet, no gallery to
+        // link to. Render the shared pending tile (matches china.js) — non-clickable.
+        if (trip.pending) {
+            const card = el('div', 'tile tile--pending');
+            card.dataset.tripId = trip.id;
+            card.innerHTML = `
+                <div class="tile-inner">
+                    <div class="tile-title">${formatTripName(trip.name)}</div>
+                    <div class="pending-tag">Photos pending</div>
+                </div>
+            `;
+            return card;
+        }
+
         const href = `${BASE}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
         const count = trip.photo_count
             ? `${trip.photo_count} photo${trip.photo_count === 1 ? '' : 's'}`
@@ -168,7 +183,7 @@
             group.forEach(trip => {
                 const tile = buildTile(trip);
                 grid.appendChild(tile);
-                io.observe(tile);
+                if (!trip.pending) io.observe(tile);  // pending tiles have no cover to load
             });
             section.appendChild(grid);
             app.appendChild(section);

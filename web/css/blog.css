@@ -11,7 +11,7 @@
 .blog-meta {
   margin-top: 14px;
   font-family: var(--head); text-transform: uppercase; letter-spacing: .18em;
-  color: var(--muted); font-size: 13px;
+  color: var(--muted); font-size: 18px;
 }
 /* year · km on the first line; words · photos · read on its own line below */
 .blog-meta-line { display: block; margin-top: 5px; }
@@ -109,5 +109,5 @@
 @media (max-width: 860px) {
   /* the stats line is long — keep it inside the tile on small screens */
   .blog-tiles .tile-sub { font-size: 12px; letter-spacing: .08em; white-space: normal; }
-  .blog-meta { font-size: 11px; letter-spacing: .12em; }
+  .blog-meta { font-size: 14px; letter-spacing: .12em; }
 }

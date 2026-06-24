@@ -45,6 +45,40 @@ body {
     border-bottom: 1px solid #e5e5e5;
 }
 
+.sidebar-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.sidebar-back {
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: inherit;
+    text-decoration: none;
+    opacity: .65;
+    transition: opacity .15s, color .15s;
+}
+.sidebar-back:hover { opacity: 1; color: #e11d48; }
+.sidebar-homeicon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+    opacity: .65;
+    text-decoration: none;
+    transition: opacity .15s, color .15s;
+}
+.sidebar-homeicon:hover { opacity: 1; color: #e11d48; }
+
 .sidebar-header h2 {
     font-size: 1.1rem;
     font-weight: 600;
@@ -179,23 +213,60 @@ body {
 }
 
 .trip-item {
+    list-style: none;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding-left: 12px;
 }
 
 .trip-item .nav-link {
-    padding: 8px 12px 8px 0;
     flex: 1;
+    min-width: 0;
 }
 
-.trip-toggle {
-    width: 14px;
-    height: 14px;
-    cursor: pointer;
-    accent-color: #e11d48;
+/* The trip whose page is currently open — highlight the whole row */
+.trip-item.trip-active {
+    background: #fbe9ee;
+    box-shadow: inset 3px 0 0 #e11d48;
+}
+
+.trip-item.trip-active .trip-map-link {
+    color: #e11d48;
+    font-weight: 600;
+}
+
+/* Per-trip "Gallery" link — opens the trip's photos as a grid instead of a map */
+.trip-gallery-link {
     flex-shrink: 0;
+    margin-right: 16px;
+    padding: 3px 9px;
+    font-size: 0.7rem;
+    color: #999;
+    text-decoration: none;
+    border: 1px solid #e5e5e5;
+    border-radius: 999px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.trip-gallery-link:hover,
+.trip-gallery-link.active {
+    color: #e11d48;
+    border-color: #e11d48;
+}
+
+/* Placeholder ("Photos pending") trip — visited but not edited yet. A muted, non-clickable
+   label plus a dashed "Pending" badge. */
+.trip-pending {
+    color: #9aa0a6;
+    cursor: default;
+}
+.trip-pending-badge {
+    flex-shrink: 0;
+    margin-right: 16px;
+    padding: 3px 9px;
+    font-size: 0.7rem;
+    color: #9aa0a6;
+    border: 1px dashed #d4d4d4;
+    border-radius: 999px;
 }
 
 /* Mobile sidebar toggle */
@@ -446,6 +517,34 @@ details[open] .country-summary::after {
     z-index: 600 !important;
 }
 
+/* Placeholder ("Photos pending") trip pin — a muted dashed pill, visually distinct from
+   photo-cluster markers so visited-but-not-yet-edited trips read at a glance. */
+.pending-marker-icon { cursor: pointer; }
+.pending-marker {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    box-sizing: border-box;
+    width: 132px;
+    height: 28px;
+    padding: 0 10px;
+    white-space: nowrap;
+    background: rgba(42, 45, 51, 0.82);
+    color: #e7e9ee;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px dashed rgba(255, 255, 255, 0.6);
+    border-radius: 14px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(2px);
+    transition: background 0.2s ease;
+}
+.pending-marker-glyph { font-size: 13px; filter: grayscale(0.4); }
+.pending-marker-icon:hover .pending-marker { background: rgba(42, 45, 51, 0.96); }
+.pending-popup { text-align: center; }
+.pending-popup strong { display: block; margin-bottom: 2px; }
+.pending-popup span { color: #8a8f98; font-size: 12px; }
+
 
 /* Custom cluster markers - clean minimal style */
 .marker-cluster {
@@ -649,7 +748,8 @@ details[open] .country-summary::after {
     .mobile-see-all-trigger,
     .map-style-control,
     .map-top-filters,
-    .route-filter-wrapper {
+    .route-filter-wrapper,
+    .map-settings {
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
         will-change: transform;
@@ -1285,6 +1385,98 @@ details[open] .country-summary::after {
     color: #fff;
 }
 
+/* ─── Mobile settings (⚙ Filters) ───────────────────────────────────────────
+   On phones/tablets the year + country + route controls collapse behind a single
+   Filters button that reveals them in an animated panel. Hidden on desktop, where
+   the controls stay inline; app.js reparents the wrappers between the two layouts. */
+.map-settings {
+    display: none;   /* shown only at ≤768px (see media query) */
+    position: absolute;
+    top: 16px;
+    right: 12px;
+    z-index: 1100;
+}
+
+.map-settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 13px;
+    background: rgba(20, 20, 20, 0.94);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: #fff;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    transition: background 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.map-settings-btn:hover { background: rgba(35,35,35,0.95); }
+
+.map-settings-btn.active {
+    background: rgba(40,40,40,0.97);
+    border-color: rgba(255,255,255,0.35);
+}
+
+.map-settings-icon {
+    color: #cfcfcf;
+    transition: transform 0.25s cubic-bezier(0.2,0.8,0.2,1);
+}
+.map-settings-btn.active .map-settings-icon { transform: rotate(90deg); }
+
+/* Small dot badge shown when any filter is active (non-default). */
+.map-settings-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4a9eff;
+    box-shadow: 0 0 0 2px rgba(20,20,20,0.94);
+}
+.map-settings-dot[hidden] { display: none; }
+
+.map-settings-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: rgba(18, 18, 18, 0.97);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 14px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+    transform-origin: top right;
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.2,0.8,0.2,1);
+}
+
+.map-settings-panel.open {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+}
+
+/* Route toggle fills the panel width, each option splitting it evenly. */
+.map-settings-panel .route-filter-wrapper {
+    position: static;
+    top: auto;
+    right: auto;
+    width: 100%;
+    box-shadow: none;
+}
+.map-settings-panel .route-filter-btn {
+    flex: 1;
+}
+
 /* Map style switcher */
 .map-style-control {
     position: absolute;
@@ -1338,29 +1530,29 @@ details[open] .country-summary::after {
    and .country-filter-* so the cascade doesn't silently discard them.
    ─────────────────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
-    /* Year+country bar: same row as the hamburger (top: 16px), starting just
-       after the 40px hamburger button.  max-width stops it from reaching the
-       All/GPX toggle on the right. */
+    /* On mobile the year/country/route controls collapse into the ⚙ Filters panel
+       (.map-settings). app.js reparents the existing wrappers into the panel, so the
+       centered top bar is empty here — hide it. */
     .map-top-filters {
-        top: 16px;
-        left: 68px;   /* 16px hamburger left + 40px width + 12px gap */
-        transform: none;
-        /* reserve space for .route-filter-wrapper (≈104px) + 12px gap */
-        max-width: calc(100% - 68px - 12px - 116px);
+        display: none;
     }
 
-    /* Shrink buttons slightly so all four controls fit on one row */
-    .year-filter-btn,
-    .country-filter-btn {
-        padding: 7px 10px;
-        font-size: 12px;
-        gap: 6px;
+    /* Reveal the ⚙ Filters button + panel. */
+    .map-settings {
+        display: block;
     }
 
-    /* All/GPX toggle: same row, pinned to right edge */
-    .route-filter-wrapper {
-        top: 16px;
-        right: 12px;
+    /* Inside the panel the dropdown pills are full width and the labels push their
+       chevrons to the right edge. */
+    .map-settings-panel .year-filter-btn,
+    .map-settings-panel .country-filter-btn {
+        width: 100%;
+        justify-content: space-between;
+        font-size: 13px;
+    }
+    .map-settings-panel .year-filter-wrapper,
+    .map-settings-panel .country-filter-wrapper {
+        width: 100%;
     }
 }
 
@@ -1373,4 +1565,154 @@ details[open] .country-summary::after {
     .country-filter-options {
         column-count: 2;
     }
+}
+
+/* ============================================================
+   Trip photo gallery (gallery.html) — justified grid + lightbox,
+   light theme to match the map sidebar.
+   ============================================================ */
+.gallery-view {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: #fff;
+    padding: 18px 22px 64px;
+}
+
+.gallery-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.gallery-toolbar .gallery-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin-right: auto;
+}
+
+.gallery-switch {
+    display: inline-flex;
+    border: 1px solid #e5e5e5;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.gallery-switch a {
+    padding: 5px 14px;
+    font-size: 0.8rem;
+    color: #666;
+    text-decoration: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.gallery-switch a + a {
+    border-left: 1px solid #e5e5e5;
+}
+
+.gallery-switch a:hover {
+    background: #f5f5f5;
+}
+
+.gallery-switch a.active {
+    background: #e11d48;
+    color: #fff;
+}
+
+.gallery-view .photo-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.gallery-view .photo-row {
+    display: flex;
+    gap: 8px;
+}
+
+.gallery-view .photo-cell {
+    padding: 0;
+    border: 0;
+    background: #f0f0f0;
+    cursor: pointer;
+    overflow: hidden;
+    flex: 0 0 auto;
+    border-radius: 2px;
+}
+
+.gallery-view .photo-cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: opacity 0.3s ease;
+}
+
+.gallery-view .photo-cell:hover img {
+    opacity: 0.85;
+}
+
+.gallery-view .gallery-empty,
+.gallery-view .gallery-loading {
+    color: #888;
+    padding: 26px 0;
+    font-style: italic;
+}
+
+@media (max-width: 768px) {
+    .gallery-view {
+        padding: 14px 12px 64px;
+    }
+    /* Clear the floating hamburger toggle (top-left) */
+    .gallery-toolbar { padding-left: 52px; }
+    .gallery-view .photo-grid { gap: 6px; }
+    .gallery-view .photo-row { gap: 6px; }
+}
+
+/* ============================================================
+   DARK MAIN AREA — gallery.html carries <body class="theme-dark">.
+   Only the gallery's photo area goes dark; the sidebar (and the rest
+   of the map stack) stays light. map.html omits the class entirely.
+   ============================================================ */
+.theme-dark .gallery-view {
+    background: #111;
+}
+
+.theme-dark .gallery-toolbar .gallery-title {
+    color: #f2f2f2;
+}
+
+.theme-dark .gallery-switch {
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.theme-dark .gallery-switch a {
+    color: #b0b0b0;
+}
+
+.theme-dark .gallery-switch a + a {
+    border-left-color: rgba(255, 255, 255, 0.12);
+}
+
+.theme-dark .gallery-switch a:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f2f2f2;
+}
+
+.theme-dark .gallery-switch a.active {
+    background: #e11d48;
+    color: #fff;
+}
+
+.theme-dark .gallery-view .photo-cell {
+    background: #161616;
+}
+
+.theme-dark .gallery-view .gallery-empty,
+.theme-dark .gallery-view .gallery-loading {
+    color: #999;
 }

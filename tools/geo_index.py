@@ -12,17 +12,17 @@ Given a photo directory or Lightroom catalog (.lrcat), this script:
 
 Usage:
     # From a raw photo directory:
-    python scripts/geo_index.py /Volumes/RYAN/Projects/Work --output locations.kml
+    python tools/geo_index.py /Volumes/RYAN/Projects/Work --output locations.kml
 
     # From a Lightroom catalog:
-    python scripts/geo_index.py ~/Pictures/Lightroom/Catalog.lrcat --output locations.geojson
+    python tools/geo_index.py ~/Pictures/Lightroom/Catalog.lrcat --output locations.geojson
 
     # Geocoding only (skip EXIF), using Google Places for better building names:
-    python scripts/geo_index.py /path/to/photos --strategy geocode \\
+    python tools/geo_index.py /path/to/photos --strategy geocode \\
         --geocoder google --api-key YOUR_KEY --output locations.kml
 
     # EXIF only, no network requests:
-    python scripts/geo_index.py /path/to/photos --strategy exif --output locations.csv
+    python tools/geo_index.py /path/to/photos --strategy exif --output locations.csv
 """
 
 import argparse

@@ -179,6 +179,8 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
     if opts.get('geotag_overrides'):
         import json as _json
         cmd += ['--geotag-overrides', _json.dumps(opts['geotag_overrides'])]
+    if opts.get('round_trip'):
+        cmd += ['--round-trip']
     if trip.get('kmz'):
         cmd += ['--kmz', trip['kmz']]
     if trip.get('raws'):
@@ -195,8 +197,18 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         if isinstance(excl, list):
             excl = ';'.join(excl)
         cmd += ['--exclude-edits-under', excl]
+    if opts.get('exclude_photos'):
+        excl = opts['exclude_photos']
+        if isinstance(excl, list):
+            excl = ';'.join(excl)
+        cmd += ['--exclude-photos', excl]
     if opts.get('only_edits_dirs'):
         cmd += ['--only-edits-dirs']
+    if opts.get('exclude_raw_subdirs'):
+        subdirs = opts['exclude_raw_subdirs']
+        if isinstance(subdirs, list):
+            subdirs = ';'.join(subdirs)
+        cmd += ['--exclude-raw-subdirs', subdirs]
     if opts.get('max_interp_gap_hours') is not None:
         cmd += ['--max-interp-gap-hours', str(opts['max_interp_gap_hours'])]
     if opts.get('max_gap_interp_km') is not None:
@@ -287,8 +299,20 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         prune_removed_trips(dry_run=dry_run, echo=click.echo)
         click.echo("")
 
+    # Inject "Photos pending" placeholder trips (config entries flagged pending: true) into
+    # the index. Done here so it runs even when there's nothing else to process (the user
+    # may have only added a placeholder) and survives the early return below.
+    if not trip_filter and not dry_run:
+        from placeholder_trips import apply_placeholders
+        click.echo("Applying placeholder trips...")
+        apply_placeholders(WEB_TRIPS_DIR / 'index.json', echo=click.echo)
+        click.echo("")
+
     to_process, already_done = [], []
     for trip, is_public in all_trips:
+        # Placeholders have no edits to process — they're injected into the index above.
+        if trip.get('pending'):
+            continue
         slug = slugify(trip['name'])
         if reindex:
             # Baseline-stamp every selected trip (only meaningful for processed ones,
@@ -378,6 +402,24 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         deploy.sync_public_flags()
     except Exception as e:
         click.echo(f"⚠ sync_public_flags failed: {e}", err=True)
+
+    # Refresh the collections (China hub etc.) so newly processed photos land in
+    # their bridges/provinces/roads galleries automatically. Derived facets only —
+    # no AI runs here; the category tile is carried forward. Run
+    # build_collections.py --category yourself to (re-)run CLIP.
+    try:
+        click.echo("\nUpdating collections (build_collections)...")
+        subprocess.run([sys.executable, 'build_collections.py'], cwd=str(PROJECT_ROOT))
+    except Exception as e:
+        click.echo(f"⚠ build_collections failed: {e}", err=True)
+
+    # Tag each manifest photo with its aspect ratio so the trip gallery view can
+    # lay out justified rows without probing images client-side.
+    try:
+        click.echo("\nTagging photo aspect ratios (backfill_manifest_ar)...")
+        subprocess.run([sys.executable, 'tools/backfill_manifest_ar.py'], cwd=str(PROJECT_ROOT))
+    except Exception as e:
+        click.echo(f"⚠ backfill_manifest_ar failed: {e}", err=True)
 
 
 if __name__ == '__main__':

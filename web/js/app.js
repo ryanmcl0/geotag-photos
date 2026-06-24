@@ -42,24 +42,14 @@ const tripLayers = {};
 const loadedTripIds = new Set();
 
 function checkAllAccess() {
-    return document.cookie.split(';').some(c => c.trim() === 'all_access=1');
+    return document.cookie.split(';').some(c => {
+        const t = c.trim();
+        return t.startsWith('all_access=') && t.length > 'all_access='.length;
+    });
 }
 
-const HIDDEN_TRIPS_STORAGE_KEY = 'geotagPhotos.hiddenTrips';
 let activeRouteFilter = 'all'; // 'all' | 'gpx'
 let activeCountryFilter = null; // null = all countries, Set<string> = filter by country codes
-
-function loadHiddenTripIds() {
-    try {
-        return new Set(JSON.parse(localStorage.getItem(HIDDEN_TRIPS_STORAGE_KEY)) || []);
-    } catch (e) {
-        return new Set();
-    }
-}
-
-function saveHiddenTripIds(hiddenSet) {
-    localStorage.setItem(HIDDEN_TRIPS_STORAGE_KEY, JSON.stringify([...hiddenSet]));
-}
 
 /**
  * Initialize the application
@@ -73,7 +63,15 @@ async function init() {
     initYearFilter();
     initCountryFilter();
     initRouteFilter();
+    syncControlsLayout();
     initMobileControls();
+
+    // Re-place the filter controls when the viewport crosses the mobile breakpoint.
+    let resizeRaf;
+    window.addEventListener('resize', () => {
+        cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(syncControlsLayout);
+    });
 }
 
 function tripMatchesYearFilter(trip) {
@@ -121,7 +119,9 @@ function syncVisibleTripLayers({ fit = false } = {}) {
         if (!layer) return;
         const show = shouldDisplayTrip(trip);
         if (show) {
-            refreshMarkerGroup(layer.markers); // apply current country filter to markers
+            // Placeholder layers hold one static pin (no _allMarkers) — refreshMarkerGroup
+            // would clear it. Skip; the pin is already in place.
+            if (!layer.pending) refreshMarkerGroup(layer.markers); // apply current country filter to markers
             if (!map.hasLayer(layer.route)) layer.route.addTo(map);
             if (!map.hasLayer(layer.markers)) layer.markers.addTo(map);
         } else {
@@ -130,16 +130,125 @@ function syncVisibleTripLayers({ fit = false } = {}) {
         }
     });
 
+    rebuildGlobalSiblingChain(); // one chain across all now-visible trips
     updateTripInfo();
     reinitLightbox();
     if (fit) fitMapToBounds();
 }
 
+// On phones/tablets the year + country + route controls collapse behind a single
+// ⚙ Filters button; on desktop they stay inline. The breakpoint matches the mobile
+// CSS overrides in styles.css.
+function isMobileControls() {
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
+/**
+ * The ⚙ Filters button + animated panel (mobile only). Created once, on demand.
+ * The panel is the home for the filter pills when collapsed; syncControlsLayout()
+ * reparents them in/out as the viewport crosses the breakpoint.
+ */
+function ensureSettingsUI() {
+    let settings = document.querySelector('.map-settings');
+    if (settings) return settings;
+    settings = document.createElement('div');
+    settings.className = 'map-settings';
+    settings.innerHTML = `
+        <button class="map-settings-btn" id="mapSettingsBtn" aria-expanded="false" aria-label="Filters">
+            <svg class="map-settings-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                <path d="M2 4.5h7M11 4.5h3M2 11.5h3M7 11.5h7" stroke="currentColor"
+                      stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                <circle cx="10" cy="4.5" r="1.8" fill="currentColor"/>
+                <circle cx="5" cy="11.5" r="1.8" fill="currentColor"/>
+            </svg>
+            <span class="map-settings-label">Filters</span>
+            <span class="map-settings-dot" hidden></span>
+        </button>
+        <div class="map-settings-panel" id="mapSettingsPanel" role="group" aria-label="Map filters"></div>
+    `;
+    document.getElementById('map').appendChild(settings);
+
+    settings.querySelector('.map-settings-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        toggleSettingsPanel();
+    });
+    // Close on tap/click outside — but treat the reparented year/country dropdown
+    // menus (which escape to .map-container on mobile) as "inside".
+    document.addEventListener('click', e => {
+        if (!e.target.closest('.map-settings, .year-filter-menu, .country-filter-menu')) {
+            closeSettingsPanel();
+        }
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeSettingsPanel();
+    });
+    return settings;
+}
+
+function settingsPanelBody() {
+    return ensureSettingsUI().querySelector('.map-settings-panel');
+}
+
+function openSettingsPanel() {
+    const s = ensureSettingsUI();
+    s.querySelector('.map-settings-panel').classList.add('open');
+    const btn = s.querySelector('.map-settings-btn');
+    btn.classList.add('active');
+    btn.setAttribute('aria-expanded', 'true');
+}
+
+function closeSettingsPanel() {
+    const s = document.querySelector('.map-settings');
+    if (!s) return;
+    s.querySelector('.map-settings-panel').classList.remove('open');
+    const btn = s.querySelector('.map-settings-btn');
+    btn.classList.remove('active');
+    btn.setAttribute('aria-expanded', 'false');
+    closeOtherFilterMenus(null);   // also collapse any open year/country dropdown
+}
+
+function toggleSettingsPanel() {
+    const open = settingsPanelBody().classList.contains('open');
+    open ? closeSettingsPanel() : openSettingsPanel();
+}
+
+/** Show the ⚙ button's "active filter" dot when any filter is non-default. */
+function updateSettingsDot() {
+    const dot = document.querySelector('.map-settings-dot');
+    if (!dot) return;
+    const active = !!activeYearFilter || !!activeCountryFilter || activeRouteFilter !== 'all';
+    dot.hidden = !active;
+}
+
+/**
+ * Place the filter pills for the current viewport: stacked inside the ⚙ panel on
+ * mobile, inline (year+country in the centered bar, route top-right) on desktop.
+ * Safe to call repeatedly — used on init, after filter rebuilds, and on resize.
+ */
+function syncControlsLayout() {
+    const year = document.querySelector('.year-filter-wrapper');
+    const country = document.querySelector('.country-filter-wrapper');
+    const route = document.querySelector('.route-filter-wrapper');
+    if (isMobileControls()) {
+        const panel = settingsPanelBody();
+        [year, country, route].forEach(w => { if (w) panel.appendChild(w); });
+    } else {
+        closeSettingsPanel();
+        const bar = getTopFilterBar();
+        if (year) bar.appendChild(year);
+        if (country) bar.appendChild(country);
+        if (route) document.getElementById('map').appendChild(route);
+    }
+    updateSettingsDot();
+}
+
 /**
  * Shared centered container at the top of the map holding the year + country
- * dropdowns side by side. Created on demand by whichever filter initialises first.
+ * dropdowns side by side (desktop). On mobile the pills live in the ⚙ Filters
+ * panel instead, so return that. Created on demand by whichever filter initialises first.
  */
 function getTopFilterBar() {
+    if (isMobileControls()) return settingsPanelBody();
     let bar = document.querySelector('.map-top-filters');
     if (!bar) {
         bar = document.createElement('div');
@@ -220,6 +329,10 @@ function clampMenuToViewport(menu) {
 }
 
 function initYearFilter() {
+    // Rebuilt after unlock/lock as the available years change (e.g. 2018 is entirely
+    // private — it must appear once those trips load). Drop any existing menu first.
+    document.querySelectorAll('.year-filter-wrapper').forEach(w => w.remove());
+
     const years = [...new Set(allTrips.map(t => {
         const m = (t.name || '').match(/^(\d{4})/);
         return m ? parseInt(m[1]) : t.year;
@@ -269,6 +382,9 @@ function initYearFilter() {
         e.stopPropagation();
         closeOtherFilterMenus(menu);
         menu.classList.toggle('open');
+        // Escape the (collapsed) settings panel + Leaflet clipping on mobile and keep
+        // the list within the viewport — same handling as the country menu.
+        if (menu.classList.contains('open')) clampMenuToViewport(menu);
     });
     document.addEventListener('click', () => menu.classList.remove('open'));
     menu.addEventListener('click', e => e.stopPropagation());
@@ -294,6 +410,7 @@ function setYearFilter(year, wrapper) {
         opt.querySelector('.year-filter-check').textContent = active ? '✓' : '';
     });
 
+    updateSettingsDot();
     syncVisibleTripLayers({ fit: true });
 }
 
@@ -431,6 +548,7 @@ function rebuildCountryFilter() {
 }
 
 function updateCountryFilterLabel(wrapper, filter) {
+    updateSettingsDot();
     const label = wrapper.querySelector('#countryFilterLabel');
     if (!filter) {
         label.textContent = 'All countries';
@@ -448,7 +566,7 @@ function initRouteFilter() {
         <button class="route-filter-btn" data-filter="all">All</button>
         <button class="route-filter-btn" data-filter="gpx">GPX</button>
     `;
-    document.getElementById('map').appendChild(wrapper);
+    (isMobileControls() ? settingsPanelBody() : document.getElementById('map')).appendChild(wrapper);
 
     wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
@@ -461,6 +579,7 @@ function setRouteFilter(filter, wrapper) {
     wrapper.querySelectorAll('.route-filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === activeRouteFilter);
     });
+    updateSettingsDot();
     syncVisibleTripLayers({ fit: true });
 }
 
@@ -651,6 +770,31 @@ async function loadTripData() {
                 trips = trips.filter(t => (t.year || new Date(t.dates.start).getFullYear()) === VIEW_CONFIG.year);
             } else if (VIEW_CONFIG.mode === 'trip' && VIEW_CONFIG.tripId) {
                 trips = trips.filter(t => t.id === VIEW_CONFIG.tripId);
+            } else if (VIEW_CONFIG.mode === 'collection' && VIEW_CONFIG.collection) {
+                // Collection-filtered map (e.g. one province from the China hub):
+                // show only the photos referenced by the collection facet/subtile.
+                let cRes = null;
+                if (checkAllAccess()) {
+                    try {
+                        const r = await fetch(`${basePath}collections/${VIEW_CONFIG.collection}.all.json?t=${Date.now()}`);
+                        if (r.ok) cRes = r;
+                    } catch (e) { /* fall through to the public file */ }
+                }
+                if (!cRes) cRes = await fetch(`${basePath}collections/${VIEW_CONFIG.collection}.json?t=${Date.now()}`);
+                const cData = await cRes.json();
+                const tile = (cData.tiles || []).find(t => t.id === VIEW_CONFIG.facet);
+                const node = VIEW_CONFIG.sub
+                    ? ((tile && tile.subtiles) || []).find(s => s.id === VIEW_CONFIG.sub)
+                    : tile;
+                const refs = (node && node.photos) || [];
+                const pf = new Map();
+                refs.forEach(r => {
+                    if (!pf.has(r.trip)) pf.set(r.trip, new Set());
+                    pf.get(r.trip).add(r.id);
+                });
+                window._collectionPhotoFilter = pf;
+                if (!VIEW_CONFIG.filterTitle && node) VIEW_CONFIG.filterTitle = node.title;
+                trips = trips.filter(t => pf.has(t.id));
             }
         }
 
@@ -672,6 +816,11 @@ async function loadTripData() {
             }
         }
 
+        // Build the cross-cluster paging chain now, so the popup ‹ › navigation
+        // works on first click without needing to touch a filter first. (Filter
+        // changes rebuild it via syncVisibleTripLayers; initial load doesn't go
+        // through there.)
+        rebuildGlobalSiblingChain();
         updateTripInfo();
         fitMapToBounds();
 
@@ -690,25 +839,72 @@ async function loadSingleTrip(trip, basePath) {
     const tripPath = `${basePath}${trip.path}`;
     const color = CONFIG.routeColors[colorIndex % CONFIG.routeColors.length];
 
+    // Placeholder ("Photos pending") trip: visited but not edited yet, so it has no
+    // manifest/route. Drop a single greyed pin at trip.location and register it like any
+    // other trip so it counts toward the on-map country tally (updateTripInfo folds in
+    // trip.countries). It has no photo markers, so visibleMarkersForTrip returns [].
+    if (trip.pending) {
+        const markers = L.featureGroup();
+        if (Array.isArray(trip.location) && trip.location.length === 2) {
+            L.marker(trip.location, { icon: createPendingIcon(), keyboard: false })
+                .bindPopup(`<div class="pending-popup"><strong>${trip.name}</strong>` +
+                           `<span>Photos pending</span></div>`)
+                .addTo(markers);
+        }
+        tripLayers[trip.id] = {
+            route: L.featureGroup(),
+            markers,
+            color,
+            hasGpx: false,
+            visible: true,
+            pending: true,
+        };
+        allTrips.push(trip);
+        allManifests.push({ tripId: trip.id, photos: [], clusters: [] });
+        loadedTripIds.add(trip.id);
+        if (shouldDisplayTrip(trip)) tripLayers[trip.id].markers.addTo(map);
+        return;
+    }
+
     const [manifestRes, routeRes] = await Promise.all([
         fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
         fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
     ]);
-    const manifest = await manifestRes.json();
+    let manifest = await manifestRes.json();
     const routeData = await routeRes.json();
+
+    // A filtered manifest omits some photos; unlocked sessions fetch the full one.
+    if (manifest.filtered && checkAllAccess()) {
+        try {
+            const fullRes = await fetch(`${tripPath}/manifest.all.json?t=${Date.now()}`);
+            if (fullRes.ok) manifest = await fullRes.json();
+        } catch (e) { /* keep the filtered manifest */ }
+    }
 
     manifest.tripId = trip.id;
     manifest.tripIndex = colorIndex;
     manifest.tripPath = tripPath;
 
-    const hidden = loadHiddenTripIds();
+    // Collection mode: keep only the photos in the collection's filter set, trim
+    // clusters accordingly, and skip the route (a whole-trip route is noise when
+    // viewing e.g. a single province's photos).
+    const pf = window._collectionPhotoFilter;
+    const inCollectionMode = Boolean(pf && pf.has(trip.id));
+    if (inCollectionMode) {
+        const allow = pf.get(trip.id);
+        manifest.photos = manifest.photos.filter(p => allow.has(p.id));
+        manifest.clusters = (manifest.clusters || [])
+            .map(c => Object.assign({}, c, { photo_ids: (c.photo_ids || []).filter(id => allow.has(id)) }))
+            .filter(c => c.photo_ids.length > 0);
+    }
+
     const hasGpx = Boolean(manifest.source && manifest.source.gpx_path);
     tripLayers[trip.id] = {
-        route: buildRouteLayer(routeData, color, trip.name),
+        route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip.name),
         markers: buildMarkerLayer(manifest, hasGpx),
         color,
         hasGpx,
-        visible: !hidden.has(trip.id),
+        visible: true,
     };
 
     allTrips.push(trip);
@@ -731,10 +927,17 @@ async function unlockAllAccess() {
     if (unloaded.length === 0) return;
 
     for (const trip of unloaded) {
-        await loadSingleTrip(trip, basePath);
+        // Resilient: one trip failing to load must not block the rest.
+        try {
+            await loadSingleTrip(trip, basePath);
+        } catch (e) {
+            console.error(`Failed to load trip ${trip.id}:`, e);
+        }
     }
 
+    initYearFilter();        // 2018 etc. are entirely private — surface them now
     rebuildCountryFilter();
+    syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
@@ -763,7 +966,9 @@ function lockAllAccess() {
     allTrips = allTrips.filter(t => !nonPublicIds.has(t.id));
     allManifests = allManifests.filter(m => !nonPublicIds.has(m.tripId));
 
+    initYearFilter();        // drop years that were only private
     rebuildCountryFilter();
+    syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
     updateTripInfo();
     reinitLightbox();
     fitMapToBounds();
@@ -794,7 +999,10 @@ function updateTripInfo() {
     let titleText = '';
     let subtitleText = '';
 
-    if (visibleTrips.length === 1) {
+    if (viewConfig.mode === 'collection' && viewConfig.filterTitle) {
+        titleText = viewConfig.filterTitle;
+        subtitleText = `${visibleTrips.length} trip${visibleTrips.length === 1 ? '' : 's'}`;
+    } else if (visibleTrips.length === 1) {
         titleText = visibleTrips[0].name;
         subtitleText = `${formatDate(visibleTrips[0].dates.start)} – ${formatDate(visibleTrips[0].dates.end)}`;
     } else if (viewConfig.mode === 'year' && viewConfig.year) {
@@ -811,9 +1019,11 @@ function updateTripInfo() {
     document.getElementById('photo-count').textContent =
         `${totalPhotos.toLocaleString()} photos`;
 
+    // Countries visited but still entirely off the map. Albania, Belgium, Bosnia, Croatia,
+    // Luxembourg, Netherlands and Tunisia now have placeholder pins (config/trips.json
+    // pending trips), so they count as "on map" and have moved out of this list.
     const PENDING_COUNTRIES = [
-        'Albania','Belgium','Bosnia','Croatia',
-        'Ireland','Luxembourg','Montenegro','Netherlands','Slovakia','Tunisia',
+        'Ireland','Montenegro','Slovakia',
     ];
     const TOTAL_COUNTRIES = 55;
 
@@ -896,6 +1106,10 @@ function buildMarkerLayer(manifest, hasGpx) {
     });
     group._allMarkers = allMarkers;
     group._hasGpx = hasGpx;
+    // Round trips (start == end, e.g. an out-and-back from a home base) have no
+    // meaningful first/last stop — suppress START/END badges so they don't land on
+    // the turnaround point.
+    group._roundTrip = Boolean(manifest.round_trip);
     refreshMarkerGroup(group);
     return group;
 }
@@ -913,9 +1127,10 @@ function markerMatchesCountryFilter(marker) {
 
 /**
  * Rebuild a cluster group's membership from its full marker set, keeping only
- * markers that pass the country filter. Endpoint rings (start/end) and the
- * sibling chain used for cross-cluster paging are recomputed over the visible
- * subset so they stay correct after filtering.
+ * markers that pass the country filter. Endpoint rings (start/end) are per-trip
+ * and recomputed here over the visible subset. The cross-cluster paging chain is
+ * GLOBAL (spans all visible trips) and rebuilt separately in
+ * rebuildGlobalSiblingChain after every group has been refreshed.
  */
 function refreshMarkerGroup(group) {
     const all = group._allMarkers || [];
@@ -926,15 +1141,33 @@ function refreshMarkerGroup(group) {
         // Only flag start/end for GPX trips where route order is meaningful,
         // and only when there's more than one stop.
         let endpoint = null;
-        if (group._hasGpx && lastIdx > 0) {
+        if (group._hasGpx && !group._roundTrip && lastIdx > 0) {
             if (i === 0) endpoint = 'start';
             else if (i === lastIdx) endpoint = 'end';
         }
         marker.setIcon(createPhotoIcon(marker._photoCount, marker._thumbnailUrl, endpoint));
-        marker._sibs = visible;
-        marker._sibIdx = i;
     });
     group.addLayers(visible);
+}
+
+/**
+ * Build one ordered sibling chain spanning every currently-displayed cluster
+ * across ALL visible trips — each trip in allTrips order, its markers in route
+ * order (START→END), country-filtered. Cross-cluster paging then flows
+ * continuously from one trip's END into the next trip's START, wrapping at the
+ * global ends so it never dead-ends. (START/END badges stay per-trip.)
+ */
+function rebuildGlobalSiblingChain() {
+    const chain = [];
+    allTrips.forEach(trip => {
+        if (!shouldDisplayTrip(trip)) return;
+        const layer = tripLayers[trip.id];
+        if (!layer) return;
+        (layer.markers._allMarkers || [])
+            .filter(markerMatchesCountryFilter)
+            .forEach(m => chain.push(m));
+    });
+    chain.forEach((m, i) => { m._sibs = chain; m._sibIdx = i; });
 }
 
 /**
@@ -959,8 +1192,12 @@ function buildMarkerPopup(marker) {
  */
 function openSiblingCluster(marker, dir) {
     const sibs = marker._sibs;
-    if (!sibs) return false;
-    const target = sibs[marker._sibIdx + dir];
+    if (!sibs || sibs.length < 2) return false;
+    // The chain spans all visible trips, so next/prev flows from one trip's END
+    // straight into the next trip's START. Wrap around at the global ends (past the
+    // very last cluster → back to the very first), so navigation never dead-ends.
+    const n = sibs.length;
+    const target = sibs[((marker._sibIdx + dir) % n + n) % n];
     if (!target) return false;
     target._pendingPage = dir > 0 ? 0 : 'last';
     map.closePopup();
@@ -972,22 +1209,6 @@ function openSiblingCluster(marker, dir) {
     }
     return true;
 }
-
-/**
- * Show or hide all of a trip's content (route + markers). Called by the sidebar
- * checkbox handler. Persists the hidden set in localStorage.
- */
-function setTripVisibility(tripId, visible) {
-    const entry = tripLayers[tripId];
-    if (!entry || entry.visible === visible) return;
-    entry.visible = visible;
-    const hidden = loadHiddenTripIds();
-    if (visible) hidden.delete(tripId);
-    else hidden.add(tripId);
-    saveHiddenTripIds(hidden);
-    syncVisibleTripLayers();
-}
-window.setTripVisibility = setTripVisibility;
 
 function resolveUrl(tripPath, photoPath) {
     return photoPath.startsWith('http') ? photoPath : `${tripPath}/${photoPath}`;
@@ -1027,6 +1248,20 @@ function createPhotoIcon(count, thumbnailUrl, endpoint) {
 }
 
 /**
+ * Marker for a placeholder ("Photos pending") trip — a muted dashed pill so it reads as
+ * "been here, photos not up yet" rather than a photo cluster.
+ */
+function createPendingIcon() {
+    return L.divIcon({
+        html: `<div class="pending-marker"><span class="pending-marker-glyph">📷</span>Photos pending</div>`,
+        className: 'pending-marker-icon',
+        iconSize: L.point(132, 28),
+        iconAnchor: L.point(66, 14),
+        popupAnchor: L.point(0, -12)
+    });
+}
+
+/**
  * Create popup for single photo
  */
 function createSinglePhotoPopup(marker) {
@@ -1060,9 +1295,10 @@ function createSinglePhotoPopup(marker) {
     container.appendChild(img);
 
     // If this single-photo cluster has neighbours, allow paging onward to them
-    // so cross-cluster navigation stays continuous.
-    const hasPrevCluster = marker._sibs && marker._sibIdx > 0;
-    const hasNextCluster = marker._sibs && marker._sibIdx < marker._sibs.length - 1;
+    // so cross-cluster navigation stays continuous. openSiblingCluster wraps
+    // cyclically, so prev/next always exist once the trip has >1 cluster.
+    const hasPrevCluster = marker._sibs && marker._sibs.length > 1;
+    const hasNextCluster = marker._sibs && marker._sibs.length > 1;
     if (hasPrevCluster || hasNextCluster) {
         const nav = document.createElement('div');
         nav.className = 'cluster-popup-nav';
@@ -1141,8 +1377,11 @@ function createMultiPhotoPopup(marker, startPage) {
     let page = startPage === 'last' ? totalPages - 1 : (startPage || 0);
     if (page < 0 || page >= totalPages) page = 0;
 
-    const hasPrevCluster = marker._sibs && marker._sibIdx > 0;
-    const hasNextCluster = marker._sibs && marker._sibIdx < marker._sibs.length - 1;
+    // Sibling paging wraps cyclically (openSiblingCluster), so an adjacent cluster
+    // always exists once the trip has >1 cluster — the boundary buttons stay live
+    // and stepping past the last cluster cycles back to the first.
+    const hasPrevCluster = marker._sibs && marker._sibs.length > 1;
+    const hasNextCluster = marker._sibs && marker._sibs.length > 1;
 
     const renderPage = () => {
         grid.innerHTML = '';
@@ -1181,7 +1420,8 @@ function createMultiPhotoPopup(marker, startPage) {
             const start = page * CLUSTER_POPUP_PAGE_SIZE;
             const end = Math.min(start + CLUSTER_POPUP_PAGE_SIZE, photos.length);
             counter.textContent = `${start + 1}–${end} of ${photos.length}`;
-            // Enabled at a boundary when an adjacent cluster exists to page into.
+            // At a page boundary, stay enabled if a sibling cluster exists to wrap
+            // into; only truly disabled when this is the trip's sole cluster.
             prevBtn.disabled = page === 0 && !hasPrevCluster;
             nextBtn.disabled = page >= totalPages - 1 && !hasNextCluster;
         };
@@ -1336,7 +1576,7 @@ async function mobileSubmitPassword() {
 
 function repaintFixedControls() {
     const ids = ['sidebar-toggle', 'mobile-see-all-trigger'];
-    const selectors = ['.map-style-control', '.map-top-filters', '.route-filter-wrapper'];
+    const selectors = ['.map-style-control', '.map-top-filters', '.route-filter-wrapper', '.map-settings'];
     const els = [
         ...ids.map(id => document.getElementById(id)),
         ...selectors.map(s => document.querySelector(s)),

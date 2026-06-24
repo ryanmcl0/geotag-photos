@@ -1,0 +1,321 @@
+/* China hub + landing — matches the Adobe Portfolio reference:
+   #111 background, Bebas Kai display + Futura PT body, monochrome.
+   Section pages have NO hero: nav, then a 2-column edge-to-edge image grid
+   (8px gaps, ~72px page margins), titles centered on a dark dim at hover. */
+
+@font-face { font-family: 'Bebas Kai'; src: url('../fonts/BebasKai.ttf') format('truetype'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Futura PT'; src: url('../fonts/FuturaPT-Book.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Futura PT'; src: url('../fonts/FuturaPT-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Futura PT'; src: url('../fonts/FuturaPT-BookOblique.ttf') format('truetype'); font-weight: 400; font-style: italic; font-display: swap; }
+
+:root {
+  --bg: #111111;
+  --panel: #181818;
+  --line: #262626;
+  --text: #ffffff;
+  --muted: #999999;
+  --muted-2: #aeaeae;
+  --head: 'Bebas Kai', 'Oswald', 'Arial Narrow', sans-serif;
+  --body: 'Futura PT', 'Futura', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --margin: 72px;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; background: var(--bg); color: var(--muted-2);
+  font-family: var(--body); -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+img { display: block; }
+::selection { background: #333; color: #fff; }
+
+/* ---------- top nav (ref: links left, name centered) ---------- */
+.topnav {
+  position: sticky; top: 0; z-index: 40; display: flex; align-items: center;
+  padding: 30px var(--margin) 26px; background: rgba(17,17,17,.94); backdrop-filter: blur(8px);
+}
+.nav-links { display: flex; gap: 24px; align-items: center; z-index: 2; }
+.nav-links a, .nav-name { font-family: var(--head); text-transform: uppercase; line-height: 1; }
+.nav-links a { font-size: 15px; letter-spacing: .1em; color: var(--muted); transition: color .2s; }
+.nav-links a:hover, .nav-links a.active { color: var(--text); }
+.nav-name {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  font-size: 24px; letter-spacing: .12em; color: var(--text); white-space: nowrap;
+}
+.nav-spacer { flex: 1; }
+
+/* breadcrumbs (facet pages only; hidden when empty) */
+.crumbs { font-family: var(--head); font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); padding: 26px 0 0; }
+.crumbs:empty { display: none; }
+.crumbs a { color: var(--muted); } .crumbs a:hover { color: var(--text); }
+.crumbs .sep { opacity: .45; margin: 0 8px; }
+
+/* ---------- landing hero (landing page only) ---------- */
+.hero {
+  position: relative; min-height: 34vh; display: flex; align-items: center; justify-content: center;
+  text-align: center; overflow: hidden; padding: 48px 24px;
+}
+.hero::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; background-size: cover; background-position: center;
+  opacity: .35; transform: scale(1.04);
+}
+.hero[data-cover]::before { background-image: var(--hero-img); }
+.hero::after { content: ''; position: absolute; inset: 0; z-index: 1; background: linear-gradient(180deg, rgba(17,17,17,.5), rgba(17,17,17,.92)); }
+.hero-inner { position: relative; z-index: 2; }
+.hero h1 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .04em; color: var(--text); font-size: clamp(40px, 6.5vw, 78px); line-height: .96; }
+.hero p { margin: 12px auto 0; max-width: 560px; color: var(--muted); font-size: 16px; }
+
+/* ---------- layout ---------- */
+.wrap { padding: 0 var(--margin) 90px; }
+
+/* ---------- china masthead (hub title + headline stats) ---------- */
+.china-masthead { margin: 40px 0 6px; }
+.china-masthead h1 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .05em; color: var(--text); font-size: clamp(48px, 7vw, 92px); line-height: .95; }
+.stat-strip { display: flex; gap: clamp(24px, 4vw, 64px); flex-wrap: wrap; margin-top: 22px; }
+.stat-strip--hero { justify-content: center; margin-top: 28px; }
+.stat-num { font-family: var(--head); color: var(--text); font-size: clamp(26px, 2.6vw, 40px); line-height: 1; }
+.stat-num .stat-frac { color: var(--muted); font-size: .62em; }
+.stat-label { font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+/* ---------- tile grid (Work-page style: 2 wide columns, 8px gaps) ---------- */
+.tiles { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); margin-top: 26px; }
+.tiles.tiles--dense { grid-template-columns: repeat(3, 1fr); }
+
+.tile { position: relative; display: block; overflow: hidden; aspect-ratio: 16 / 9; background: #161616; cursor: pointer; }
+.tiles--dense .tile { aspect-ratio: 3 / 2; }
+.tile-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease; }
+.tile:hover .tile-img { transform: scale(1.04); }
+/* road-trip tile that also carries a write-up link: a full-bleed cover link opens
+   the map; the write-up link sits on top, bottom-right */
+.tile-mainlink { position: absolute; inset: 0; display: block; }
+.tile--haslink:hover .tile-img { transform: scale(1.04); }
+.tile-bloglinks {
+  position: absolute; right: 14px; bottom: 14px; z-index: 4;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+}
+.tile-bloglink {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .12em;
+  font-size: 12px; color: #fff; background: rgba(0,0,0,.55);
+  padding: 7px 12px; border: 1px solid rgba(255,255,255,.25);
+  transition: background .2s, border-color .2s;
+}
+.tile-bloglink:hover { background: rgba(0,0,0,.82); border-color: rgba(255,255,255,.65); }
+/* province tiles: Map/Gallery view toggle — a segmented pair sharing the write-up
+   link chrome. The active (default) view is filled so the cover's behaviour reads. */
+.tile-viewtoggle { display: flex; }
+.tile-viewbtn {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .12em;
+  font-size: 12px; color: #fff; background: rgba(0,0,0,.55);
+  padding: 7px 12px; border: 1px solid rgba(255,255,255,.25);
+  transition: background .2s, border-color .2s, color .2s;
+}
+.tile-viewbtn + .tile-viewbtn { border-left: 0; }
+.tile-viewbtn:hover { background: rgba(0,0,0,.82); border-color: rgba(255,255,255,.6); }
+.tile-viewbtn.is-active { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
+.tile-viewbtn.is-active:hover { background: #fff; border-color: #fff; }
+/* labels always visible (bottom gradient); hover just zooms the image */
+.tile-overlay {
+  position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
+  align-items: center; justify-content: flex-end; text-align: center; gap: 7px; padding: 22px;
+  background: linear-gradient(0deg, rgba(0,0,0,.72) 0%, rgba(0,0,0,0) 52%);
+}
+.tile-title { font-family: var(--head); text-transform: uppercase; letter-spacing: .1em; color: var(--text); font-size: clamp(18px, 1.6vw, 26px); line-height: 1.1; }
+.tile-sub { font-family: var(--head); text-transform: uppercase; letter-spacing: .18em; color: #d9d9d9; font-size: 15px; }
+.tile-zh { font-family: var(--body); color: var(--muted-2); font-size: 13px; letter-spacing: .04em; }
+
+/* province list reveal (hub 'By Province' tile) — hover-only extra layer */
+.tile-reveal {
+  position: absolute; inset: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 4px 10px;
+  justify-content: center; align-content: center; padding: 26px;
+  background: rgba(17,17,17,.9); opacity: 0; transition: opacity .3s ease;
+}
+.tile:hover .tile-reveal { opacity: 1; }
+.tile-reveal .chip { font-family: var(--body); font-size: 12px; letter-spacing: .04em; color: var(--muted-2); }
+.tile-reveal .chip--off { color: #555; }
+
+/* pending / not-visited tiles */
+.tile--pending { background: var(--panel); cursor: default; display: flex; align-items: center; justify-content: center; }
+.tile--pending .tile-inner { text-align: center; padding: 20px; }
+.tile--pending .tile-title { color: var(--muted); }
+.tile--pending .pending-tag { font-family: var(--head); letter-spacing: .22em; text-transform: uppercase; font-size: 11px; color: #6a6a6a; margin-top: 10px; }
+
+/* ---------- Galleries call-to-action (home page) ---------- */
+.gallery-cta { display: flex; justify-content: center; margin-top: 30px; }
+.gallery-cta-btn {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .2em;
+  font-size: 16px; color: var(--text); text-decoration: none;
+  padding: 14px 40px; border: 1px solid var(--line);
+  transition: background .2s, color .2s, border-color .2s;
+}
+.gallery-cta-btn:hover { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
+
+/* Galleries index: each year heading sticks below the topnav while scrolling
+   through that year's tiles, then the next year's heading takes over (each year
+   is its own sticky-containing wrapper). */
+#galleries-app .gallery-year .section-head {
+  position: sticky; top: var(--topnav-h, 72px); z-index: 30;
+  margin: 0; padding: 22px 0 14px; background: var(--bg);
+}
+
+/* ---------- section head + year bar ---------- */
+.section-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin: 26px 0 0; }
+.section-head h2 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .06em; color: var(--text); font-size: clamp(28px, 3.2vw, 42px); line-height: 1; }
+.section-head .count { font-family: var(--head); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-size: 14px; }
+.yearbar { display: flex; gap: 22px; margin: 18px 0 0; flex-wrap: wrap; }
+.yearbar button { background: none; border: 0; padding: 4px 0; cursor: pointer; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 14px; color: var(--muted); border-bottom: 1px solid transparent; transition: color .2s, border-color .2s; }
+.yearbar button:hover { color: var(--text); }
+.yearbar button.active { color: var(--text); border-bottom-color: var(--text); }
+
+/* multi-select year dropdown (rooftopping tiers) */
+.year-menu-wrapper { position: relative; display: inline-block; margin: 18px 0 0; }
+.year-menu-btn {
+  display: inline-flex; align-items: center; gap: 10px; background: var(--panel);
+  border: 1px solid var(--line); padding: 9px 14px; cursor: pointer;
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .14em;
+  font-size: 14px; color: var(--text); transition: border-color .2s;
+}
+.year-menu-btn:hover { border-color: #3a3a3a; }
+.year-menu-btn svg { color: var(--muted); }
+.year-menu {
+  display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+  min-width: 190px; background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 14px 34px rgba(0,0,0,.5); padding: 6px 0;
+}
+.year-menu.open { display: block; }
+.year-menu-actions { display: flex; gap: 4px; padding: 4px 8px 8px; border-bottom: 1px solid var(--line); }
+.year-menu-actions button {
+  flex: 1; background: none; border: 1px solid var(--line); padding: 5px 0; cursor: pointer;
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .1em; font-size: 11px;
+  color: var(--muted); transition: color .2s, border-color .2s;
+}
+.year-menu-actions button:hover { color: var(--text); border-color: #3a3a3a; }
+.year-menu-option {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer;
+  font-family: var(--head); letter-spacing: .12em; font-size: 14px; color: var(--muted);
+}
+.year-menu-option:hover { color: var(--text); background: #1f1f1f; }
+.year-menu-option .tick { width: 14px; color: var(--text); visibility: hidden; }
+.year-menu-option.on { color: var(--text); }
+.year-menu-option.on .tick { visibility: visible; }
+.year-menu-count { margin-left: auto; font-size: 12px; color: #6a6a6a; }
+
+/* ---------- photo grid: JS-computed justified rows (exact sizes set inline) ---------- */
+.photo-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 26px; }
+.photo-row { display: flex; gap: 8px; }
+.photo-cell { padding: 0; border: 0; background: #161616; cursor: pointer; overflow: hidden; flex: 0 0 auto; }
+.photo-cell img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .3s; }
+.photo-cell:hover img { opacity: .82; }
+.gallery-empty { color: var(--muted); padding: 26px 0; font-style: italic; }
+.gallery-loading { color: var(--muted); padding: 26px 0; font-family: var(--head); letter-spacing: .14em; text-transform: uppercase; font-size: 14px; }
+
+/* lightbox caption: centered under the photo */
+.pswp__caption__center { text-align: center; max-width: 720px; font-family: var(--body); font-size: 14px; color: #ccc; letter-spacing: .02em; }
+
+/* mosaic tiles (provinces): the biggest collections get 2x2 tiles */
+.tiles--mosaic { grid-auto-flow: dense; }
+.tile--big { grid-column: span 2; grid-row: span 2; }
+
+/* scroll-stagger reveal (tiles + bridge rows share it) */
+.rv { opacity: 0; transform: translateY(26px); transition: opacity .6s ease, transform .6s ease; }
+.rv.in { opacity: 1; transform: none; }
+
+/* roofs height-tier sections */
+.tier-head { margin: 56px 0 0; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.tier-head h3 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--text); font-size: clamp(22px, 2.4vw, 32px); line-height: 1; }
+.tier-head .count { font-family: var(--head); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-size: 13px; }
+.tier-buildings { margin: 8px 0 0; font-family: var(--body); color: var(--muted); font-size: 13px; letter-spacing: .03em; }
+
+/* ---------- bridges: ranked editorial scroll ---------- */
+.bridge-list { margin-top: 30px; display: flex; flex-direction: column; }
+.bridge-row {
+  position: relative; display: grid; grid-template-columns: 110px 1fr 1.35fr;
+  gap: 44px; align-items: center; padding: 44px 0;
+  opacity: 0; transform: translateY(42px);
+  transition: opacity .7s ease, transform .7s ease;
+}
+.bridge-row.in { opacity: 1; transform: none; }
+.bridge-rank { order: -2; font-family: var(--head); font-size: clamp(54px, 6vw, 96px); line-height: 1; color: #2c2c2c; text-align: right; }
+.bridge-row--flip .bridge-media { order: -1; }
+/* photos at their natural aspect — no crop, no panel box */
+.bridge-media { display: flex; justify-content: center; align-items: center; overflow: hidden; }
+.bridge-media img { width: auto; max-width: 100%; max-height: 62vh; display: block; transition: transform .6s ease; }
+a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
+.bridge-text { min-width: 0; }
+.bridge-name { font-family: var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--text); font-size: clamp(24px, 2.4vw, 38px); line-height: 1.05; }
+.bridge-zh { font-family: var(--body); color: var(--muted-2); font-size: 15px; margin-top: 8px; letter-spacing: .04em; }
+.bridge-meta { font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 13px; margin-top: 14px; }
+.bridge-count { font-family: var(--body); color: var(--muted); font-size: 13px; margin-top: 10px; }
+/* pending rows stay in rank order, but compact + dimmed */
+.bridge-row--pending { grid-template-columns: 110px 1fr; padding: 20px 0; border-top: 1px solid #1d1d1d; border-bottom: 1px solid #1d1d1d; margin: 2px 0; }
+.bridge-row--pending + .bridge-row--pending { border-top: 0; margin-top: -2px; }
+.bridge-row--pending .bridge-rank { font-size: 30px; color: #242424; }
+.bridge-row--pending .bridge-name { font-size: 19px; color: #6e6e6e; display: inline; }
+.bridge-row--pending .bridge-zh { display: inline; margin: 0 0 0 12px; font-size: 13px; color: #555; }
+.bridge-row--pending .bridge-meta { margin-top: 5px; font-size: 11px; color: #5a5a5a; }
+.bridge-extras-head { margin: 60px 0 6px; font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 15px; }
+
+/* ---------- landing footer ---------- */
+.landing-footer { margin-top: 50px; padding: 36px 20px 44px; display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; align-items: center; }
+.landing-footer a { color: var(--muted); transition: color .2s; display: block; }
+.landing-footer a:hover { color: var(--text); }
+.landing-footer svg { width: 22px; height: 22px; display: block; }
+
+/* lock badge */
+.lock-badge { position: absolute; top: 14px; right: 14px; z-index: 3; font-family: var(--head); letter-spacing: .14em; text-transform: uppercase; font-size: 11px; color: #ddd; background: rgba(0,0,0,.55); padding: 6px 10px; }
+
+/* ---------- unlock modal ---------- */
+.pw-overlay { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.84); padding: 20px; }
+.pw-overlay.visible { display: flex; }
+.pw-modal { background: var(--panel); border: 1px solid var(--line); padding: 30px; width: 360px; max-width: 100%; }
+.pw-modal h3 { margin: 0 0 18px; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 22px; color: var(--text); }
+.pw-modal input { width: 100%; padding: 12px 13px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-family: var(--body); font-size: 15px; }
+.pw-modal .pw-actions { display: flex; gap: 10px; margin-top: 16px; }
+.pw-modal button { flex: 1; padding: 12px; border: 1px solid var(--line); cursor: pointer; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 13px; }
+.pw-modal .pw-cancel { background: var(--bg); color: var(--muted); }
+.pw-modal .pw-submit { background: var(--text); color: var(--bg); border-color: var(--text); }
+.pw-modal .pw-error { color: #d66; font-size: 13px; min-height: 18px; margin: 10px 0 0; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1200px) {
+  :root { --margin: 36px; }
+  .tiles.tiles--dense { grid-template-columns: repeat(2, 1fr); }
+}
+@media (hover: none) {
+  .tile-reveal { display: none; }
+}
+@media (max-width: 860px) {
+  :root { --margin: 12px; }
+  .topnav { padding: 18px var(--margin); }
+  .nav-name { font-size: 19px; letter-spacing: .1em; }
+  .nav-links { gap: 14px; } .nav-links a { font-size: 13px; }
+  .tiles, .tiles.tiles--dense { grid-template-columns: 1fr; }
+  .photo-grid { gap: 6px; } .photo-row { gap: 6px; }
+  /* 1-col tile grid can't host 2x2 spans */
+  .tile--big { grid-column: auto; grid-row: auto; }
+  /* bridges: stack — rank + text above photo */
+  .bridge-row { grid-template-columns: 1fr; gap: 16px; padding: 30px 0; }
+  .bridge-rank { order: -2; text-align: left; font-size: 44px; }
+  .bridge-row--flip .bridge-media { order: 0; }
+  .bridge-row--pending { grid-template-columns: 56px 1fr; gap: 12px; align-items: baseline; }
+  /* full-width tiles: the write-up link(s) sit at bottom-right by default, which
+     collides with the now-full-width bottom-centered title block — move them to the
+     top-right (clear of the bottom-aligned text) so they never overlap on mobile */
+  .tile-bloglinks { top: 12px; bottom: auto; right: 12px; align-items: flex-end; }
+}
+@media (max-width: 460px) {
+  .nav-name { display: none; }
+}
+
+/* fallback when a tile cover can't be loaded (gated photo) */
+.tile-cover-locked { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #161616; color: #6e6e6e; font-family: var(--head); letter-spacing: .2em; text-transform: uppercase; font-size: 12px; }
+.tile-cover-locked .pad { font-size: 34px; }
+
+/* gated tile (locked blog / all-private province): the cover photo may still show,
+   dimmed, with a padlock over it so the locked state stays obvious. With no cover,
+   the dark tile + padlock reads the same. */
+.tile--locked { background: #161616; }
+.tile--locked .tile-img { filter: brightness(.42); }
+.tile--locked:hover .tile-img { filter: brightness(.52); transform: scale(1.04); }
+/* padlock centred in the UPPER area (bottom inset clears the bottom-anchored title
+   block) so it never lands on the title/meta — esp. on full-width mobile tiles */
+.tile--locked::before { content: '🔒'; position: absolute; left: 0; right: 0; top: 0; bottom: 42%; z-index: 1; display: flex; align-items: center; justify-content: center; font-size: 40px; opacity: .9; pointer-events: none; }

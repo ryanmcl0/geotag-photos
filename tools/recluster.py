@@ -15,6 +15,7 @@ from typing import Optional
 
 import click
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root (script lives in tools/)
 from process_trip import DEFAULT_CLUSTER_RADIUS, DEFAULT_TRIPS_DIR, cluster_photos
 
 

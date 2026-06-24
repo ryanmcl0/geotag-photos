@@ -4,7 +4,7 @@ Show the EXIF date range for all JPGs in an edits folder.
 Useful to anchor GPX reconstruction to the correct calendar dates.
 
 Usage:
-    python reconstruction/exif_dates.py "/path/to/edits"
+    python tools/reconstruction/exif_dates.py "/path/to/edits"
 """
 import subprocess, sys, re
 from pathlib import Path

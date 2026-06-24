@@ -1071,9 +1071,14 @@ def cluster_photos(photos: list[dict], radius: float,
         anchor_lat, anchor_lon = cluster_anchor_point(cluster_photos)
 
         # Name the cluster after the most common building among its photos, if any.
+        # Photos explicitly PLACED at their building (gps_source='building') vote
+        # first: they are location evidence, while snapped/fallback photos only
+        # inherit a broad label (e.g. the trip root) and shouldn't out-vote them.
         # Left as None here when no building is known — filled with a city name
         # (or a generic label) by name_unlabeled_clusters() below.
-        building_names = [p['building'] for p in cluster_photos if p.get('building')]
+        building_names = [p['building'] for p in cluster_photos
+                          if p.get('building') and p.get('gps_source') == 'building'] \
+                         or [p['building'] for p in cluster_photos if p.get('building')]
         location = max(set(building_names), key=building_names.count) if building_names else None
 
         clusters.append({
@@ -1227,6 +1232,29 @@ def find_dji_raw(photo_path: Path, raws_dir: Path) -> Optional[Path]:
         return matches[0]
 
     return None
+
+
+def robust_date_range(timestamps, trip_name=None):
+    """(start, end) as YYYY-MM-DD from ISO timestamps, ignoring outliers left by a
+    camera with a wrong/reset clock (the classic 2015-01-01 default, or a second body
+    on the wrong year — these skewed e.g. '2018 Hong Kong' to a 2015 start). When the
+    trip name begins with a year, that year is authoritative: keep only timestamps
+    within ±1 year of it. Otherwise drop year-bands holding <5% of photos that sit
+    >1 year from the median. Returns (None, None) for no timestamps."""
+    ts = sorted(t for t in timestamps if t)
+    if not ts:
+        return None, None
+    m = re.match(r'^(\d{4})', trip_name or '')
+    if m:
+        y = int(m.group(1))
+        kept = [t for t in ts if abs(int(t[:4]) - y) <= 1] or ts
+    else:
+        from collections import Counter
+        years = Counter(int(t[:4]) for t in ts)
+        median = sorted(int(t[:4]) for t in ts)[len(ts) // 2]
+        bad = {yr for yr, c in years.items() if c / len(ts) < 0.05 and abs(yr - median) > 1}
+        kept = [t for t in ts if int(t[:4]) not in bad] or ts
+    return kept[0][:10], kept[-1][:10]
 
 
 def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_count: int, countries: list = None):
@@ -1501,8 +1529,8 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
     clusters = cluster_photos(off_photos, cluster_radius,
                               burst_time_window * 60, burst_max_spread)
     countries = get_countries_from_photos(off_photos)
-    ts = sorted(p['timestamp'] for p in off_photos)
-    dates = {'start': ts[0][:10], 'end': ts[-1][:10]}
+    ds, de = robust_date_range((p['timestamp'] for p in off_photos), private_name)
+    dates = {'start': ds, 'end': de}
     manifest = {
         'trip_name': private_name,
         'dates': dates,
@@ -1579,10 +1607,21 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--exclude-edits-under', 'exclude_edits_under', default=None, metavar='NAME,NAME,...',
               help='Comma-separated edit-folder names; drop any edit whose path contains one as a '
                    'component. Carves region subfolders out of a multi-region edits bundle.')
+@click.option('--exclude-photos', 'exclude_photos', default=None, metavar='ID;ID;...',
+              help='Semicolon-separated photo ids/stems (e.g. "RM108669-Enhanced-NR") to drop '
+                   'entirely — never placed, never included, no derivatives generated. Unlike the '
+                   'public/private split this removes the photo from the dataset altogether. Matches '
+                   'the full edit stem or its base stem.')
 @click.option('--only-edits-dirs', 'only_edits_dirs', is_flag=True,
               help='Keep only photos that live under a folder literally named "Edits". Used for the '
                    'pre-2019 in-tree backfill, where the edits sit in <year>/<Building>/Edits/ '
                    'alongside raws/camera-card dumps that must NOT be picked up.')
+@click.option('--exclude-raw-subdirs', 'exclude_raw_subdirs', default=None, metavar='NAME;NAME;...',
+              help='Semicolon-separated raw-folder component names to skip when indexing raws for '
+                   'building-name lookup (e.g. "Backup;ME;Phone;Tourism"). Raws under these folders '
+                   'are ignored, so an edit resolves its building to the real per-building folder '
+                   'instead of a duplicate SD-card/backup copy. Photos with no remaining raw match '
+                   'fall back to --fallback-location.')
 @click.option('--split-offroute-private', is_flag=True,
               help='Split a GPX trip in two: photos placed by the GPX track (on-route) stay in this '
                    'trip (public); all other photos (off-route building/drone/fallback shots) are '
@@ -1657,6 +1696,9 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Write/refresh <output>/source_state.json from the current sources WITHOUT '
                    'reprocessing (adopt-baseline only; encodes only missing images). Use to stamp a '
                    'baseline on already-processed trips so a later --update detects real deltas.')
+@click.option('--round-trip', is_flag=True,
+              help='Mark this trip as an out-and-back/loop (start == end). Suppresses the '
+                   'START/END map badges, which are meaningless for a round trip.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
 @click.option('--dry-run', is_flag=True, help='Preview without writing files')
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
@@ -1668,7 +1710,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  filter_by_raws_in: Optional[Path], exclude_raws_in: Optional[Path],
                  raws_root: Optional[Path], locations_file: Optional[Path], dump_buildings: bool,
                  exclude_buildings: Optional[str], exclude_edits_under: Optional[str],
-                 only_edits_dirs: bool,
+                 exclude_photos: Optional[str],
+                 only_edits_dirs: bool, exclude_raw_subdirs: Optional[str],
                  split_offroute_private: bool, private_cluster_radius: float,
                  gpx_route_subdir: Optional[str], route_snap_public_hours: float,
                  private_locations: Optional[str],
@@ -1682,6 +1725,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  fake_route_locations: Optional[str], no_fake_route: bool,
                  strict_building_distance: bool, kmz_path_str: Optional[str],
                  skip_existing_images: bool, update: bool, reindex: bool,
+                 round_trip: bool,
                  test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
@@ -1811,11 +1855,23 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         def add(idx: dict, key: str, p: Path):
             idx.setdefault(key, []).append(p)
 
+        # Folder components to skip when indexing raws — keeps duplicate SD-card/backup
+        # copies out of the building-name lookup so edits resolve to the real
+        # per-building folder (e.g. Dubai's "Backup;ME;Phone;Tourism").
+        excl_subdirs = {e.strip().lower() for e in (exclude_raw_subdirs or '').split(';') if e.strip()}
+        skipped_raw = 0
+
         for ext in SUPPORTED_EXTENSIONS | {'.arw', '.dng', '.cr2', '.nef', '.raf'}:
             for pat in (f'*{ext}', f'*{ext.upper()}'):
                 for p in Path(raw_scan_root).rglob(pat):
+                    if excl_subdirs and any(part.lower() in excl_subdirs
+                                            for part in p.relative_to(root_p).parts):
+                        skipped_raw += 1
+                        continue
                     add(raw_index, p.stem, p)
                     add(raw_base_index, base_stem(p.stem), p)
+        if excl_subdirs:
+            click.echo(f"  Skipped {skipped_raw} raws under excluded subdirs {sorted(excl_subdirs)}")
     else:
         root_p = None
         def rank(p: Path) -> tuple:
@@ -1889,6 +1945,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         photo_files = [p for p in photo_files
                        if not any(part.lower() in excl for part in p.parts)]
         click.echo(f"  Excluded edits under {excl}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
+
+    # Drop specific photos by id/stem — a hard exclusion, separate from the public/private
+    # split: these never enter the manifest or get derivatives. Matches the full edit stem
+    # or its base stem (so "RM108669" or "RM108669-Enhanced-NR" both hit).
+    if exclude_photos:
+        excl_ids = {e.strip() for e in re.split(r'[;,]', exclude_photos) if e.strip()}
+        before = len(photo_files)
+        photo_files = [p for p in photo_files
+                       if p.stem not in excl_ids and base_stem(p.stem) not in excl_ids]
+        click.echo(f"  Excluded photos {sorted(excl_ids)}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
 
     # Drop edits whose stem appears under an excluded raws folder — carves a region
     # out of a bundled Edits folder by raw membership (inverse of --filter-by-raws-in).
@@ -2664,11 +2730,12 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         from collections import Counter as _Counter
         gps_source_counts = dict(_Counter(p['gps_source'] for p in processed_photos))
 
-    # Derive date range from EXIF when no GPX
+    # Derive date range from EXIF when no GPX (robust against wrong-clock outliers)
     if trip_start is None:
-        timestamps = sorted(p['timestamp'] for p in processed_photos)
-        trip_start = timestamps[0][:10] if timestamps else datetime.now().date().isoformat()
-        trip_end = timestamps[-1][:10] if timestamps else trip_start
+        trip_start, trip_end = robust_date_range(
+            (p['timestamp'] for p in processed_photos), name)
+        if trip_start is None:
+            trip_start = trip_end = datetime.now().date().isoformat()
 
     # Report results
     click.echo(f"\nProcessed: {len(processed_photos)} photos")
@@ -2724,6 +2791,8 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         'clusters': clusters,
         'skipped': skipped_records,
     }
+    if round_trip:
+        manifest['round_trip'] = True
 
     if not dry_run:
         # Save manifest

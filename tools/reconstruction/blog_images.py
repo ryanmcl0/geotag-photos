@@ -4,8 +4,8 @@ List all image filenames referenced in a saved blog HTML file.
 PNG files and *_rw_1920* / *_rwc_* files are likely Google Maps Timeline screenshots.
 
 Usage:
-    python reconstruction/blog_images.py "/path/to/blog.html"
-    python reconstruction/blog_images.py "/path/to/blog.html" --maps-only
+    python tools/reconstruction/blog_images.py "/path/to/blog.html"
+    python tools/reconstruction/blog_images.py "/path/to/blog.html" --maps-only
 """
 import sys, re, argparse
 from html.parser import HTMLParser

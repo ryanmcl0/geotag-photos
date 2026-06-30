@@ -111,3 +111,31 @@
   .blog-tiles .tile-sub { font-size: 12px; letter-spacing: .08em; white-space: normal; }
   .blog-meta { font-size: 14px; letter-spacing: .12em; }
 }
+
+/* ---- Trip overview map (top of each post) ---- */
+.blog-trip-map-wrap {
+    margin: 0 auto 2.5rem;
+    max-width: 900px;
+    width: 100%;
+}
+.blog-trip-map {
+    width: 100%;
+    height: 380px;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 2px 18px rgba(0, 0, 0, 0.18);
+    background: #e8e8e8;
+}
+.blog-trip-map:focus { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; }
+.blog-trip-map-cap {
+    margin-top: 0.5rem;
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--muted, #888);
+    letter-spacing: 0.02em;
+}
+.blog-trip-map .leaflet-container { font: inherit; }
+@media (max-width: 640px) {
+    .blog-trip-map { height: 260px; border-radius: 10px; }
+    .blog-trip-map-wrap { margin-bottom: 1.75rem; }
+}

@@ -401,6 +401,7 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
         'year': blog['year'],
         'public': bool(blog.get('public')),
         'ui': blog.get('ui') or 'v2',   # v2 = day rail + progress bar (set "ui":"v1" to opt out)
+        'trips': blog.get('trips') or [],  # trip slug(s) → mini overview map at top of post
         'sections': sections,
         'stats': {'words': words, 'photos': n_photos,
                   'read': humanize_minutes(read_minutes),
@@ -485,6 +486,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <title>{title} · Ryan's Travels</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
 </head>
@@ -499,6 +501,10 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     </header>
 
     <main class="blog-wrap">
+        <figure class="blog-trip-map-wrap" id="blog-trip-map-wrap">
+            <div class="blog-trip-map" id="blog-trip-map"></div>
+            <figcaption class="blog-trip-map-cap">Trip overview — scroll to zoom, drag to pan</figcaption>
+        </figure>
         <article id="blog"></article>
     </main>
 
@@ -508,9 +514,11 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <script>document.body.classList.add('blog-' + (window.BLOG.ui || 'v1'));</script>
     <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/js/unlock.js"></script>
     <script src="/js/gallery.js"></script>
     <script src="/js/blog.js"></script>
+    <script src="/js/blog-map.js"></script>
     <script>
     (function () {{
         const el = document.querySelector('.blog-hero[data-cover-src]');
@@ -586,7 +594,8 @@ def render_post(data):
         photos=data['stats']['photos'],
         read=data['stats']['read'],
         pswp=PSWP,
-        data=json.dumps({'sections': data['sections'], 'ui': data.get('ui', 'v1')},
+        data=json.dumps({'sections': data['sections'], 'ui': data.get('ui', 'v1'),
+                         'trips': data.get('trips', [])},
                         separators=(',', ':')),
     )
 

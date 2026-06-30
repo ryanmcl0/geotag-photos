@@ -500,14 +500,19 @@ def get_countries_from_photos(photos: list[dict]) -> list[str]:
         import reverse_geocoder as rg
     except ImportError:
         return []
+    # Country-accurate placements: real GPS plus pinned overrides/building coords (all
+    # resolve to the correct country). geotag_override/building were previously excluded,
+    # so a pinned-only location (e.g. a cathedral) dropped its country from a mixed trip.
     pts = [(p['lat'], p['lon']) for p in photos
-           if p.get('gps_source') in ('exif', 'dng')]
-    if not pts:  # no real GPS — use whatever placement we have
+           if p.get('gps_source') in ('exif', 'dng', 'geotag_override', 'building')]
+    if not pts:  # no reliable placement — use whatever we have
         pts = [(p['lat'], p['lon']) for p in photos]
     if not pts:
         return []
-    step = max(1, len(pts) // 20)
-    results = rg.search(pts[::step][:20], verbose=False)
+    # Dedupe to ~1km cells so every distinct location is covered (no 20-sample cap that
+    # could miss a small cluster) while staying bounded for huge trips.
+    uniq = sorted({(round(la, 2), round(lo, 2)) for la, lo in pts})
+    results = rg.search(uniq, verbose=False)
     return sorted(set(r['cc'] for r in results if r.get('cc')))
 
 

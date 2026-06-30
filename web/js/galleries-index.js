@@ -121,6 +121,7 @@
             <div class="tile-overlay">
                 <div class="tile-title">${formatTripName(trip.name)}</div>
                 <div class="tile-sub">${count}</div>
+                ${trip.wip ? '<div class="tile-wip">More photos coming…</div>' : ''}
             </div>
         `;
         return card;

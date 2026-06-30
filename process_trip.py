@@ -28,9 +28,19 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 from tqdm import tqdm
 
+# Pillow can't decode HEIC/HEIF (Apple's format) without libheif. Register the
+# pillow-heif opener when available so iPhone HEIC edits process like any JPG;
+# degrade gracefully (HEIC simply unsupported) if the optional dep is missing.
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIC_EXTS = {'.heic', '.heif'}
+except ImportError:
+    _HEIC_EXTS = set()
+
 
 # Configuration
-SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'}
+SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'} | _HEIC_EXTS
 DEFAULT_CLUSTER_RADIUS = 1000  # meters — merges shots from the same village/viewpoint into one marker
 
 # Compression defaults — both dimensions cap the LONGER side, so portrait
@@ -110,9 +120,13 @@ def _simplify_coords(coords: list, tolerance: float) -> list:
 
 def parse_kmz_route(kmz_path: Path) -> list[dict]:
     """
-    Extract ordered waypoints from a KMZ file as {lat, lon} dicts.
-    Skips 'Directions from...' routing artefacts and deduplicates adjacent
-    identical coordinates.
+    Extract an ordered route from a KMZ/KML as [{lat, lon}, ...].
+
+    Google MyMaps exports a "Directions from..." layer as a single dense LineString
+    that follows actual roads (often thousands of points) plus separate single-point
+    Placemark pins for each stop. We PREFER the LineString — it's the road-accurate
+    route — and only fall back to the pin waypoints when no usable line exists (e.g. a
+    hand-dropped set of points). Adjacent identical coordinates are deduplicated.
     """
     import zipfile
     from xml.etree import ElementTree as ET
@@ -127,25 +141,36 @@ def parse_kmz_route(kmz_path: Path) -> list[dict]:
     content = re.sub(r' xmlns[^=]*="[^"]*"', '', content)
     root = ET.fromstring(content)
 
-    points = []
-    for pm in root.iter('Placemark'):
-        name = (pm.findtext('name') or '').strip()
-        if name.lower().startswith('directions from'):
-            continue
-        coord_text = pm.findtext('.//coordinates') or ''
-        tokens = coord_text.strip().split()
-        for token in tokens:
+    def _coords_to_points(coord_text: str) -> list[dict]:
+        pts = []
+        for token in coord_text.strip().split():
             parts = token.split(',')
             if len(parts) >= 2:
                 try:
                     lon, lat = float(parts[0]), float(parts[1])
-                    # Skip if identical to previous point
-                    if not points or (abs(lat - points[-1]['lat']) > 1e-6 or
-                                      abs(lon - points[-1]['lon']) > 1e-6):
-                        points.append({'lat': lat, 'lon': lon})
                 except ValueError:
-                    pass
+                    continue
+                if not pts or (abs(lat - pts[-1]['lat']) > 1e-6 or
+                               abs(lon - pts[-1]['lon']) > 1e-6):
+                    pts.append({'lat': lat, 'lon': lon})
+        return pts
 
+    # 1) Prefer the longest LineString — that's the road-accurate driving route.
+    best_line: list[dict] = []
+    for ls in root.iter('LineString'):
+        pts = _coords_to_points(ls.findtext('coordinates') or '')
+        if len(pts) > len(best_line):
+            best_line = pts
+    if len(best_line) >= 2:
+        return best_line
+
+    # 2) Fallback: ordered Placemark Point pins (skip routing label artefacts).
+    points: list[dict] = []
+    for pm in root.iter('Placemark'):
+        name = (pm.findtext('name') or '').strip()
+        if name.lower().startswith('directions from'):
+            continue
+        points.extend(_coords_to_points(pm.findtext('.//coordinates') or ''))
     return points
 
 
@@ -2063,7 +2088,18 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         try:
             from correlate_phone_gps import build_phone_track, nearest_factory
             phone_track = build_phone_track(str(raws), phone_gps_dir)
-            phone_nearest = nearest_factory(phone_track) if phone_track else None
+            # Build the last-resort snap index on a TRUE-UTC axis (same conversion as the
+            # merged trackpoints below): phone EXIF epochs are the phone's local wall clock
+            # round-tripped through fromtimestamp(), so subtract phone_gps_offset_hours to
+            # reach UTC. This makes phone_nearest queryable with a plain photo-UTC epoch and
+            # is independent of the machine timezone — the old form added the offset to a
+            # UTC epoch while indexing local epochs, which mis-snapped on non-UTC machines.
+            phone_track_utc = sorted(
+                ((datetime.fromtimestamp(e) - timedelta(hours=phone_gps_offset_hours))
+                 .replace(tzinfo=timezone.utc).timestamp(), la, lo)
+                for e, la, lo in phone_track
+            ) if phone_track else []
+            phone_nearest = nearest_factory(phone_track_utc) if phone_track_utc else None
             click.echo(f"Phone-GPS fallback: {len(phone_track or [])} GPS points "
                        f"(±{phone_gps_threshold_min:.0f}min, offset {phone_gps_offset_hours:+.0f}h)")
         except Exception as e:
@@ -2464,7 +2500,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # to the nearest phone fix if it's within threshold.
         if not gps and phone_nearest is not None:
             _pt = photo_time if photo_time.tzinfo else photo_time.replace(tzinfo=timezone.utc)
-            nb = phone_nearest(_pt.timestamp() + phone_gps_offset_hours * 3600)
+            nb = phone_nearest(_pt.timestamp())  # phone_nearest is on a true-UTC axis
             if nb and nb[0] <= phone_gps_threshold_min * 60:
                 gps = {'lat': nb[1], 'lon': nb[2]}
                 gps_source = 'phone'
@@ -2706,13 +2742,15 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     # to the track within --route-snap-public-hours. Everything else is off-route.
     off_route_photos = []
     private_locs = {s.strip() for s in (private_locations or '').split(';') if s.strip()}
-    if (split_offroute_private or private_locs) and not no_gpx_mode:
+    # Explicit private_locations split purely by building name and work with or without a
+    # GPX route; off-route splitting needs a route, so it stays gated on having GPX.
+    if private_locs or (split_offroute_private and not no_gpx_mode):
         def _is_public(p):
             # explicit private locations override everything
             if private_locs and p.get('building') in private_locs:
                 return False
-            # without route-based splitting, everything else is public
-            if not split_offroute_private:
+            # no route-based splitting (or no GPX to route against) → everything else public
+            if not split_offroute_private or no_gpx_mode:
                 return True
             if p.get('on_route'):
                 return True
@@ -2831,6 +2869,27 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
             geojson_data = gpx_to_geojson(gpx_path, split_gap_km=gpx_split_gap_km)
         else:
             geojson_data = fake_route_geojson
+        # Surface the planned KMZ route as a DISPLAY-ONLY guide feature alongside the GPX.
+        # It is never used for photo placement in GPX mode (placement is GPX/phone/EXIF);
+        # in no-GPX mode the KMZ line already *is* the route, so we skip to avoid a dup.
+        if kmz_path_str and not no_gpx_mode and isinstance(geojson_data, dict):
+            try:
+                _kmz_pts = parse_kmz_route(Path(kmz_path_str))
+                # MyMaps driving routes can be ~15k points; downsample to keep route.geojson
+                # lean while staying smooth (cap ~2000, always keep first & last).
+                if len(_kmz_pts) > 2000:
+                    step = (len(_kmz_pts) + 1999) // 2000
+                    _kmz_pts = _kmz_pts[::step] + [_kmz_pts[-1]]
+                if len(_kmz_pts) >= 2:
+                    geojson_data.setdefault('features', []).append({
+                        'type': 'Feature',
+                        'properties': {'name': 'Planned route', 'planned': True},
+                        'geometry': {'type': 'LineString',
+                                     'coordinates': [[p['lon'], p['lat']] for p in _kmz_pts]},
+                    })
+                    click.echo(f"  Added planned KMZ route as guide ({len(_kmz_pts)} pts)")
+            except Exception as e:
+                click.echo(f"Warning: could not add planned KMZ route: {e}", err=True)
         geojson_path = output_path / 'route.geojson'
         with open(geojson_path, 'w') as f:
             json.dump(geojson_data, f, indent=2)

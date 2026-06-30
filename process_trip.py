@@ -1319,9 +1319,13 @@ def update_trips_index(output_path: Path, trip_name: str, dates: dict, photo_cou
     }
     if countries:
         entry['countries'] = countries
-    # Carry over any extra fields from the previous entry (public flag, etc.)
+    # Carry over any extra fields from the previous entry (public flag, etc.) — but NOT
+    # the placeholder-only fields: processing a trip for real promotes it out of "pending",
+    # so drop the leftover pending flag + placeholder location (else the tile stays a
+    # greyed "Photos pending" card despite having real photos).
+    PLACEHOLDER_ONLY = {'pending', 'location'}
     for k, v in existing.get(trip_id, {}).items():
-        if k not in entry:
+        if k not in entry and k not in PLACEHOLDER_ONLY:
             entry[k] = v
     index['trips'].append(entry)
 

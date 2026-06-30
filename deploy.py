@@ -88,6 +88,12 @@ def sync_public_flags(dry_run: bool = False):
     # Placeholder ("pending") trips have no edits path — skip them here.
     public_edits_paths = set(t['edits'] for t in trips_config.get('public', []) if t.get('edits'))
 
+    # "wip" = editing in progress → tile shows a "More photos coming…" note. Config flag
+    # on the trip ("wip": true), stamped onto the index by slug like the public flag.
+    wip_slugs = {_slugify(t['name'])
+                 for t in (trips_config.get('public', []) + trips_config.get('private', []))
+                 if t.get('wip')}
+
     # Explicit private slugs — trips in the private block, keyed by slug.
     # These always win over path matching (handles shared edits paths like
     # "2024 China (March)" sharing /Edits/2024 China with the public Xinjiang trip).
@@ -142,6 +148,13 @@ def sync_public_flags(dry_run: bool = False):
             is_public = source_path in public_edits_paths
         if trip.get('public') != is_public:
             trip['public'] = is_public
+            changed += 1
+        want_wip = trip['id'] in wip_slugs
+        if bool(trip.get('wip')) != want_wip:
+            if want_wip:
+                trip['wip'] = True
+            else:
+                trip.pop('wip', None)
             changed += 1
 
     if dry_run:

@@ -14,8 +14,11 @@ Environment variables (set in .env.deploy):
   CF_R2_BUCKET       R2 bucket name
   CF_PAGES_PROJECT   Pages project name
   CF_R2_ENDPOINT     S3-compatible endpoint for uploads
-  CF_SITE_PASSWORD   Password to protect the site (optional)
-  CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional)
+  CF_SITE_PASSWORD   Password to protect the site (optional). Set to "" and
+                     redeploy to remove the gate entirely (leave unset to
+                     skip touching this secret).
+  CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional).
+                     Same "" convention as CF_SITE_PASSWORD.
   CF_PAGES_GIT_REPO  Path to the local git repo for the site (optional)
   CF_CONFIG_BACKUP_REPO  Path to a private git repo that source-controls
                          config/ (gitignored in this public repo) (optional)
@@ -85,6 +88,12 @@ def sync_public_flags(dry_run: bool = False):
     # Placeholder ("pending") trips have no edits path — skip them here.
     public_edits_paths = set(t['edits'] for t in trips_config.get('public', []) if t.get('edits'))
 
+    # "wip" = editing in progress → tile shows a "More photos coming…" note. Config flag
+    # on the trip ("wip": true), stamped onto the index by slug like the public flag.
+    wip_slugs = {_slugify(t['name'])
+                 for t in (trips_config.get('public', []) + trips_config.get('private', []))
+                 if t.get('wip')}
+
     # Explicit private slugs — trips in the private block, keyed by slug.
     # These always win over path matching (handles shared edits paths like
     # "2024 China (March)" sharing /Edits/2024 China with the public Xinjiang trip).
@@ -139,6 +148,13 @@ def sync_public_flags(dry_run: bool = False):
             is_public = source_path in public_edits_paths
         if trip.get('public') != is_public:
             trip['public'] = is_public
+            changed += 1
+        want_wip = trip['id'] in wip_slugs
+        if bool(trip.get('wip')) != want_wip:
+            if want_wip:
+                trip['wip'] = True
+            else:
+                trip.pop('wip', None)
             changed += 1
 
     if dry_run:
@@ -375,6 +391,25 @@ class PagesDeployer:
         print(f"    ✗ Failed to set {name}: {result.stderr.strip()}")
         return False
 
+    def delete_secret(self, name: str, dry_run: bool = False) -> bool:
+        if dry_run:
+            print(f"    [dry-run] would delete Pages secret: {name}")
+            return True
+        result = subprocess.run(
+            ['npx', 'wrangler', 'pages', 'secret', 'delete', name,
+             '--project-name', self.config.pages_project],
+            input='y', text=True, capture_output=True
+        )
+        if result.returncode == 0:
+            print(f"    ✓ Secret {name} deleted")
+            return True
+        # Deleting a secret that was never set isn't an error for our purposes.
+        if 'not found' in result.stderr.lower():
+            print(f"    ✓ Secret {name} already unset")
+            return True
+        print(f"    ✗ Failed to delete {name}: {result.stderr.strip()}")
+        return False
+
     def deploy(self, dry_run: bool = False) -> bool:
         if dry_run:
             print("    [dry-run] would run: wrangler pages deploy web/")
@@ -590,14 +625,22 @@ def main():
 
     deployer = PagesDeployer(config)
 
-    # Step 5: Set password secrets
-    if (password or all_password) and not args.skip_pages:
-        print("🔐 Setting password secrets...")
-        if password:
-            deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
-        if all_password:
-            deployer.set_secret('CF_ALL_PASSWORD', all_password, dry_run=args.dry_run)
-        print()
+    # Step 5: Set/clear password secrets. A var that's unset in the environment is left
+    # alone; a var that's explicitly set to "" deletes the secret (removes the gate).
+    if not args.skip_pages:
+        site_password_in_env = 'CF_SITE_PASSWORD' in os.environ
+        all_password_in_env = 'CF_ALL_PASSWORD' in os.environ
+        if password or all_password or site_password_in_env or all_password_in_env:
+            print("🔐 Setting password secrets...")
+            if password:
+                deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
+            elif site_password_in_env:
+                deployer.delete_secret('CF_SITE_PASSWORD', dry_run=args.dry_run)
+            if all_password:
+                deployer.set_secret('CF_ALL_PASSWORD', all_password, dry_run=args.dry_run)
+            elif all_password_in_env:
+                deployer.delete_secret('CF_ALL_PASSWORD', dry_run=args.dry_run)
+            print()
 
     # Step 6: Deploy to Pages
     success = True

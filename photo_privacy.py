@@ -420,6 +420,42 @@ def suppress_pfp_routes(dry_run=False, echo=lambda *a: None):
         echo(f"  ✓ {slug}: route suppressed (original kept in route.geojson.orig)")
 
 
+def update_index_counts(dry_run=False, echo=print) -> int:
+    """Sync web/trips/index.json photo counts to the (post-privacy) manifests so tiles can
+    show the right number per lock state: photo_count = public (filtered manifest.json),
+    photo_count_all = full (manifest.all.json when a trip has gated photos, else equal).
+    The frontend shows photo_count when locked and photo_count_all when unlocked."""
+    index_path = WEB_TRIPS / 'index.json'
+    if not index_path.exists():
+        return 0
+    index = json.loads(index_path.read_text())
+    changed = 0
+    for t in index.get('trips', []):
+        tdir = WEB_TRIPS / t['id']
+        mj = tdir / 'manifest.json'
+        if not mj.exists():
+            continue  # pending placeholders etc. keep their configured count
+        try:
+            pub = len(json.loads(mj.read_text()).get('photos', []))
+        except (OSError, json.JSONDecodeError):
+            continue
+        mall = tdir / 'manifest.all.json'
+        full = pub
+        if mall.exists():
+            try:
+                full = len(json.loads(mall.read_text()).get('photos', []))
+            except (OSError, json.JSONDecodeError):
+                pass
+        if t.get('photo_count') != pub or t.get('photo_count_all') != full:
+            t['photo_count'] = pub
+            t['photo_count_all'] = full
+            changed += 1
+    if changed and not dry_run:
+        index_path.write_text(json.dumps(index, indent=2) + '\n')
+    echo(f"  {'would update' if dry_run else 'updated'} {changed} index trip count(s)")
+    return changed
+
+
 def sync(dry_run=False, echo=print) -> dict:
     """Compute the private map, split manifests, refresh the proxy index.
     Returns the private map (used by build_collections for the public variants)."""
@@ -429,6 +465,7 @@ def sync(dry_run=False, echo=print) -> dict:
          else "  manifests already in sync")
     suppress_pfp_routes(dry_run, echo)
     write_private_index(private_map, dry_run, echo)
+    update_index_counts(dry_run, echo)
     return private_map
 
 

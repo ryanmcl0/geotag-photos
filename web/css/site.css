@@ -121,6 +121,7 @@ img { display: block; }
 }
 .tile-title { font-family: var(--head); text-transform: uppercase; letter-spacing: .1em; color: var(--text); font-size: clamp(18px, 1.6vw, 26px); line-height: 1.1; }
 .tile-sub { font-family: var(--head); text-transform: uppercase; letter-spacing: .18em; color: #d9d9d9; font-size: 15px; }
+.tile-wip { margin-top: 6px; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; color: #ffd27d; opacity: .95; }
 .tile-zh { font-family: var(--body); color: var(--muted-2); font-size: 13px; letter-spacing: .04em; }
 
 /* province list reveal (hub 'By Province' tile) — hover-only extra layer */

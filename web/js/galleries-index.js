@@ -106,9 +106,10 @@
         }
 
         const href = `${BASE}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
-        const count = trip.photo_count
-            ? `${trip.photo_count} photo${trip.photo_count === 1 ? '' : 's'}`
-            : '';
+        // photo_count = public (locked) count; photo_count_all = full count revealed once
+        // the See All gate is unlocked. Trips with no gated photos have them equal.
+        const n = (unlocked() && trip.photo_count_all) ? trip.photo_count_all : trip.photo_count;
+        const count = n ? `${n} photo${n === 1 ? '' : 's'}` : '';
 
         const card = el('a', 'tile');
         card.href = href;
@@ -120,6 +121,7 @@
             <div class="tile-overlay">
                 <div class="tile-title">${formatTripName(trip.name)}</div>
                 <div class="tile-sub">${count}</div>
+                ${trip.wip ? '<div class="tile-wip">More photos coming…</div>' : ''}
             </div>
         `;
         return card;

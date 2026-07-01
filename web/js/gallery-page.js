@@ -37,6 +37,55 @@
         return m ? parseInt(m[1], 10) : (trip.year || new Date(trip.dates.start).getFullYear());
     }
 
+    function formatDateBanner(dateStr) {
+        if (!dateStr) return '';
+        try {
+            return new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-US', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'
+            });
+        } catch (e) {
+            return dateStr;
+        }
+    }
+
+    // Photos are already sorted chronologically; split into contiguous per-day
+    // groups and render each as its own justified grid with a date banner above
+    // it. Single-day trips fall back to one flat grid (a lone banner is noise).
+    function renderByDate(container, photos, opts) {
+        container.innerHTML = '';
+        if (!photos.length) {
+            const empty = document.createElement('p');
+            empty.className = 'gallery-empty';
+            empty.textContent = (opts && opts.emptyText) || 'No photos yet.';
+            container.appendChild(empty);
+            return;
+        }
+
+        const groups = [];
+        for (const p of photos) {
+            const last = groups[groups.length - 1];
+            if (last && last.date === p.date) last.photos.push(p);
+            else groups.push({ date: p.date, photos: [p] });
+        }
+
+        if (groups.length < 2) {
+            Gallery.renderGrid(container, photos, opts);
+            return;
+        }
+
+        groups.forEach(g => {
+            const banner = document.createElement('div');
+            banner.className = 'gallery-date-banner';
+            banner.innerHTML =
+                `<span class="gallery-date-label">${formatDateBanner(g.date)}</span>` +
+                `<span class="gallery-date-count">${g.photos.length} photo${g.photos.length === 1 ? '' : 's'}</span>`;
+            container.appendChild(banner);
+            const sub = document.createElement('div');
+            container.appendChild(sub);
+            Gallery.renderGrid(sub, g.photos, opts);
+        });
+    }
+
     function setInfo(name, dates, count) {
         const nameEl = document.getElementById('trip-name');
         const dateEl = document.getElementById('trip-dates');
@@ -147,7 +196,8 @@
                 trip: trip.id,
                 id: p.id,
                 ar: p.ar,
-                title: p.building || ''
+                title: p.building || '',
+                date: (p.timestamp || '').slice(0, 10)
             }));
 
         setInfo(
@@ -157,7 +207,7 @@
         );
 
         await ensureAspectRatios(photos);
-        Gallery.renderGrid(grid, photos, { emptyText: 'No photos in this trip yet.' });
+        renderByDate(grid, photos, { emptyText: 'No photos in this trip yet.' });
     }
 
     if (document.readyState === 'loading') {

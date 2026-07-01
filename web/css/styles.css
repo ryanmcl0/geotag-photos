@@ -1663,6 +1663,31 @@ details[open] .country-summary::after {
     font-style: italic;
 }
 
+.gallery-date-banner {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 28px 0 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.gallery-date-banner:first-child {
+    margin-top: 0;
+}
+
+.gallery-date-banner .gallery-date-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+.gallery-date-banner .gallery-date-count {
+    font-size: 0.78rem;
+    color: #888;
+    white-space: nowrap;
+}
+
 @media (max-width: 768px) {
     .gallery-view {
         padding: 14px 12px 64px;
@@ -1714,5 +1739,17 @@ details[open] .country-summary::after {
 
 .theme-dark .gallery-view .gallery-empty,
 .theme-dark .gallery-view .gallery-loading {
+    color: #999;
+}
+
+.theme-dark .gallery-date-banner {
+    border-bottom-color: rgba(255, 255, 255, 0.14);
+}
+
+.theme-dark .gallery-date-banner .gallery-date-label {
+    color: #f2f2f2;
+}
+
+.theme-dark .gallery-date-banner .gallery-date-count {
     color: #999;
 }

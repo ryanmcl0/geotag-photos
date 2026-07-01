@@ -47,7 +47,9 @@
             const stat = (num, label) =>
                 `<div class="stat"><div class="stat-num">${num}</div><div class="stat-label">${label}</div></div>`;
             const parts = [];
+            if (st.photos) parts.push(stat(st.photos.toLocaleString(), 'photos'));
             if (st.countries) parts.push(stat(st.countries, 'countries'));
+            if (st.trips) parts.push(stat(st.trips, 'trips'));
             if (st.flights && st.flights.total) parts.push(stat(st.flights.total, 'flights'));
             if (st.flown_km) parts.push(stat(st.flown_km.toLocaleString() + '<span class="stat-frac"> km</span>', 'flown'));
             if (st.road_trips) parts.push(stat(st.road_trips, 'road trips'));

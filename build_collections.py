@@ -999,6 +999,10 @@ def emit_site_stats(echo):
         stats['flights'] = ts.get('flights', {})
         stats['flown_km'] = ts.get('flown_km')
         stats['flown_time'] = ts.get('flown_time')
+    stats['photos'] = sum(
+        len(json.loads(mf.read_text()).get('photos', []))
+        for mf in sorted(WEB_TRIPS.glob('*/manifest.json'))
+    )
     wr_path = ROOT / 'config' / 'world_roofs.json'
     if wr_path.exists():
         stats['buildings'] = len(json.loads(wr_path.read_text()).get('buildings', []))
@@ -1011,15 +1015,18 @@ def emit_site_stats(echo):
             legs += len(trips)
     stats['driven_km'] = round(driven)
     stats['road_trips'] = legs
-    # countries: the user-maintained figure is authoritative (the trips index only
-    # covers processed trips and undercounts)
+    # countries / trips: the user-maintained figures are authoritative (the trips
+    # index only covers processed trips and undercounts)
+    idx_path = WEB_TRIPS / 'index.json'
+    idx = json.loads(idx_path.read_text()) if idx_path.exists() else {}
     if ts.get('countries_visited'):
         stats['countries'] = ts['countries_visited']
-    else:
-        idx_path = WEB_TRIPS / 'index.json'
-        if idx_path.exists():
-            idx = json.loads(idx_path.read_text())
-            stats['countries'] = len({c for t in idx.get('trips', []) for c in (t.get('countries') or [])})
+    elif idx:
+        stats['countries'] = len({c for t in idx.get('trips', []) for c in (t.get('countries') or [])})
+    if ts.get('trips_visited'):
+        stats['trips'] = ts['trips_visited']
+    elif idx:
+        stats['trips'] = len(idx.get('trips', []))
 
     # landing-page tile covers from config/tile_covers.json 'home': a photo
     # filepath resolves to {trip, id}; any other image file (e.g. a map
@@ -1033,7 +1040,8 @@ def emit_site_stats(echo):
         stats['covers'] = covers
     (OUT_DIR / 'site_stats.json').write_text(json.dumps(stats, indent=2))
     echo(f"✓ Wrote web/collections/site_stats.json "
-         f"(flights={stats.get('flights', {}).get('total')}, driven={stats['driven_km']:,} km, "
+         f"(photos={stats.get('photos')}, trips={stats.get('trips')}, "
+         f"flights={stats.get('flights', {}).get('total')}, driven={stats['driven_km']:,} km, "
          f"countries={stats.get('countries')})")
 
 

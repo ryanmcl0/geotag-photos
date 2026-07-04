@@ -650,11 +650,21 @@ def main():
             syncer = GitSyncer(config)
             success = syncer.sync(dry_run=args.dry_run)
             if success and not args.dry_run:
-                # Push to remote so CF Pages auto-deploys
+                # Push to remote so CF Pages auto-deploys. This must not fail
+                # silently: R2 has already been synced (stale objects deleted),
+                # so an un-pushed site keeps serving old manifests that point at
+                # keys which no longer exist.
                 import subprocess as _sp
-                _sp.run(['git', 'push', 'origin', 'main'],
-                        cwd=config.git_repo, check=False, capture_output=True)
-                print("    ✓ Pushed to origin/main — CF Pages will auto-deploy")
+                push = _sp.run(['git', 'push', 'origin', 'main'],
+                               cwd=config.git_repo, check=False, capture_output=True, text=True)
+                if push.returncode != 0:
+                    print("    ✗ git push failed — R2 is already updated but Pages was NOT "
+                          "redeployed; the live site may reference removed images. "
+                          "Fix the push and re-run deploy.")
+                    print(f"      {(push.stderr or push.stdout).strip()}")
+                    success = False
+                else:
+                    print("    ✓ Pushed to origin/main — CF Pages will auto-deploy")
         else:
             print("🌐 Deploying to Cloudflare Pages (Direct)...")
             success = deployer.deploy(dry_run=args.dry_run)

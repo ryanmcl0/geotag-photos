@@ -51,6 +51,8 @@ def expected_slugs():
             expected.add(f"{s}-private")
     # Blog asset pseudo-trips (build_blogs.py) live in hosted-photos/ + web/trips/
     # under 'blog-<slug>[-private]' but are registered in config/blogs.json, not trips.json.
+    # An unreadable blogs.json must abort like an unreadable trips.json — swallowing
+    # it would turn every blog pseudo-trip into a prune candidate.
     blogs_cfg = PROJECT_ROOT / 'config' / 'blogs.json'
     if blogs_cfg.exists():
         try:
@@ -58,7 +60,7 @@ def expected_slugs():
                 expected.add(f"blog-{b['slug']}")
                 expected.add(f"blog-{b['slug']}-private")
         except Exception:
-            pass
+            return None
     return expected
 
 
@@ -92,7 +94,7 @@ def prune_removed_trips(*, s3=None, r2_bucket=None, dry_run=False, force=False, 
     Returns the list of pruned slugs."""
     orphans, expected = find_orphans()
     if orphans is None:
-        echo("    ⚠️  Can't read config/trips.json — skipping prune")
+        echo("    ⚠️  Can't read config/trips.json or config/blogs.json — skipping prune")
         return []
 
     # When R2 is available, also reconcile against the bucket itself: a trip whose local

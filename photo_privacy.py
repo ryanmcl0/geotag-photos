@@ -89,9 +89,14 @@ def load_trip_meta() -> dict:
     return {t['id']: t.get('public', False) for t in idx.get('trips', [])}
 
 
-def load_full_manifest(trip_dir: Path) -> dict | None:
+def load_full_manifest(trip_dir: Path, strict: bool = False) -> dict | None:
     """The canonical FULL manifest for a trip. After a split, manifest.json is the
-    filtered public view and the full data lives in manifest.all.json."""
+    filtered public view and the full data lives in manifest.all.json.
+
+    strict: a previously-split trip whose manifest.all.json is missing or unreadable
+    is a corrupt state — silently falling back to the filtered view would make the
+    privacy sync recompute from partial data (previously-gated photos drop out of
+    the private map). Strict callers abort instead."""
     mj = trip_dir / 'manifest.json'
     if not mj.exists():
         return None
@@ -105,7 +110,14 @@ def load_full_manifest(trip_dir: Path) -> dict | None:
             try:
                 return json.loads(mall.read_text())
             except (OSError, json.JSONDecodeError):
-                pass
+                if strict:
+                    raise SystemExit(f"✗ {trip_dir.name}: manifest.all.json is unreadable — "
+                                     "aborting privacy sync (refusing to recompute from the "
+                                     "filtered view; fix or reprocess the trip)")
+        elif strict:
+            raise SystemExit(f"✗ {trip_dir.name}: manifest.json is marked filtered but "
+                             "manifest.all.json is missing — aborting privacy sync "
+                             "(fix or reprocess the trip)")
         # Marker without the full file — best we have is the filtered view.
         manifest.pop('filtered', None)
     return manifest
@@ -180,8 +192,13 @@ def compute_private_map(echo=lambda *a: None) -> dict:
         # publish-from-private trips are gated in index.json but treated as public here
         if not trip_dir.is_dir() or not (trip_public.get(slug, False) or slug in pfp):
             continue
-        manifest = load_full_manifest(trip_dir)
+        manifest = load_full_manifest(trip_dir, strict=True)
         if not manifest:
+            if slug in pfp:
+                # Fail CLOSED: with no private_map entry the trip would ship its
+                # full manifest publicly (it's flagged public because it's in pfp).
+                raise SystemExit(f"✗ {slug}: publish-from-private trip but its manifest is "
+                                 "missing/unreadable — aborting privacy sync")
             continue
         all_ids = {p['id'] for p in manifest.get('photos', [])}
         if slug in pfp:
@@ -242,8 +259,11 @@ def split_manifests(private_map: dict, dry_run=False, echo=lambda *a: None) -> i
     for trip_dir in sorted(WEB_TRIPS.iterdir()):
         if not trip_dir.is_dir() or not (trip_public.get(trip_dir.name, False) or trip_dir.name in pfp):
             continue
-        full = load_full_manifest(trip_dir)
+        full = load_full_manifest(trip_dir, strict=True)
         if not full:
+            if trip_dir.name in pfp:
+                raise SystemExit(f"✗ {trip_dir.name}: publish-from-private trip but its manifest "
+                                 "is missing/unreadable — aborting privacy sync")
             continue
         mj = trip_dir / 'manifest.json'
         mall = trip_dir / 'manifest.all.json'
@@ -315,9 +335,23 @@ def cover_serve_map() -> dict:
             for k, val in v.items():
                 if not k.startswith('_'):
                     collect(val)
-        elif isinstance(v, str) and v and not v.startswith('previews/'):
+        elif isinstance(v, str) and v and v != 'auto' and not v.startswith('previews/'):
             specs.append(v)
     collect(tc)
+
+    # Cover specs also come from config/classifications.json: a facet 'cover' /
+    # collection 'hero_cover' is the fallback when nothing is pinned in
+    # tile_covers.json, and build_collections resolves those against the FULL
+    # index too — so they need the same serve-exception or a private pick 404s.
+    cls_path = ROOT / 'config' / 'classifications.json'
+    if cls_path.exists():
+        try:
+            for coll in json.loads(cls_path.read_text()).get('collections', []):
+                collect(coll.get('hero_cover'))
+                for facet in coll.get('facets', []):
+                    collect(facet.get('cover'))
+        except (OSError, json.JSONDecodeError):
+            pass
 
     stem_index, edits_map = {}, {}
     for mf in sorted(WEB_TRIPS.glob('*/manifest.json')):
@@ -354,6 +388,18 @@ def cover_serve_map() -> dict:
             if hit:
                 out.setdefault(hit[0], set()).add(hit[1])
                 break
+
+    # Blog tile covers: build_blogs writes each tile's RESOLVED cover ref into
+    # web/blogs/<slug>.json. Merge them directly — an auto-picked cover of a
+    # non-public blog lives in that blog's private pseudo-trip and would otherwise
+    # 404 on the public blog index (the tile shows it dimmed behind the padlock).
+    for bj in sorted((ROOT / 'web' / 'blogs').glob('*.json')):
+        try:
+            cover = json.loads(bj.read_text()).get('cover') or {}
+        except (OSError, json.JSONDecodeError):
+            continue
+        if cover.get('trip') and cover.get('id'):
+            out.setdefault(cover['trip'], set()).add(cover['id'])
     return out
 
 

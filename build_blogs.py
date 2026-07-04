@@ -606,7 +606,7 @@ def render_index(built, pending):
     for d in built:
         cover = d.get('cover')
         img = (f'<img class="tile-img" loading="lazy" alt="" '
-               f'onerror="this.style.display=\'none\'" data-cover="{photo_path(cover, "display")}">'
+               f'data-cover="{photo_path(cover, "display")}">'
                if cover else '')
         lock = '' if d['public'] else '<div class="lock-badge">🔒 See All</div>'
         gated = '' if d['public'] else ' data-gated'

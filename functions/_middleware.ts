@@ -126,7 +126,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {
-        const authed = cookieVal('site_auth') === sitePassword;
+        // The cookie holds a hash of the password (set by /auth), not the password.
+        const authed = cookieVal('site_auth') === await tokenFor(sitePassword);
         if (!authed) return Response.redirect(new URL('/login', context.request.url), 302);
     }
 

@@ -2,6 +2,11 @@
  * POST /auth — validate password and set auth cookie.
  */
 
+const hex = (buf: ArrayBuffer) =>
+    [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+const tokenFor = async (secret: string) =>
+    hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
+
 export const onRequestPost: PagesFunction<{ CF_SITE_PASSWORD: string }> = async (context) => {
     const formData = await context.request.formData();
     const password = formData.get('password') as string;
@@ -12,11 +17,13 @@ export const onRequestPost: PagesFunction<{ CF_SITE_PASSWORD: string }> = async 
         // testing on a phone at http://192.168.x.x) browsers drop Secure cookies,
         // which would bounce the user straight back to /login. Mirrors /auth-all.
         const isSecure = new URL(context.request.url).protocol === 'https:';
+        // Store a hash, not the password itself — mirrors the all_access cookie.
+        const token = await tokenFor(correct);
         return new Response(null, {
             status: 302,
             headers: {
                 'Location': '/',
-                'Set-Cookie': `site_auth=${password}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
+                'Set-Cookie': `site_auth=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
             }
         });
     }

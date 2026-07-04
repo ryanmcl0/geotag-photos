@@ -306,6 +306,12 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
 @media (max-width: 460px) {
   .nav-name { display: none; }
 }
+@media (max-width: 520px) {
+  /* 6 links + See All can exceed narrow viewports — wrap rather than overflow
+     into a horizontally scrollable header */
+  .topnav { flex-wrap: wrap; row-gap: 10px; }
+  .nav-links { flex-wrap: wrap; row-gap: 8px; }
+}
 
 /* fallback when a tile cover can't be loaded (gated photo) */
 .tile-cover-locked { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #161616; color: #6e6e6e; font-family: var(--head); letter-spacing: .2em; text-transform: uppercase; font-size: 12px; }

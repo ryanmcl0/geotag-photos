@@ -34,8 +34,11 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 TRIPS_CONFIG = PROJECT_ROOT / 'config' / 'trips.json'
 WEB_TRIPS_DIR = PROJECT_ROOT / 'web' / 'trips'
 
-# Source edit extensions that become photos (mirror process_trip.SUPPORTED_EXTENSIONS).
-IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.tiff', '.tif'}
+# Source edit extensions that become photos. Imported (not duplicated) from
+# process_trip: a hand-mirrored copy drifted when HEIC support landed, making
+# trip_is_dirty treat every HEIC-sourced manifest id as a deletion — so --update
+# re-processed those trips on every run.
+from process_trip import SUPPORTED_EXTENSIONS as IMAGE_EXTS
 
 
 def slugify(name: str) -> str:

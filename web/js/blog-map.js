@@ -21,7 +21,11 @@
 
     const ROUTE_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'];
 
-    const map = L.map(el, { scrollWheelZoom: false, zoomControl: true });
+    // Touch devices: one-finger drag must scroll the article, not pan the map —
+    // otherwise the full-width map at the top of every post traps the reader.
+    // Pinch-zoom (Leaflet touchZoom) and the +/- buttons still work.
+    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    const map = L.map(el, { scrollWheelZoom: false, zoomControl: true, dragging: !coarse });
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
         attribution: '© OpenStreetMap, © CARTO', maxZoom: 19,
     }).addTo(map);

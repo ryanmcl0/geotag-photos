@@ -1730,6 +1730,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
               help='Write/refresh <output>/source_state.json from the current sources WITHOUT '
                    'reprocessing (adopt-baseline only; encodes only missing images). Use to stamp a '
                    'baseline on already-processed trips so a later --update detects real deltas.')
+@click.option('--allow-shrink', 'allow_shrink', is_flag=True,
+              help='Permit the photo set to shrink by more than half vs the existing manifest '
+                   '(an intentional mass cull). Without this flag a big drop aborts, since it '
+                   'usually means a flaky network mount returned a partial listing.')
 @click.option('--round-trip', is_flag=True,
               help='Mark this trip as an out-and-back/loop (start == end). Suppresses the '
                    'START/END map badges, which are meaningless for a round trip.')
@@ -1759,7 +1763,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  fake_route_locations: Optional[str], no_fake_route: bool,
                  strict_building_distance: bool, kmz_path_str: Optional[str],
                  skip_existing_images: bool, update: bool, reindex: bool,
-                 round_trip: bool,
+                 allow_shrink: bool, round_trip: bool,
                  test_mode: int, dry_run: bool):
     """
     Process trip photos and generate web-ready output.
@@ -2008,6 +2012,27 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
     if not photo_files:
         click.echo("Error: No photos found in directory", err=True)
         sys.exit(1)
+
+    # Guard against a flaky network mount returning a PARTIAL directory listing:
+    # a big drop vs the last processed manifest would silently shrink the trip —
+    # and in --update mode delete the "missing" photos' hosted derivatives (and,
+    # on the next deploy, their R2 objects). Intentional culls pass --allow-shrink.
+    if not allow_shrink and not dry_run:
+        prev_photo_count = 0
+        for prev_name in ('manifest.all.json', 'manifest.json'):
+            prev_path = output_path / prev_name
+            if prev_path.exists():
+                try:
+                    prev_photo_count = len(json.loads(prev_path.read_text()).get('photos', []))
+                    break
+                except (OSError, json.JSONDecodeError):
+                    continue
+        if prev_photo_count and len(photo_files) < prev_photo_count * 0.5:
+            click.echo(f"Error: found {len(photo_files)} photos but the existing manifest has "
+                       f"{prev_photo_count} — refusing to shrink the trip by more than half "
+                       f"(partial listing from a stale mount?). Re-run with --allow-shrink "
+                       f"if this cull is intentional.", err=True)
+            sys.exit(1)
 
     # Split on ';' (not ',') so building/folder names that contain commas
     # (e.g. "Himachal Pradesh, Ladakh") survive intact.

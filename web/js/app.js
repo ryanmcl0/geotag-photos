@@ -338,7 +338,12 @@ function initYearFilter() {
         return m ? parseInt(m[1]) : t.year;
     }))].filter(Boolean).sort((a, b) => b - a);
 
-    if (years.length < 2) return; // not worth showing for 1 year
+    if (years.length < 2) {
+        // No control to clear a stale selection with — reset it (e.g. re-locking
+        // removed all but one year while a year filter was active).
+        if (activeYearFilter) { activeYearFilter = null; syncVisibleTripLayers(); }
+        return; // not worth showing for 1 year
+    }
 
     const countByYear = {};
     allTrips.forEach(t => {
@@ -396,6 +401,13 @@ function initYearFilter() {
             menu.classList.remove('open');
         });
     });
+
+    // The menu is rebuilt showing "All years" active, but activeYearFilter survives
+    // rebuilds (unlock/lock) — re-apply it so the control never disagrees with what
+    // the map is actually filtering. A year that no longer exists resets to all.
+    if (activeYearFilter) {
+        setYearFilter(years.includes(activeYearFilter) ? activeYearFilter : null, wrapper);
+    }
 }
 
 function setYearFilter(year, wrapper) {
@@ -877,7 +889,10 @@ async function loadSingleTrip(trip, basePath) {
     if (manifest.filtered && checkAllAccess()) {
         try {
             const fullRes = await fetch(`${tripPath}/manifest.all.json?t=${Date.now()}`);
-            if (fullRes.ok) manifest = await fullRes.json();
+            if (fullRes.ok) {
+                manifest = await fullRes.json();
+                manifest.upgraded = true;   // so re-locking knows to downgrade it
+            }
         } catch (e) { /* keep the filtered manifest */ }
     }
 
@@ -918,13 +933,52 @@ async function loadSingleTrip(trip, basePath) {
 }
 
 /**
+ * Swap a loaded trip's manifest + marker layer in place: unlock upgrades to the
+ * full manifest, re-locking downgrades back to the public subset. In-place (rather
+ * than remove-and-reload) so the trip keeps its color and position in the chain.
+ */
+async function swapTripManifest(tripId, variant) {
+    const idx = allManifests.findIndex(m => m.tripId === tripId);
+    const old = idx >= 0 ? allManifests[idx] : null;
+    const layer = tripLayers[tripId];
+    if (!old || !layer || !old.tripPath) return;
+
+    const res = await fetch(`${old.tripPath}/${variant}?t=${Date.now()}`);
+    if (!res.ok) return;
+    const manifest = await res.json();
+    manifest.tripId = old.tripId;
+    manifest.tripIndex = old.tripIndex;
+    manifest.tripPath = old.tripPath;
+    manifest.upgraded = variant === 'manifest.all.json';
+
+    // Collection mode: re-apply the collection's photo filter (mirrors loadSingleTrip).
+    const pf = window._collectionPhotoFilter;
+    if (pf && pf.has(tripId)) {
+        const allow = pf.get(tripId);
+        manifest.photos = manifest.photos.filter(p => allow.has(p.id));
+        manifest.clusters = (manifest.clusters || [])
+            .map(c => Object.assign({}, c, { photo_ids: (c.photo_ids || []).filter(id => allow.has(id)) }))
+            .filter(c => c.photo_ids.length > 0);
+    }
+
+    const wasShown = map.hasLayer(layer.markers);
+    map.removeLayer(layer.markers);
+    layer.markers = buildMarkerLayer(manifest, layer.hasGpx);
+    if (wasShown) layer.markers.addTo(map);
+    allManifests[idx] = manifest;
+}
+
+/**
  * Load non-public trips after the user has unlocked all-access.
  * Called by sidebar after successful /auth-all.
  */
 async function unlockAllAccess() {
     const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
     const unloaded = allTripsMeta.filter(t => !loadedTripIds.has(t.id));
-    if (unloaded.length === 0) return;
+    // Mixed trips already on the map were loaded with their filtered (public-subset)
+    // manifest — unlocking must upgrade those in place, not just add missing trips.
+    const filteredIds = allManifests.filter(m => m.filtered).map(m => m.tripId);
+    if (unloaded.length === 0 && filteredIds.length === 0) return;
 
     for (const trip of unloaded) {
         // Resilient: one trip failing to load must not block the rest.
@@ -934,13 +988,18 @@ async function unlockAllAccess() {
             console.error(`Failed to load trip ${trip.id}:`, e);
         }
     }
+    for (const tripId of filteredIds) {
+        try {
+            await swapTripManifest(tripId, 'manifest.all.json');
+        } catch (e) {
+            console.error(`Failed to upgrade trip ${tripId}:`, e);
+        }
+    }
 
     initYearFilter();        // 2018 etc. are entirely private — surface them now
     rebuildCountryFilter();
     syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
-    updateTripInfo();
-    reinitLightbox();
-    fitMapToBounds();
+    syncVisibleTripLayers({ fit: true });   // filters, paging chain, counts, lightbox
     updateMobileSeeAll();
 }
 window.unlockAllAccess = unlockAllAccess;
@@ -948,11 +1007,14 @@ window.unlockAllAccess = unlockAllAccess;
 /**
  * Remove non-public trips from the map when user returns to public-only view.
  */
-function lockAllAccess() {
+async function lockAllAccess() {
     const nonPublicIds = new Set(
         allTripsMeta.filter(t => t.public === false).map(t => t.id)
     );
-    if (nonPublicIds.size === 0) return;
+    // Mixed trips whose manifest was upgraded to the full set must be downgraded
+    // back to the public subset, or their gated photos stay visible after re-lock.
+    const upgradedIds = allManifests.filter(m => m.upgraded).map(m => m.tripId);
+    if (nonPublicIds.size === 0 && upgradedIds.length === 0) return;
 
     for (const tripId of nonPublicIds) {
         if (tripLayers[tripId]) {
@@ -966,12 +1028,19 @@ function lockAllAccess() {
     allTrips = allTrips.filter(t => !nonPublicIds.has(t.id));
     allManifests = allManifests.filter(m => !nonPublicIds.has(m.tripId));
 
+    for (const tripId of upgradedIds) {
+        if (nonPublicIds.has(tripId)) continue;
+        try {
+            await swapTripManifest(tripId, 'manifest.json');
+        } catch (e) {
+            console.error(`Failed to downgrade trip ${tripId}:`, e);
+        }
+    }
+
     initYearFilter();        // drop years that were only private
     rebuildCountryFilter();
     syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
-    updateTripInfo();
-    reinitLightbox();
-    fitMapToBounds();
+    syncVisibleTripLayers({ fit: true });   // filters, paging chain, counts, lightbox
     updateMobileSeeAll();
 }
 window.lockAllAccess = lockAllAccess;

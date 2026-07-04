@@ -81,12 +81,12 @@
             const data = await response.json();
             allSidebarTrips = data.trips || [];
 
-            const viewMode = (window.VIEW_CONFIG && VIEW_CONFIG.mode) || 'all';
-            if (viewMode === 'all' && !hasAllAccess()) {
-                tripsData = allSidebarTrips.filter(t => t.public !== false);
-            } else {
-                tripsData = allSidebarTrips;
-            }
+            // Locked visitors never see non-public trips in the year nav, whatever
+            // the page mode — previously only the all-trips map filtered, so trip/
+            // year/gallery pages listed every trip to locked visitors.
+            tripsData = hasAllAccess()
+                ? allSidebarTrips
+                : allSidebarTrips.filter(t => t.public !== false);
 
             yearGroups = buildYearGroups(tripsData);
         } catch (error) {

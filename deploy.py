@@ -592,6 +592,16 @@ def main():
         apply_placeholders(Path('web/trips/index.json'))
         print()
 
+    # Step 1d: Refresh the landing-page stats AFTER the privacy sync/prune/
+    # placeholders have settled the index and manifests, so the homepage numbers
+    # always match what this deploy actually ships (they're otherwise only
+    # regenerated when build_collections happens to run).
+    if not args.dry_run:
+        print("📊 Refreshing site stats...")
+        from build_collections import emit_site_stats
+        emit_site_stats(print)
+        print()
+
     # Step 2: Sync images to R2 (size-aware: skips unchanged, re-uploads changed,
     # deletes orphans). On by default; --skip-images for a code/manifest-only deploy.
     if not args.skip_images:

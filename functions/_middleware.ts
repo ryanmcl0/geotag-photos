@@ -20,24 +20,33 @@ const hex = (buf: ArrayBuffer) =>
 const tokenFor = async (secret: string) =>
     hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
 
-let tripFlagsCache: Promise<Record<string, boolean>> | null = null;
+// Short TTL: an isolate can live long past a deploy, and a trip flipped to
+// private must not keep serving under pre-deploy flags until the isolate recycles.
+const TRIP_FLAGS_TTL_MS = 5 * 60_000;
+let tripFlagsCache: { at: number; data: Promise<Record<string, boolean>> } | null = null;
 
 function tripFlags(context: EventContext<Env, string, unknown>): Promise<Record<string, boolean>> {
-    if (!tripFlagsCache) {
-        tripFlagsCache = (async () => {
+    if (!tripFlagsCache || Date.now() - tripFlagsCache.at > TRIP_FLAGS_TTL_MS) {
+        const data = (async () => {
             try {
                 const res = await context.env.ASSETS.fetch(new URL('/trips/index.json', context.request.url));
                 const idx = await res.json() as { trips?: { id: string; public?: boolean }[] };
+                const trips = idx.trips || [];
+                if (!trips.length) {   // parsed-but-empty is as suspect as an error — don't cache it
+                    tripFlagsCache = null;
+                    return {};
+                }
                 const map: Record<string, boolean> = {};
-                for (const t of idx.trips || []) map[t.id] = t.public !== false;
+                for (const t of trips) map[t.id] = t.public !== false;
                 return map;
             } catch {
                 tripFlagsCache = null;
                 return {};
             }
         })();
+        tripFlagsCache = { at: Date.now(), data };
     }
-    return tripFlagsCache;
+    return tripFlagsCache.data;
 }
 
 const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json',

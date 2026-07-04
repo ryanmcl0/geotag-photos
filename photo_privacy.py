@@ -335,9 +335,23 @@ def cover_serve_map() -> dict:
             for k, val in v.items():
                 if not k.startswith('_'):
                     collect(val)
-        elif isinstance(v, str) and v and not v.startswith('previews/'):
+        elif isinstance(v, str) and v and v != 'auto' and not v.startswith('previews/'):
             specs.append(v)
     collect(tc)
+
+    # Cover specs also come from config/classifications.json: a facet 'cover' /
+    # collection 'hero_cover' is the fallback when nothing is pinned in
+    # tile_covers.json, and build_collections resolves those against the FULL
+    # index too — so they need the same serve-exception or a private pick 404s.
+    cls_path = ROOT / 'config' / 'classifications.json'
+    if cls_path.exists():
+        try:
+            for coll in json.loads(cls_path.read_text()).get('collections', []):
+                collect(coll.get('hero_cover'))
+                for facet in coll.get('facets', []):
+                    collect(facet.get('cover'))
+        except (OSError, json.JSONDecodeError):
+            pass
 
     stem_index, edits_map = {}, {}
     for mf in sorted(WEB_TRIPS.glob('*/manifest.json')):
@@ -374,6 +388,18 @@ def cover_serve_map() -> dict:
             if hit:
                 out.setdefault(hit[0], set()).add(hit[1])
                 break
+
+    # Blog tile covers: build_blogs writes each tile's RESOLVED cover ref into
+    # web/blogs/<slug>.json. Merge them directly — an auto-picked cover of a
+    # non-public blog lives in that blog's private pseudo-trip and would otherwise
+    # 404 on the public blog index (the tile shows it dimmed behind the padlock).
+    for bj in sorted((ROOT / 'web' / 'blogs').glob('*.json')):
+        try:
+            cover = json.loads(bj.read_text()).get('cover') or {}
+        except (OSError, json.JSONDecodeError):
+            continue
+        if cover.get('trip') and cover.get('id'):
+            out.setdefault(cover['trip'], set()).add(cover['id'])
     return out
 
 

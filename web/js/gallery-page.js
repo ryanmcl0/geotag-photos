@@ -38,7 +38,9 @@
     }
 
     function formatDateBanner(dateStr) {
-        if (!dateStr) return '';
+        // Photos without a timestamp group under an explicit label rather than
+        // rendering a blank banner.
+        if (!dateStr) return 'Undated';
         try {
             return new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-US', {
                 weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC'

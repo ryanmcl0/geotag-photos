@@ -89,9 +89,14 @@ def load_trip_meta() -> dict:
     return {t['id']: t.get('public', False) for t in idx.get('trips', [])}
 
 
-def load_full_manifest(trip_dir: Path) -> dict | None:
+def load_full_manifest(trip_dir: Path, strict: bool = False) -> dict | None:
     """The canonical FULL manifest for a trip. After a split, manifest.json is the
-    filtered public view and the full data lives in manifest.all.json."""
+    filtered public view and the full data lives in manifest.all.json.
+
+    strict: a previously-split trip whose manifest.all.json is missing or unreadable
+    is a corrupt state — silently falling back to the filtered view would make the
+    privacy sync recompute from partial data (previously-gated photos drop out of
+    the private map). Strict callers abort instead."""
     mj = trip_dir / 'manifest.json'
     if not mj.exists():
         return None
@@ -105,7 +110,14 @@ def load_full_manifest(trip_dir: Path) -> dict | None:
             try:
                 return json.loads(mall.read_text())
             except (OSError, json.JSONDecodeError):
-                pass
+                if strict:
+                    raise SystemExit(f"✗ {trip_dir.name}: manifest.all.json is unreadable — "
+                                     "aborting privacy sync (refusing to recompute from the "
+                                     "filtered view; fix or reprocess the trip)")
+        elif strict:
+            raise SystemExit(f"✗ {trip_dir.name}: manifest.json is marked filtered but "
+                             "manifest.all.json is missing — aborting privacy sync "
+                             "(fix or reprocess the trip)")
         # Marker without the full file — best we have is the filtered view.
         manifest.pop('filtered', None)
     return manifest
@@ -180,8 +192,13 @@ def compute_private_map(echo=lambda *a: None) -> dict:
         # publish-from-private trips are gated in index.json but treated as public here
         if not trip_dir.is_dir() or not (trip_public.get(slug, False) or slug in pfp):
             continue
-        manifest = load_full_manifest(trip_dir)
+        manifest = load_full_manifest(trip_dir, strict=True)
         if not manifest:
+            if slug in pfp:
+                # Fail CLOSED: with no private_map entry the trip would ship its
+                # full manifest publicly (it's flagged public because it's in pfp).
+                raise SystemExit(f"✗ {slug}: publish-from-private trip but its manifest is "
+                                 "missing/unreadable — aborting privacy sync")
             continue
         all_ids = {p['id'] for p in manifest.get('photos', [])}
         if slug in pfp:
@@ -242,8 +259,11 @@ def split_manifests(private_map: dict, dry_run=False, echo=lambda *a: None) -> i
     for trip_dir in sorted(WEB_TRIPS.iterdir()):
         if not trip_dir.is_dir() or not (trip_public.get(trip_dir.name, False) or trip_dir.name in pfp):
             continue
-        full = load_full_manifest(trip_dir)
+        full = load_full_manifest(trip_dir, strict=True)
         if not full:
+            if trip_dir.name in pfp:
+                raise SystemExit(f"✗ {trip_dir.name}: publish-from-private trip but its manifest "
+                                 "is missing/unreadable — aborting privacy sync")
             continue
         mj = trip_dir / 'manifest.json'
         mall = trip_dir / 'manifest.all.json'

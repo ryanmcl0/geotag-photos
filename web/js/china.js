@@ -76,6 +76,18 @@
         });
       } else {
         card.href = `#${tile.id}`;
+        // Touch devices can't hover the province reveal: first tap shows it,
+        // a second tap (or a tap elsewhere, which closes it) navigates.
+        if (reveal && window.matchMedia('(hover: none)').matches) {
+          card.addEventListener('click', e => {
+            if (!card.classList.contains('reveal-open')) {
+              e.preventDefault();
+              e.stopPropagation();
+              card.classList.add('reveal-open');
+            }
+          });
+          document.addEventListener('click', () => card.classList.remove('reveal-open'));
+        }
       }
       grid.appendChild(card);
     });

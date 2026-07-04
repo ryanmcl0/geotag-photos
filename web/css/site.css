@@ -282,7 +282,8 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
   .tiles.tiles--dense { grid-template-columns: repeat(2, 1fr); }
 }
 @media (hover: none) {
-  .tile-reveal { display: none; }
+  /* no hover on touch — china.js toggles .reveal-open on first tap instead */
+  .tile.reveal-open .tile-reveal { opacity: 1; }
 }
 @media (max-width: 860px) {
   :root { --margin: 12px; }

@@ -20,7 +20,8 @@ window.Unlock = (function () {
         overlay.id = 'pw-overlay';
         overlay.innerHTML = `
             <div class="pw-modal">
-                <h3>🔓 See All</h3>
+                <h3>🚧 Under Construction</h3>
+                <p class="pw-note">This section is still being built. Check back soon.</p>
                 <input type="password" id="pw-input" placeholder="Password" autocomplete="current-password">
                 <p class="pw-error" id="pw-error"></p>
                 <div class="pw-actions">

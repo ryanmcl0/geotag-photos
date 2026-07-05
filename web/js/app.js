@@ -1541,15 +1541,18 @@ function fitMapToBounds() {
  * Only rendered if non-public trips exist; hidden on desktop via CSS.
  */
 function openMobilePwModal() {
+    const note = document.getElementById('mobile-pw-note');
     if (checkAllAccess()) {
         document.getElementById('mobile-pw-overlay').dataset.mode = 'lock';
         document.querySelector('.mobile-pw-title').textContent = 'Return to public trips only?';
+        if (note) note.style.display = 'none';
         document.getElementById('mobile-pw-input').style.display = 'none';
         document.getElementById('mobile-pw-submit').textContent = 'Yes, lock';
         document.getElementById('mobile-pw-error').textContent = '';
     } else {
         document.getElementById('mobile-pw-overlay').dataset.mode = 'unlock';
-        document.querySelector('.mobile-pw-title').textContent = '🔒 Unlock All Trips';
+        document.querySelector('.mobile-pw-title').textContent = '🚧 Under Construction';
+        if (note) note.style.display = '';
         document.getElementById('mobile-pw-input').style.display = '';
         document.getElementById('mobile-pw-submit').textContent = 'Unlock';
         document.getElementById('mobile-pw-error').textContent = '';

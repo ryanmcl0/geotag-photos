@@ -52,7 +52,7 @@ img { display: block; }
 
 /* ---------- landing hero (landing page only) ---------- */
 .hero {
-  position: relative; min-height: 34vh; display: flex; align-items: center; justify-content: center;
+  position: relative; display: flex; align-items: center; justify-content: center;
   text-align: center; overflow: hidden; padding: 48px 24px;
 }
 .hero::before {
@@ -76,6 +76,11 @@ img { display: block; }
 .stat-num { font-family: var(--head); color: var(--text); font-size: clamp(26px, 2.6vw, 40px); line-height: 1; }
 .stat-num .stat-frac { color: var(--muted); font-size: .62em; }
 .stat-label { font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+/* ---------- landing "powered by" credit (centered between hero and tiles) ---------- */
+.powered-by { text-align: center; font-family: var(--body); color: var(--muted); font-size: 16px; letter-spacing: .02em; margin: 0 0 48px; }
+.powered-by a { color: var(--muted-2); text-decoration: underline; text-underline-offset: 2px; transition: color .2s; }
+.powered-by a:hover { color: var(--text); }
 
 /* ---------- tile grid (Work-page style: 2 wide columns, 8px gaps) ---------- */
 .tiles { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); margin-top: 26px; }
@@ -314,6 +319,31 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
   .topnav { flex-wrap: wrap; row-gap: 10px; }
   .nav-links { flex-wrap: wrap; row-gap: 8px; }
 }
+
+/* ---------- videos page: embedded-in-tile players ---------- */
+.video-year + .video-year { margin-top: 8px; }
+.video-tile { cursor: pointer; }
+/* dim the poster a touch so the play button + title read clearly */
+.video-tile .tile-img { filter: brightness(.82); transition: transform .5s ease, filter .3s ease; }
+.video-tile:hover .tile-img { filter: brightness(.92); }
+.video-tile--drive { background: linear-gradient(150deg, #1c1c1c, #121212); }
+.video-play {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); z-index: 3;
+  width: 62px; height: 62px; border-radius: 50%; pointer-events: none;
+  background: rgba(17,17,17,.6); border: 1.5px solid rgba(255,255,255,.85);
+  display: flex; align-items: center; justify-content: center;
+  transition: background .2s ease, transform .2s ease;
+}
+.video-tile:hover .video-play { background: rgba(0,0,0,.82); transform: translate(-50%,-50%) scale(1.07); }
+.video-play::before {
+  content: ''; margin-left: 4px; border-style: solid;
+  border-width: 10px 0 10px 17px; border-color: transparent transparent transparent #fff;
+}
+/* once playing, the tile is just the iframe */
+.video-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; z-index: 5; }
+.video-tile.is-playing { cursor: default; }
+/* placeholder tile (no film linked yet) */
+.video-tile--pending .pending-tag { color: #ffd27d; opacity: .85; }
 
 /* fallback when a tile cover can't be loaded (gated photo) */
 .tile-cover-locked { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #161616; color: #6e6e6e; font-family: var(--head); letter-spacing: .2em; text-transform: uppercase; font-size: 12px; }

@@ -104,7 +104,7 @@ def tile_html(v: dict) -> str:
                 <div class="tile-inner">
                     <div class="tile-title">{title}</div>
                     <div class="tile-sub">{loc}</div>
-                    <div class="pending-tag">Film coming soon</div>
+                    <div class="pending-tag">Video coming soon</div>
                 </div>
             </div>'''
 
@@ -122,7 +122,7 @@ def build() -> None:
     for year in sorted(by_year, reverse=True):
         vids = by_year[year]
         tiles = "\n".join(tile_html(v) for v in vids)
-        count = f"{len(vids)} film{'s' if len(vids) != 1 else ''}"
+        count = f"{len(vids)} video{'s' if len(vids) != 1 else ''}"
         sections.append(f'''        <section class="video-year">
             <div class="section-head"><h2>{year}</h2><span class="count">{count}</span></div>
             <div class="tiles tiles--dense">

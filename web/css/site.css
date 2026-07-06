@@ -52,7 +52,7 @@ img { display: block; }
 
 /* ---------- landing hero (landing page only) ---------- */
 .hero {
-  position: relative; min-height: 34vh; display: flex; align-items: center; justify-content: center;
+  position: relative; display: flex; align-items: center; justify-content: center;
   text-align: center; overflow: hidden; padding: 48px 24px;
 }
 .hero::before {
@@ -76,6 +76,11 @@ img { display: block; }
 .stat-num { font-family: var(--head); color: var(--text); font-size: clamp(26px, 2.6vw, 40px); line-height: 1; }
 .stat-num .stat-frac { color: var(--muted); font-size: .62em; }
 .stat-label { font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+/* ---------- landing "powered by" credit (centered between hero and tiles) ---------- */
+.powered-by { text-align: center; font-family: var(--body); color: var(--muted); font-size: 16px; letter-spacing: .02em; margin: 0 0 48px; }
+.powered-by a { color: var(--muted-2); text-decoration: underline; text-underline-offset: 2px; transition: color .2s; }
+.powered-by a:hover { color: var(--text); }
 
 /* ---------- tile grid (Work-page style: 2 wide columns, 8px gaps) ---------- */
 .tiles { display: grid; gap: 8px; grid-template-columns: repeat(2, 1fr); margin-top: 26px; }

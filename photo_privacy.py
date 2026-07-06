@@ -427,7 +427,9 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
                                 {f'blog-{s}-private' for s in private_blogs}),
         'private_photos': {s: sorted(ids) for s, ids in sorted(private_map.items())},
         'force_public': {k: sorted(v) for k, v in sorted(serve.items())},
-        'private_pages': sorted(f'/blogs/{s}' for s in private_blogs),
+        # Private standalone pages (middleware gates path == p or path startswith p+'.'):
+        # every private blog post, plus the Videos page (fully behind the all-access gate).
+        'private_pages': sorted([f'/blogs/{s}' for s in private_blogs] + ['/videos']),
     }
     if dry_run:
         echo(f"  [dry-run] would write {PRIVATE_INDEX.relative_to(ROOT)} "

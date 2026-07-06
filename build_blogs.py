@@ -450,6 +450,7 @@ NAV = '''    <nav class="topnav">
             <a href="/china.html">China</a>
             <a href="/blogs.html"{blogs_active}>Blogs</a>
             <a href="/rooftopping.html" data-gated>Urbex</a>
+            <a href="/videos.html" data-gated>Videos</a>
             <a href="/galleries.html">Galleries</a>
         </div>
         <a class="nav-name" href="/index.html">Ryan McLoughlin</a>

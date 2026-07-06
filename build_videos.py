@@ -68,8 +68,8 @@ NAV = '''    <nav class="topnav">
             <a href="china.html">China</a>
             <a href="blogs.html">Blogs</a>
             <a href="rooftopping.html" data-gated>Urbex</a>
-            <a href="videos.html" class="active">Videos</a>
             <a href="galleries.html">Galleries</a>
+            <a href="videos.html" class="active">Videos</a>
         </div>
         <a class="nav-name" href="index.html">Ryan McLoughlin</a>
         <span class="nav-spacer"></span>

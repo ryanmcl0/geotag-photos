@@ -342,7 +342,7 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
 /* once playing, the tile is just the iframe */
 .video-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; z-index: 5; }
 .video-tile.is-playing { cursor: default; }
-/* placeholder tile (no film linked yet) */
+/* placeholder tile (no video linked yet) */
 .video-tile--pending .pending-tag { color: #ffd27d; opacity: .85; }
 
 /* fallback when a tile cover can't be loaded (gated photo) */

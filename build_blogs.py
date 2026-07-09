@@ -452,6 +452,8 @@ NAV = '''    <nav class="topnav">
             <a href="/rooftopping.html" data-gated>Urbex</a>
             <a href="/galleries.html">Galleries</a>
             <a href="/videos.html" data-gated>Videos</a>
+            <a href="/plans/" data-gated>Plans</a>
+            <a href="/about.html">About</a>
         </div>
         <a class="nav-name" href="/index.html">Ryan McLoughlin</a>
         <span class="nav-spacer"></span>

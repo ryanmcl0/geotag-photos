@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>About · Ryan's Travels</title>
+    <link rel="stylesheet" href="css/site.css"/>
+    <style>
+        .about-layout {
+            display: grid; grid-template-columns: minmax(0, 1fr) 340px;
+            gap: clamp(36px, 5vw, 72px); align-items: start;
+        }
+        .about-photo {
+            position: fixed; top: 50%; right: var(--margin);
+            transform: translateY(-50%); width: 340px; margin: 0;
+        }
+        .about-photo img { width: 100%; height: auto; background: #161616; }
+        @media (max-width: 900px) {
+            .about-layout { grid-template-columns: 1fr; }
+            .about-photo {
+                position: static; transform: none; width: auto;
+                max-width: 420px; margin: 4px 0 34px;
+            }
+        }
+        .about-prose { max-width: 760px; margin: 34px 0 0; }
+        .about-prose p { color: var(--muted-2); font-size: 17px; line-height: 1.62; margin: 0 0 22px; }
+        .about-prose a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; transition: color .2s; }
+        .about-prose a:hover { color: var(--muted); }
+        .about-prose .lead { color: var(--text); font-size: clamp(18px, 2vw, 21px); line-height: 1.55; margin-bottom: 34px; }
+        .about-prose h2 {
+            font-family: var(--head); text-transform: uppercase; letter-spacing: .1em;
+            color: var(--text); font-size: clamp(20px, 2.2vw, 27px); line-height: 1;
+            margin: 44px 0 18px;
+        }
+        .about-list { max-width: 760px; margin: 0 0 8px; padding: 0; list-style: none; counter-reset: init; }
+        .about-list li {
+            counter-increment: init; position: relative; padding: 0 0 20px 46px;
+            color: var(--muted-2); font-size: 17px; line-height: 1.55;
+        }
+        .about-list li::before {
+            content: counter(init); position: absolute; left: 0; top: -2px;
+            font-family: var(--head); font-size: 26px; color: var(--text); line-height: 1;
+        }
+    </style>
+</head>
+<body>
+    <nav class="topnav">
+        <div class="nav-links">
+            <a href="index.html">Home</a>
+            <a href="map.html">Map</a>
+            <a href="china.html">China</a>
+            <a href="blogs.html">Blogs</a>
+            <a href="rooftopping.html" data-gated>Urbex</a>
+            <a href="galleries.html">Galleries</a>
+            <a href="videos.html" data-gated>Videos</a>
+            <a href="plans/" data-gated>Plans</a>
+            <a href="about.html" class="active">About</a>
+        </div>
+        <a class="nav-name" href="index.html">Ryan McLoughlin</a>
+        <span class="nav-spacer"></span>
+        <div class="nav-links"><a id="seeall-link" href="#">See All</a></div>
+    </nav>
+
+    <main class="wrap">
+        <div class="china-masthead">
+            <h1>About</h1>
+        </div>
+
+        <div class="about-layout">
+        <div class="about-prose">
+            <p class="lead">More than 11000 of my edited photos from the last 10 years are hosted here via CDN completely for free, encompassing my lifes work, categorised with filters for time and location that vary in accuracy. There is headroom for 5k more for free, and then only &pound;0.011 per month for every further 1k photos added. Essentially pennies per year for lifetime growth.</p>
+
+            <p>This project was conceived via 4 main initiatives, which drove every engineering decision.</p>
+
+            <ol class="about-list">
+                <li>Not letting a decade of memories experiences go untouched and forgotten on hard drives.</li>
+                <li>Preserve the personal meaning and significance of my photos and travel - retain my personal sentiments and naturally convey my motivations and passions. Not just photos reduced to an Instagram post.</li>
+                <li>Self hosted - no dependencies on third parties, version controlled, no webdesign UI faff, tailored exactly as I need.</li>
+                <li>Near to 0 cost - I already spent all my money on travel and gear and it makes me no money back, plus it's incredibly time consuming, so it shouldn't cost me anything on top of that (except more time).</li>
+                <li>A central place to track my lifes work, and control what I'm happy to share publicly and what I prefer to keep private.</li>
+            </ol>
+
+            <p>Now it's up and running, it's easy to maintain and add to. Reaching that point required significant effort. Weeks were spent on the map alone, backfilling years of photos trying to maintain accurate location placement.</p>
+
+            <h2>Accuracy</h2>
+
+            <p>I only started to consistently record live accurate GPS data on trips in 2024, so photo placement and statistics since then is pretty accurate (still with some variations, like where I forgot to start recording). Before 2024, which is the majority of the content, varies in accuracy. The location and time info is derived from a mixture of 12 years of exported Google Maps timeline data, my location based directory naming structure and websearch of corresponding coordinates, GPS from phone photos matched to RAWs using timestamps, and manual corrections. The processing pipeline does a pretty good job of reconciling all of that, but of course it's full of edge cases where the locations just aren't right. It mostly falls apart when the camera datetime was set wrong, data source timestamps drifting across time zones, bad directory naming, or extremely niche building / random Chinese village directory names. I spent a good amount of time working to manually handle those cases, but it's just not worth the time for stuff that's from 10 years ago, so I'm mostly settled with the current state.</p>
+
+            <h2>Storage &amp; compression</h2>
+
+            <p>Fitting 11000+ editing photos into Cloudflare R2 10GB free tier was a challenge. Those exported photos sit on my NAS at almost 500GB. In the end I achieved 98.4% filesize reduction while maintaining 94% quality. On a mobile device, and desktop browser without zooming the whole way in, quality difference is negligible. Some time was spent choosing the best format and compression algorithm, and in the end settled on .webp using lossy quality 85 at encoder method 6 (the slowest, highest-effort setting) compression. It took 3 iterations of reprocessing the entire 500gb 11k photos to settle on this. The whole collection gets uploaded directly to R2 using their wrangler CLI tool.</p>
+
+            <p>Detailed edge cases and ongoing improvements are documented by Claude in <a href="https://github.com/ryanmcl0/geotag-photos" target="_blank" rel="noopener">github</a>.</p>
+        </div>
+        <figure class="about-photo">
+            <img id="about-photo-img" alt="Kyrgyzstan, 2024" loading="lazy">
+        </figure>
+        </div>
+    </main>
+
+    <script>
+    (function () {
+        // Same host-aware base as index.html: /trips symlinks locally, /photos R2 proxy on pages.dev.
+        const H = location.hostname;
+        const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(H) || H.endsWith('.local') ||
+            /^10\./.test(H) || /^192\.168\./.test(H) || /^172\.(1[6-9]|2\d|3[01])\./.test(H);
+        const PB = LOCAL ? 'trips' : 'photos';
+        const img = document.getElementById('about-photo-img');
+        img.src = `${PB}/2024-kyrgyzstan/display/DSC04476-Edit-2.webp`;
+        img.addEventListener('error', () => {
+            const fig = img.closest('.about-photo');
+            if (fig) fig.style.display = 'none';
+        });
+    })();
+    </script>
+    <script src="js/unlock.js"></script>
+</body>
+</html>

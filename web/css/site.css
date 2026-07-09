@@ -310,14 +310,15 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
      top-right (clear of the bottom-aligned text) so they never overlap on mobile */
   .tile-bloglinks { top: 12px; bottom: auto; right: 12px; align-items: flex-end; }
 }
-@media (max-width: 460px) {
-  .nav-name { display: none; }
-}
-@media (max-width: 520px) {
-  /* 6 links + See All can exceed narrow viewports — wrap rather than overflow
-     into a horizontally scrollable header */
-  .topnav { flex-wrap: wrap; row-gap: 10px; }
-  .nav-links { flex-wrap: wrap; row-gap: 8px; }
+@media (max-width: 760px) {
+  /* 9 links + See All overflow a narrow header, and the absolutely-centred brand
+     name overlaps them. Give the name and each link group their own full-width row
+     (flex-basis:100% is what forces the links to actually wrap instead of the group
+     staying one wide, clipped row) so every item stays visible. */
+  .topnav { flex-wrap: wrap; row-gap: 12px; justify-content: center; }
+  .nav-name { position: static; transform: none; order: -1; flex-basis: 100%; text-align: center; }
+  .nav-spacer { display: none; }
+  .nav-links { flex-basis: 100%; flex-wrap: wrap; justify-content: center; gap: 10px 16px; }
 }
 
 /* ---------- videos page: embedded-in-tile players ---------- */

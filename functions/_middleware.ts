@@ -54,6 +54,9 @@ const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
     if (['/rooftopping', '/rooftopping.html'].includes(path)) return true;
+    // Private trip plans: gate the whole /plans/ section (hub, plan pages, their
+    // JSON/GPX/JS/CSS) behind the all-access password, like Urbex/Videos.
+    if (path === '/plans' || path === '/plans.html' || path.startsWith('/plans/')) return true;
     // Private blog posts: /blogs/<slug> (+ .html / the tile-metadata .json)
     if ((ACCESS.private_pages || []).some(p => path === p || path.startsWith(p + '.'))) return true;
     if (path.startsWith('/collections/')) return !PUBLIC_COLLECTIONS.includes(path);

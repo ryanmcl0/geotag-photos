@@ -464,6 +464,12 @@ class GitSyncer:
                     '--exclude', '_middleware.ts',
                     '--exclude', 'functions',
                     '--exclude', 'wrangler.toml',
+                    # web/plans is a symlink into the git-excluded private_planning/
+                    # dir. As a raw symlink it dangles in the mirror and CF Pages
+                    # fails the build ("build output directory contains links to
+                    # files that can't be accessed"). It is instead dereferenced
+                    # into the (private) mirror by the dedicated step below.
+                    '--exclude', 'plans',
                     '--exclude', 'trips/*/thumbnails',
                     '--exclude', 'trips/*/display',
                     str(web_src) + '/', str(self.target_path) + '/'
@@ -472,6 +478,31 @@ class GitSyncer:
             except subprocess.CalledProcessError as e:
                 print(f"    ✗ Sync failed: {e.stderr.decode()}")
                 return False
+
+        # 1b. Plans section (private): web/plans symlinks into private_planning/page,
+        # which is git-excluded from the public repo. Dereference (-L) the real files
+        # into the mirror (a PRIVATE repo) so /plans works on the deployed site. It is
+        # gated behind the all-access password by functions/_middleware.ts (the whole
+        # /plans/ prefix), same as Urbex/Videos.
+        plans_src = Path('web/plans')
+        if plans_src.exists():   # follows the symlink → True only if the target is present
+            plans_dst = self.target_path / 'plans'
+            if dry_run:
+                print(f"    [dry-run] would rsync (deref) {plans_src}/ to {plans_dst}/")
+            else:
+                plans_dst.mkdir(parents=True, exist_ok=True)
+                try:
+                    subprocess.run([
+                        'rsync', '-aL', '--delete',
+                        '--exclude', '.DS_Store',
+                        str(plans_src) + '/', str(plans_dst) + '/'
+                    ], check=True, capture_output=True)
+                    print("    ✓ Synced plans/ (dereferenced, gated)")
+                except subprocess.CalledProcessError as e:
+                    print(f"    ✗ Plans sync failed: {e.stderr.decode()}")
+                    return False
+        else:
+            print("    ⚠️  web/plans target missing — skipping plans/ (private_planning not mounted?)")
 
         # 2. Copy functions/ (middleware + the R2 photo proxy and its access index)
         func_src = Path('functions')

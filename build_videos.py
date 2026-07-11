@@ -69,8 +69,13 @@ NAV = '''    <nav class="topnav">
             <a href="blogs.html">Blogs</a>
             <a href="rooftopping.html" data-gated>Urbex</a>
             <a href="galleries.html">Galleries</a>
-            <a href="videos.html" class="active">Videos</a>
-            <a href="plans/" data-gated>Plans</a>
+            <div class="nav-more">
+                <button class="nav-more-toggle active" type="button">More</button>
+                <div class="nav-more-menu">
+                    <a href="videos.html" class="active">Videos</a>
+                    <a href="plans/" data-gated>Plans</a>
+                </div>
+            </div>
             <a href="about.html">About</a>
         </div>
         <a class="nav-name" href="index.html">Ryan McLoughlin</a>

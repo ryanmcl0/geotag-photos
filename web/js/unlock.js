@@ -85,7 +85,27 @@ window.Unlock = (function () {
         location.reload();
     }
 
+    function bindNavMore() {
+        document.querySelectorAll('.nav-more').forEach(nm => {
+            const toggle = nm.querySelector('.nav-more-toggle');
+            if (!toggle) return;
+            toggle.addEventListener('click', e => {
+                e.stopPropagation();
+                const isOpen = nm.classList.contains('open');
+                document.querySelectorAll('.nav-more.open').forEach(o => { if (o !== nm) o.classList.remove('open'); });
+                nm.classList.toggle('open', !isOpen);
+            });
+        });
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.nav-more.open').forEach(o => o.classList.remove('open'));
+        });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') document.querySelectorAll('.nav-more.open').forEach(o => o.classList.remove('open'));
+        });
+    }
+
     function bind() {
+        bindNavMore();
         document.querySelectorAll('[data-gated]').forEach(t => {
             t.addEventListener('click', e => {
                 if (unlocked()) return;

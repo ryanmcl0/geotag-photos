@@ -44,6 +44,32 @@ img { display: block; }
 }
 .nav-spacer { flex: 1; }
 
+/* padding-bottom + matching negative margin extends .nav-more's hoverable box down
+   to the menu with no visual gap, so :hover survives the cursor crossing from the
+   toggle to the menu (a bare gap would drop :hover before the cursor reaches it) */
+.nav-more { position: relative; padding-bottom: 18px; margin-bottom: -18px; }
+.nav-more-toggle {
+  background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+  font-family: var(--head); text-transform: uppercase; line-height: 1;
+  font-size: 15px; letter-spacing: .1em; color: var(--muted); transition: color .2s;
+}
+.nav-more-toggle::after {
+  content: ''; display: inline-block; margin-left: 5px; width: 0; height: 0;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 4px solid currentColor; vertical-align: middle;
+}
+.nav-more-toggle:hover, .nav-more-toggle.active, .nav-more.open .nav-more-toggle { color: var(--text); }
+.nav-more-menu {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  display: none; flex-direction: column; min-width: 130px; padding: 6px 0;
+  background: var(--panel); border: 1px solid var(--line); z-index: 50;
+}
+.nav-more.open .nav-more-menu { display: flex; }
+.nav-more-menu a { padding: 9px 18px; }
+@media (hover: hover) {
+  .nav-more:hover .nav-more-menu { display: flex; }
+}
+
 /* breadcrumbs (facet pages only; hidden when empty) */
 .crumbs { font-family: var(--head); font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); padding: 26px 0 0; }
 .crumbs:empty { display: none; }
@@ -295,7 +321,7 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
   :root { --margin: 12px; }
   .topnav { padding: 18px var(--margin); }
   .nav-name { font-size: 19px; letter-spacing: .1em; }
-  .nav-links { gap: 14px; } .nav-links a { font-size: 13px; }
+  .nav-links { gap: 14px; } .nav-links a, .nav-more-toggle { font-size: 13px; }
   .tiles, .tiles.tiles--dense { grid-template-columns: 1fr; }
   .photo-grid { gap: 6px; } .photo-row { gap: 6px; }
   /* 1-col tile grid can't host 2x2 spans */

@@ -50,8 +50,15 @@
     if (st.cities) parts.push(stat(String(st.cities), 'cities'));
     if (st.countries) parts.push(stat(String(st.countries), 'countries'));
     if (st.places) parts.push(stat(String(st.places), 'cities & regions'));
+    // Blurb under the stats (config/classifications.json `description`): the first
+    // paragraph reads as the standfirst, the rest as body copy.
+    const paras = DATA.description || [];
+    const desc = paras.length
+      ? `<div class="masthead-desc">${paras.map((p, i) =>
+          `<p class="${i === 0 ? 'masthead-lead' : ''}">${esc(p)}</p>`).join('')}</div>`
+      : '';
     return el('header', 'china-masthead',
-      `<h1>${esc(DATA.title)}</h1><div class="stat-strip">${parts.join('')}</div>`);
+      `<h1>${esc(DATA.title)}</h1><div class="stat-strip">${parts.join('')}</div>${desc}`);
   }
 
   function renderHub() {
@@ -98,8 +105,13 @@
   }
 
   function buildProvinceRevealHTML(tile) {
-    const chips = (tile.subtiles || []).filter(s => s.done).map(s =>
-      `<span class="chip">${esc(s.title)}</span>`).join('');
+    // Every province that has been VISITED, which is not the same as every province
+    // with photos on the site: a visited one can be locked (all its photos private)
+    // or still pending (trip back, photos not edited yet). Only "Not yet visited"
+    // is excluded, so the chips match the x/33 count above them.
+    const chips = (tile.subtiles || [])
+      .filter(s => s.pending !== 'Not yet visited')
+      .map(s => `<span class="chip">${esc(s.title)}</span>`).join('');
     return `<div class="tile-reveal">${chips}</div>`;
   }
 

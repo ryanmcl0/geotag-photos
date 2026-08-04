@@ -893,6 +893,9 @@ def build_collection(coll, do_category, force, private_map):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     base = {
         'id': coll['id'], 'title': coll['title'], 'subtitle': coll.get('subtitle', ''),
+        # Hub blurb under the stat strip: a list of paragraphs, the first read as
+        # the standfirst (see buildMasthead in web/js/china.js).
+        'description': coll.get('description', []),
         'stats': build_stats(coll),
         'generated': datetime.now().isoformat(timespec='seconds'),
     }

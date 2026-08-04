@@ -62,8 +62,9 @@ def _build_entry(trip: dict, is_public: bool) -> dict:
     name_year = re.match(r'^(\d{4})', name)
     start = dates.get('start', '')
     year = int(name_year.group(1)) if name_year else (int(start[:4]) if start[:4].isdigit() else None)
-    return {
-        'id': _slugify(name),
+    slug = _slugify(name)
+    entry = {
+        'id': slug,
         'name': name,
         'year': year,
         'dates': {'start': start, 'end': dates.get('end', start)},
@@ -73,6 +74,13 @@ def _build_entry(trip: dict, is_public: bool) -> dict:
         'location': trip.get('location'),
         'public': bool(is_public),
     }
+    # A placeholder can still have a route: a trip back from the road with its GPX
+    # merged but no photos edited yet. If web/trips/<slug>/route.geojson exists, the
+    # map draws the line alongside the "Photos pending" pin (see loadSingleTrip).
+    if (PROJECT_ROOT / 'web' / 'trips' / slug / 'route.geojson').exists():
+        entry['path'] = f'trips/{slug}'
+        entry['route'] = True
+    return entry
 
 
 def apply_placeholders(index_path: Path, echo=print) -> list:

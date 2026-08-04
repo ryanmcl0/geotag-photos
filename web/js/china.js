@@ -154,8 +154,11 @@
         return;
       }
       if (!s.done) {
-        // unvisited provinces stay hidden
-        if (s.pending === 'Not public yet' && year === 'all') grid.appendChild(buildSubtile(tile, s));
+        // Visited but nothing published yet (photos pending) still shows as a muted
+        // tile on the unfiltered view; never-visited provinces stay hidden.
+        if (s.pending && s.pending !== 'Not yet visited' && year === 'all') {
+          grid.appendChild(buildSubtile(tile, s));
+        }
         return;
       }
       if (year !== 'all' && !(s.photos || []).some(p => p.year === year)) return;
@@ -185,9 +188,18 @@
       return card;
     }
     if (!s.done) {
-      const t = el('div', 'tile tile--pending');
+      // Road legs carry car/dates + km even while pending, so the drive still reads
+      // on the tile. Province tiles have neither and just show the title.
+      const bits = [s.subtitle, s.infographic].filter(Boolean).map(esc).join(' · ');
+      // A leg whose GPX is already merged onto the map opens its route, photos or
+      // not — the drive is the thing worth seeing while the edits are still to come.
+      const linked = s.has_route && s.trip;
+      const t = el(linked ? 'a' : 'div', 'tile tile--pending' + (linked ? ' tile--pending-link' : ''));
+      if (linked) t.href = `map.html?mode=trip&trip=${encodeURIComponent(s.trip)}`;
       t.innerHTML = `<div class="tile-inner"><div class="tile-title">${esc(s.title)}</div>
-        <div class="pending-tag">${esc(s.pending || 'Pending')}</div></div>`;
+        ${bits ? `<div class="tile-sub">${bits}</div>` : ''}
+        <div class="pending-tag">${esc(s.pending || 'Pending')}</div>
+        ${linked ? '<div class="pending-route-link">View route</div>' : ''}</div>`;
       return t;
     }
     // Roads sub-tiles open the per-trip map; province tiles open the map filtered

@@ -623,6 +623,14 @@ def main():
         apply_placeholders(Path('web/trips/index.json'))
         print()
 
+    # Step 1c-ii: Rebuild the public coverage file: plain pins showing where the
+    # gated trips/photos are, without exposing them. Runs after the privacy sync +
+    # placeholders so it reflects exactly what this deploy hides.
+    print("📌 Building private coverage pins...")
+    from private_coverage import build as build_private_coverage
+    build_private_coverage(dry_run=args.dry_run)
+    print()
+
     # Step 1d: Refresh the landing-page stats AFTER the privacy sync/prune/
     # placeholders have settled the index and manifests, so the homepage numbers
     # always match what this deploy actually ships (they're otherwise only

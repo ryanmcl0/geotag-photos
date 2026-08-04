@@ -545,6 +545,31 @@ details[open] .country-summary::after {
 .pending-popup strong { display: block; margin-bottom: 2px; }
 .pending-popup span { color: #8a8f98; font-size: 12px; }
 
+/* Private coverage pin: a plain teardrop marking a gated place (private trip, or
+   a photo hidden inside a public trip). Never clustered and never a thumbnail, so
+   it reads as "been here" without pretending to be a photo marker. */
+.coverage-marker-icon {
+    cursor: pointer;
+    line-height: 0;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+    transition: transform 0.12s ease;
+    transform-origin: 50% 100%;
+}
+.coverage-pin path {
+    fill: #3b82f6;
+    stroke: #ffffff;
+    stroke-width: 1.6;
+}
+.coverage-pin circle { fill: #ffffff; }
+.coverage-marker-icon:hover {
+    transform: scale(1.15);
+    z-index: 650 !important;
+}
+.coverage-popup { text-align: center; }
+.coverage-popup strong { display: block; margin-bottom: 2px; }
+.coverage-popup span { display: block; color: #8a8f98; font-size: 12px; }
+.coverage-popup-note { margin-top: 3px; font-size: 11px; }
+
 
 /* Custom cluster markers - clean minimal style */
 .marker-cluster {

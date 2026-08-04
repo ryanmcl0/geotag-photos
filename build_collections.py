@@ -728,6 +728,30 @@ def _locked_subtile(s, full_s, cover=None):
     return out
 
 
+# Facets where a sub-tile can legitimately exist before any photo does: a visited
+# province or a driven road leg whose trip is still a pending placeholder. Their
+# rosters are the source of truth (the km / visited count already reflect them), so
+# the tile stays on the page, muted, instead of rendering empty or vanishing.
+_PENDING_RULES = {'province', 'road_trips'}
+PENDING_LABEL = 'Photos pending'
+
+
+def _mark_pending(tile, rule):
+    """Turn 'visited/driven but no photos anywhere' sub-tiles into pending tiles.
+    Applied to the FULL build; the public build gets the same treatment inside
+    _mark_not_public, which can tell "no photos yet" from "photos, all private"."""
+    if rule not in _PENDING_RULES:
+        return
+    for s in _all_subtiles(tile):
+        if s.get('done') and not s.get('photos'):
+            s['done'] = False
+            s['pending'] = PENDING_LABEL
+            # A road leg back from the trip already has its merged route on the map
+            # even with no photos processed — let the tile open it.
+            if s.get('trip') and (WEB_TRIPS / s['trip'] / 'route.geojson').exists():
+                s['has_route'] = True
+
+
 def _mark_not_public(pub_tile, full_tile, id_index):
     """Reconcile a derived facet's public variant against the full build:
     - stamp every sub-tile with the FULL (public+private) photo count, so counts
@@ -743,10 +767,18 @@ def _mark_not_public(pub_tile, full_tile, id_index):
             f = full_by_id.get(s['id'])
             if f and f.get('count') is not None:
                 s['count'] = f['count']
-            if s.get('done') and not s.get('photos') and f and f.get('photos'):
-                spec = covers.get(s.get('title'))
-                cover = resolve_cover(spec, id_index, []) if spec else None
-                subtiles[i] = _locked_subtile(s, f, cover)
+            if s.get('done') and not s.get('photos'):
+                if f and f.get('photos'):
+                    spec = covers.get(s.get('title'))
+                    cover = resolve_cover(spec, id_index, []) if spec else None
+                    subtiles[i] = _locked_subtile(s, f, cover)
+                elif f and not f.get('done') and f.get('pending'):
+                    # Nothing private to hide either: the trip's photos simply
+                    # aren't processed yet. Same muted pending tile as the full build.
+                    s['done'] = False
+                    s['pending'] = f['pending']
+                    if f.get('has_route'):
+                        s['has_route'] = True
     walk(pub_tile.get('subtiles') or [])
     for sec in pub_tile.get('sections') or []:
         walk(sec.get('subtiles') or [])
@@ -855,6 +887,7 @@ def build_collection(coll, do_category, force, private_map):
         result['cover'] = resolve_cover(cover_spec(coll['id'], facet['id'], facet.get('cover')),
                                         id_index, pool)
         apply_subtile_covers(result, id_index)
+        _mark_pending(result, rule)
         tiles.append(result)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)

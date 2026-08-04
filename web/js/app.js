@@ -41,6 +41,14 @@ let photoIndexMap = {}; // photoId → index in pswpItems
 const tripLayers = {};
 const loadedTripIds = new Set();
 
+// Private-coverage layer: plain pins for places that are gated (private trips, and
+// photos hidden inside public trips). Shown only while LOCKED. Once unlocked the
+// real photo clusters take their place. See private_coverage.py for what the file
+// does and doesn't contain (coords rounded to ~1 km, no photos, no place names).
+let coverageData = null;          // parsed trips/private_coverage.json (fetched once)
+let coverageMarkers = [];         // every coverage marker, pre-built
+let coverageLayer = null;         // cluster group holding the currently-shown subset
+
 function checkAllAccess() {
     return document.cookie.split(';').some(c => {
         const t = c.trim();
@@ -133,7 +141,9 @@ function syncVisibleTripLayers({ fit = false } = {}) {
     rebuildGlobalSiblingChain(); // one chain across all now-visible trips
     updateTripInfo();
     reinitLightbox();
-    if (fit) fitMapToBounds();
+    // Coverage pins follow the same filters. Fit after they've settled so a filter
+    // that leaves only private coverage still frames the map on something.
+    syncPrivateCoverage().then(() => { if (fit) fitMapToBounds(); });
 }
 
 // On phones/tablets the year + country + route controls collapse behind a single
@@ -817,6 +827,8 @@ async function loadTripData() {
 
         if (trips.length === 0) {
             document.getElementById('trip-name').textContent = 'No trips found';
+            await syncPrivateCoverage();   // gated places still show as plain pins
+            fitMapToBounds();
             return;
         }
 
@@ -834,6 +846,7 @@ async function loadTripData() {
         // through there.)
         rebuildGlobalSiblingChain();
         updateTripInfo();
+        await syncPrivateCoverage();
         fitMapToBounds();
 
     } catch (error) {
@@ -863,18 +876,32 @@ async function loadSingleTrip(trip, basePath) {
                            `<span>Photos pending</span></div>`)
                 .addTo(markers);
         }
+        // A placeholder can still carry a route (GPX merged, photos not edited yet).
+        // Draw the line now; the photo clusters arrive when the trip is processed.
+        let route = L.featureGroup();
+        if (trip.route) {
+            try {
+                const res = await fetch(`${tripPath}/route.geojson?t=${Date.now()}`);
+                if (res.ok) route = buildRouteLayer(await res.json(), color, trip.name);
+            } catch (e) {
+                console.warn(`No route for pending trip ${trip.id}:`, e.message);
+            }
+        }
         tripLayers[trip.id] = {
-            route: L.featureGroup(),
+            route,
             markers,
             color,
-            hasGpx: false,
+            hasGpx: Boolean(trip.route),
             visible: true,
             pending: true,
         };
         allTrips.push(trip);
         allManifests.push({ tripId: trip.id, photos: [], clusters: [] });
         loadedTripIds.add(trip.id);
-        if (shouldDisplayTrip(trip)) tripLayers[trip.id].markers.addTo(map);
+        if (shouldDisplayTrip(trip)) {
+            tripLayers[trip.id].route.addTo(map);
+            tripLayers[trip.id].markers.addTo(map);
+        }
         return;
     }
 
@@ -1316,6 +1343,115 @@ function createPhotoIcon(count, thumbnailUrl, endpoint) {
     });
 }
 
+/* ---------------------------------------------------------------------------
+ * Private coverage pins
+ *
+ * Gated places (private trips + photos hidden inside public trips) are invisible
+ * to a locked visitor, which loses the shape of where the travel actually went.
+ * trips/private_coverage.json is a public, deliberately thin file (rounded
+ * coordinates, trip name and dates, nothing else), rendered here as plain pins.
+ * No thumbnails, no photo counts, no place names, and no clustering; unlocking
+ * replaces them with the real photo clusters.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A plain map pin, Google My Maps style: teardrop, no thumbnail, no count.
+ * Deliberately NOT clustered (see syncPrivateCoverage) so overlapping pins read
+ * as "lots of places here", which is the whole point of the coverage layer.
+ */
+function createCoverageIcon() {
+    return L.divIcon({
+        html: `
+            <svg class="coverage-pin" viewBox="0 0 24 34" width="24" height="34" aria-hidden="true">
+                <path d="M12 1C6.5 1 2 5.4 2 10.9 2 18.3 12 33 12 33s10-14.7 10-22.1C22 5.4 17.5 1 12 1z"/>
+                <circle cx="12" cy="10.9" r="3.6"/>
+            </svg>
+        `,
+        className: 'coverage-marker-icon',
+        iconSize: L.point(24, 34),
+        iconAnchor: L.point(12, 33),
+        popupAnchor: L.point(0, -30)
+    });
+}
+
+/** Fetch the coverage file once. Missing/unreadable is not an error, just no pins. */
+async function loadCoverageData() {
+    if (coverageData) return coverageData;
+    const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+    try {
+        const res = await fetch(`${basePath}trips/private_coverage.json?t=${Date.now()}`);
+        coverageData = res.ok ? await res.json() : { trips: [] };
+    } catch (e) {
+        coverageData = { trips: [] };
+    }
+    return coverageData;
+}
+
+function buildCoverageMarkers() {
+    coverageMarkers = [];
+    (coverageData.trips || []).forEach(trip => {
+        const dates = trip.dates || {};
+        const range = dates.start
+            ? (dates.end && dates.end !== dates.start
+                ? `${formatDate(dates.start)} – ${formatDate(dates.end)}`
+                : formatDate(dates.start))
+            : '';
+        (trip.points || []).forEach(pt => {
+            const marker = L.marker([pt.lat, pt.lon], { icon: createCoverageIcon() });
+            marker.bindPopup(
+                `<div class="coverage-popup"><strong>${escapeHtml(trip.name)}</strong>` +
+                (range ? `<span>${range}</span>` : '') +
+                `<span class="coverage-popup-note">🔒 Private, photos hidden</span></div>`
+            );
+            marker.country = pt.country || null;
+            marker.coverageYear = trip.year || null;
+            coverageMarkers.push(marker);
+        });
+    });
+}
+
+/** Coverage pins honour the same year/country/route filters as trips. */
+function coverageMarkerVisible(marker) {
+    if (activeRouteFilter === 'gpx') return false;   // coverage has no route
+    if (activeCountryFilter !== null) {
+        if (!marker.country) return true;            // unknown country: never hide silently
+        return activeCountryFilter.has(marker.country);
+    }
+    if (activeYearFilter && marker.coverageYear !== activeYearFilter) return false;
+    return true;
+}
+
+/**
+ * Show/hide/refresh the coverage layer for the current lock state and filters.
+ * Called on load, after every filter change, and on unlock/lock.
+ */
+async function syncPrivateCoverage() {
+    const viewMode = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.mode) || 'all';
+    // Single-trip and collection views are about specific photos, so coverage pins
+    // from other trips would be noise there.
+    const wanted = !checkAllAccess() && (viewMode === 'all' || viewMode === 'year');
+
+    if (!wanted) {
+        if (coverageLayer) map.removeLayer(coverageLayer);
+        return;
+    }
+
+    await loadCoverageData();
+    if (!coverageMarkers.length) buildCoverageMarkers();
+    // A plain feature group, not a cluster group: coverage pins stay individual at
+    // every zoom, the way My Maps shows them.
+    if (!coverageLayer) coverageLayer = L.featureGroup();
+
+    let visible = coverageMarkers.filter(coverageMarkerVisible);
+    if (viewMode === 'year' && VIEW_CONFIG.year) {
+        visible = visible.filter(m => m.coverageYear === VIEW_CONFIG.year);
+    }
+    coverageLayer.clearLayers();
+    visible.forEach(m => coverageLayer.addLayer(m));
+    if (visible.length && !map.hasLayer(coverageLayer)) coverageLayer.addTo(map);
+    else if (!visible.length && map.hasLayer(coverageLayer)) map.removeLayer(coverageLayer);
+}
+
 /**
  * Marker for a placeholder ("Photos pending") trip — a muted dashed pill so it reads as
  * "been here, photos not up yet" rather than a photo cluster.
@@ -1530,6 +1666,11 @@ function fitMapToBounds() {
             bounds.extend(entry.markers.getBounds());
         }
     });
+    // Private coverage pins are on the map too, so frame them: a filter matching
+    // only gated places would fit to nothing.
+    if (coverageLayer && map.hasLayer(coverageLayer) && coverageLayer.getLayers().length > 0) {
+        bounds.extend(coverageLayer.getBounds());
+    }
     if (bounds.isValid()) {
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
         map.fitBounds(bounds, { padding: [50, 50], animate: !isMobile });

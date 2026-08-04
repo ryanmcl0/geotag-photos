@@ -90,6 +90,12 @@ img { display: block; }
 .hero-inner { position: relative; z-index: 2; }
 .hero h1 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .04em; color: var(--text); font-size: clamp(40px, 6.5vw, 78px); line-height: .96; }
 .hero p { margin: 12px auto 0; max-width: 560px; color: var(--muted); font-size: 16px; }
+/* Slogan under the hero title: quiet, letterspaced, sits between the headline
+   and the stat strip without competing with either. */
+.hero-tagline {
+  margin: 16px auto 0; color: var(--muted-2); font-style: italic;
+  font-size: clamp(20px, 2.4vw, 30px); letter-spacing: .02em;
+}
 
 /* ---------- layout ---------- */
 .wrap { padding: 0 var(--margin) 90px; }
@@ -170,6 +176,17 @@ img { display: block; }
 .tile--pending .tile-inner { text-align: center; padding: 20px; }
 .tile--pending .tile-title { color: var(--muted); }
 .tile--pending .pending-tag { font-family: var(--head); letter-spacing: .22em; text-transform: uppercase; font-size: 11px; color: #6a6a6a; margin-top: 10px; }
+/* Pending road legs still carry car/dates + km, so the drive reads on the tile. */
+.tile--pending .tile-sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
+/* A pending leg whose route is already on the map is clickable. */
+.tile--pending-link { cursor: pointer; text-decoration: none; transition: background .2s; }
+.tile--pending-link:hover { background: #1d1d1d; }
+.pending-route-link {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .18em;
+  font-size: 11px; color: var(--muted-2); margin-top: 12px;
+}
+.tile--pending-link:hover .pending-route-link { color: var(--text); }
+.tile--pending-link:hover .tile-title { color: var(--text); }
 
 /* ---------- Galleries call-to-action (home page) ---------- */
 .gallery-cta { display: flex; justify-content: center; margin-top: 30px; }

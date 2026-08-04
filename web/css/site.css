@@ -103,6 +103,16 @@ img { display: block; }
 /* ---------- china masthead (hub title + headline stats) ---------- */
 .china-masthead { margin: 40px 0 6px; }
 .china-masthead h1 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .05em; color: var(--text); font-size: clamp(48px, 7vw, 92px); line-height: .95; }
+/* Hub blurb under the stat strip: plain paragraphs, full width like the tile
+   grid below. */
+.masthead-desc { margin-top: 30px; }
+.masthead-desc p { margin: 0 0 14px; color: var(--muted-2); font-size: 16px; line-height: 1.65; }
+.masthead-desc p:last-child { margin-bottom: 0; }
+.masthead-lead {
+  color: var(--text) !important; font-size: clamp(19px, 2vw, 24px) !important;
+  line-height: 1.4 !important; margin-bottom: 18px !important;
+}
+
 .stat-strip { display: flex; gap: clamp(24px, 4vw, 64px); flex-wrap: wrap; margin-top: 22px; }
 .stat-strip--hero { justify-content: center; margin-top: 28px; }
 .stat-num { font-family: var(--head); color: var(--text); font-size: clamp(26px, 2.6vw, 40px); line-height: 1; }

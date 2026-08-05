@@ -11,8 +11,10 @@
             gap: clamp(36px, 5vw, 72px); align-items: start;
         }
         .about-photo {
-            position: fixed; top: 50%; right: var(--margin);
-            transform: translateY(-50%); width: 340px; margin: 0;
+            /* sticky (not fixed): pins while the prose scrolls, but stays inside its
+               grid column — and unlike position:fixed it can't silently break when an
+               ancestor gains a transform/filter (WebKit turns fixed into scroll-along) */
+            position: sticky; top: calc(50vh - 255px); width: 340px; margin: 0;
         }
         .about-photo img { width: 100%; height: auto; background: #161616; }
         @media (max-width: 900px) {

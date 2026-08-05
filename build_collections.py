@@ -560,6 +560,189 @@ def facet_roofs(facet, records, echo):
             'sections': sections}, all_photos
 
 
+# ---------------------------------------------------------------- places (sites / roads)
+
+def _match_tokens(entries, key='match'):
+    """[(token_lower, entry_index)] for longest-wins matching on the `building` field."""
+    toks = []
+    for i, e in enumerate(entries):
+        for t in e.get(key) or []:
+            toks.append((t.lower(), i))
+    return toks
+
+
+def _token_owner(building, tokens):
+    """Index of the entry whose LONGEST token matches this building string."""
+    bl = (building or '').lower()
+    if not bl:
+        return None
+    best = None
+    for t, i in tokens:
+        if t in bl and (best is None or len(t) > len(best[0])):
+            best = (t, i)
+    return best[1] if best else None
+
+
+def _subtile_for(entry, photos, extra=None):
+    """Common sub-tile shape: cover, count, year list, photo refs.
+    `cover_id` in the roster pins the cover to that photo id (as in bridges)."""
+    photos = by_time(photos)
+    pinned = next((p for p in photos if p['id'] == entry.get('cover_id')), None)
+    sub = {'id': slugify(entry.get('id') or entry['name']), 'title': entry['name'], 'done': True,
+           'count': len(photos),
+           'cover': _photo_ref(pinned) if pinned else pick_cover(photos),
+           'years': sorted({p['year'] for p in photos if p.get('year')}, reverse=True),
+           'photos': [_photo_ref(p, with_year=True) for p in photos]}
+    if entry.get('name_zh'):
+        sub['name_zh'] = entry['name_zh']
+    bits = [x for x in (entry.get('subtitle'), entry.get('province')) if x]
+    if bits:
+        sub['subtitle'] = ' · '.join(bits)
+    if entry.get('mw'):
+        sub['infographic'] = f"{entry['mw']:,} MW"
+    if extra:
+        sub.update(extra)
+    return sub
+
+
+def facet_energy(facet, records, echo):
+    """One tile per energy / industrial site, grouped into category sections.
+
+    A photo joins a site when it is inside the site's geofence (real-world lat/lon
+    + radius_km), when its `building` field matches one of the site's `match`
+    tokens (trips placed per-edits-folder rather than by GPS have no usable
+    per-photo position), or when its id is listed in `photos` — the escape hatch
+    for frames whose GPX placement drifted off the site (see Longyangxia)."""
+    roster = json.loads((ROOT / facet['roster']).read_text())
+    sites = roster.get('sites', [])
+    cats = roster.get('categories', [])
+    tokens = _match_tokens(sites)
+
+    rec_by_key = {(r['trip'], r['id']): r for r in records}
+    by_site = {i: [] for i in range(len(sites))}
+    for r in records:
+        owner = _token_owner(r['building'], tokens)
+        if owner is not None:
+            by_site[owner].append(r)
+    for i, s in enumerate(sites):
+        have = {(p['trip'], p['id']) for p in by_site[i]}
+        if s.get('lat') is not None and s.get('lon') is not None:
+            radius = s.get('radius_km', 2.0)
+            for r in records:
+                if (r['trip'], r['id']) in have:
+                    continue
+                if dist_km(s['lat'], s['lon'], r['lat'], r['lon']) <= radius:
+                    by_site[i].append(r)
+                    have.add((r['trip'], r['id']))
+        for ref in s.get('photos') or []:
+            key = (ref['trip'], ref['id']) if isinstance(ref, dict) else None
+            if key and key not in have and key in rec_by_key:
+                by_site[i].append(rec_by_key[key])
+                have.add(key)
+
+    order = [c['id'] for c in cats]
+    titles = {c['id']: c['title'] for c in cats}
+    sections, all_photos, with_photos = [], [], 0
+    for cid in order:
+        subs = []
+        idxs = [i for i, s in enumerate(sites) if s.get('category') == cid]
+        idxs.sort(key=lambda i: -len(by_site[i]))
+        for i in idxs:
+            photos = by_site[i]
+            if not photos:
+                echo(f"    ⚠ {sites[i]['name']}: no photos matched — check lat/lon/radius_km")
+                continue
+            all_photos.extend(photos)
+            with_photos += 1
+            subs.append(_subtile_for(sites[i], photos,
+                                     {'note': sites[i].get('note')} if sites[i].get('note') else None))
+        if subs:
+            sections.append({'id': cid, 'title': titles.get(cid, cid), 'subtiles': subs})
+    info = facet['infographic']['format'].format(
+        value=with_photos, total=len(sites), categories=len(sections))
+    years = sorted({y for sec in sections for s in sec['subtiles'] for y in s['years']}, reverse=True)
+    echo(f"  energy: {with_photos}/{len(sites)} sites with photos "
+         f"({len(all_photos)} photos, {len(sections)} categories)")
+    for sec in sections:
+        for s in sec['subtiles']:
+            echo(f"    [{sec['id']}] {s['title']}: {s['count']}")
+    return {'kind': 'tiered_tilegroup', 'infographic': info, 'years': years,
+            'sections': sections, 'unit': 'site'}, all_photos
+
+
+def facet_highways(facet, records, echo):
+    """One tile per numbered/named road, grouped into class sections.
+
+    Photo → road comes from config/road_assignments.json, built offline by
+    tools/road_scan.py (OpenStreetMap: the nearest way carrying a G/S/X route
+    number). `match` tokens on the `building` field cover trips whose photos are
+    positioned per-folder, where there is no position to snap to a road."""
+    roster = json.loads((ROOT / facet['roster']).read_text())
+    roads = roster.get('roads', [])
+    secs = roster.get('sections', [])
+    tokens = _match_tokens(roads)
+
+    assign_path = ROOT / roster.get('assignments', 'config/road_assignments.json')
+    assign = {}
+    if assign_path.exists():
+        assign = json.loads(assign_path.read_text()).get('photos', {})
+    else:
+        echo(f"    ⚠ {assign_path} missing — roads fall back to name matching only. "
+             f"Run tools/road_scan.py")
+
+    ref_owner = {}
+    for i, rd in enumerate(roads):
+        for ref in (rd.get('refs') or [rd['name']]):
+            ref_owner[ref.upper()] = i
+
+    # `exclude` = per-road ids vetoed in visual review (hotel rooms, markets, city
+    # walks that the GPS snap or a day-label token swept in)
+    excluded = {i: set(rd.get('exclude') or []) for i, rd in enumerate(roads)}
+    by_road = {i: [] for i in range(len(roads))}
+    seen = {i: set() for i in range(len(roads))}
+    for r in records:
+        key = f"{r['trip']}/{r['id']}"
+        owner = _token_owner(r['building'], tokens)
+        if owner is None:
+            # nearest numbered road first, then any other route it also sits on
+            for ref in assign.get(key, []):
+                if ref.upper() in ref_owner:
+                    owner = ref_owner[ref.upper()]
+                    break
+        if owner is not None and r['id'] in excluded[owner]:
+            continue
+        if owner is not None and (r['trip'], r['id']) not in seen[owner]:
+            by_road[owner].append(r)
+            seen[owner].add((r['trip'], r['id']))
+
+    min_photos = roster.get('min_photos', 1)
+    order = [s['id'] for s in secs]
+    titles = {s['id']: s['title'] for s in secs}
+    sections, all_photos, with_photos = [], [], 0
+    for sid in order:
+        subs = []
+        idxs = [i for i, rd in enumerate(roads) if rd.get('section') == sid]
+        idxs.sort(key=lambda i: -len(by_road[i]))
+        for i in idxs:
+            photos = by_road[i]
+            if len(photos) < min_photos:
+                echo(f"    ⚠ {roads[i]['name']}: {len(photos)} photo(s), below min_photos")
+                continue
+            all_photos.extend(photos)
+            with_photos += 1
+            subs.append(_subtile_for(roads[i], photos))
+        if subs:
+            sections.append({'id': sid, 'title': titles.get(sid, sid), 'subtiles': subs})
+    info = facet['infographic']['format'].format(value=with_photos, total=len(roads))
+    years = sorted({y for sec in sections for s in sec['subtiles'] for y in s['years']}, reverse=True)
+    echo(f"  highways: {with_photos}/{len(roads)} roads with photos ({len(all_photos)} photos)")
+    for sec in sections:
+        for s in sec['subtiles']:
+            echo(f"    [{sec['id']}] {s['title']}: {s['count']}")
+    return {'kind': 'tiered_tilegroup', 'infographic': info, 'years': years,
+            'sections': sections, 'unit': 'road'}, all_photos
+
+
 # ---------------------------------------------------------------- CLIP "By Category"
 
 def facet_category(facet, records, force, echo):
@@ -648,6 +831,7 @@ def facet_category(facet, records, force, echo):
 FACET_BUILDERS = {
     'road_trips': facet_roads, 'bridges': facet_bridges,
     'province': facet_provinces, 'rooftopping': facet_roofs,
+    'energy': facet_energy, 'highways': facet_highways,
 }
 
 

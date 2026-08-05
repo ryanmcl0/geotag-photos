@@ -399,8 +399,13 @@
       const subs = sec.subtiles.filter(s =>
         !selected || (s.years || []).some(y => selected.has(y)));
       if (!subs.length) return;
-      host.appendChild(el('div', 'tier-head',
-        `<h3>${esc(sec.title)}</h3><span class="count">${subs.length} building${subs.length !== 1 ? 's' : ''}</span>`));
+      // `unit` names what a sub-tile is (building / site / road); roofs predate it.
+      // An untitled section (highways' single flat list) renders without a header bar.
+      const unit = tile.unit || 'building';
+      if (sec.title) {
+        host.appendChild(el('div', 'tier-head',
+          `<h3>${esc(sec.title)}</h3><span class="count">${subs.length} ${esc(unit)}${subs.length !== 1 ? 's' : ''}</span>`));
+      }
       const grid = el('div', 'tiles tiles--dense tiles--mosaic');
       subs.forEach(s => grid.appendChild(buildSubtile(tile, s)));
       host.appendChild(grid);

@@ -50,8 +50,15 @@
     if (st.cities) parts.push(stat(String(st.cities), 'cities'));
     if (st.countries) parts.push(stat(String(st.countries), 'countries'));
     if (st.places) parts.push(stat(String(st.places), 'cities & regions'));
+    // Blurb under the stats (config/classifications.json `description`): the first
+    // paragraph reads as the standfirst, the rest as body copy.
+    const paras = DATA.description || [];
+    const desc = paras.length
+      ? `<div class="masthead-desc">${paras.map((p, i) =>
+          `<p class="${i === 0 ? 'masthead-lead' : ''}">${esc(p)}</p>`).join('')}</div>`
+      : '';
     return el('header', 'china-masthead',
-      `<h1>${esc(DATA.title)}</h1><div class="stat-strip">${parts.join('')}</div>`);
+      `<h1>${esc(DATA.title)}</h1><div class="stat-strip">${parts.join('')}</div>${desc}`);
   }
 
   function renderHub() {
@@ -98,8 +105,13 @@
   }
 
   function buildProvinceRevealHTML(tile) {
-    const chips = (tile.subtiles || []).filter(s => s.done).map(s =>
-      `<span class="chip">${esc(s.title)}</span>`).join('');
+    // Every province that has been VISITED, which is not the same as every province
+    // with photos on the site: a visited one can be locked (all its photos private)
+    // or still pending (trip back, photos not edited yet). Only "Not yet visited"
+    // is excluded, so the chips match the x/33 count above them.
+    const chips = (tile.subtiles || [])
+      .filter(s => s.pending !== 'Not yet visited')
+      .map(s => `<span class="chip">${esc(s.title)}</span>`).join('');
     return `<div class="tile-reveal">${chips}</div>`;
   }
 
@@ -154,8 +166,11 @@
         return;
       }
       if (!s.done) {
-        // unvisited provinces stay hidden
-        if (s.pending === 'Not public yet' && year === 'all') grid.appendChild(buildSubtile(tile, s));
+        // Visited but nothing published yet (photos pending) still shows as a muted
+        // tile on the unfiltered view; never-visited provinces stay hidden.
+        if (s.pending && s.pending !== 'Not yet visited' && year === 'all') {
+          grid.appendChild(buildSubtile(tile, s));
+        }
         return;
       }
       if (year !== 'all' && !(s.photos || []).some(p => p.year === year)) return;
@@ -185,9 +200,18 @@
       return card;
     }
     if (!s.done) {
-      const t = el('div', 'tile tile--pending');
+      // Road legs carry car/dates + km even while pending, so the drive still reads
+      // on the tile. Province tiles have neither and just show the title.
+      const bits = [s.subtitle, s.infographic].filter(Boolean).map(esc).join(' · ');
+      // A leg whose GPX is already merged onto the map opens its route, photos or
+      // not — the drive is the thing worth seeing while the edits are still to come.
+      const linked = s.has_route && s.trip;
+      const t = el(linked ? 'a' : 'div', 'tile tile--pending' + (linked ? ' tile--pending-link' : ''));
+      if (linked) t.href = `map.html?mode=trip&trip=${encodeURIComponent(s.trip)}`;
       t.innerHTML = `<div class="tile-inner"><div class="tile-title">${esc(s.title)}</div>
-        <div class="pending-tag">${esc(s.pending || 'Pending')}</div></div>`;
+        ${bits ? `<div class="tile-sub">${bits}</div>` : ''}
+        <div class="pending-tag">${esc(s.pending || 'Pending')}</div>
+        ${linked ? '<div class="pending-route-link">View route</div>' : ''}</div>`;
       return t;
     }
     // Roads sub-tiles open the per-trip map; province tiles open the map filtered
@@ -375,8 +399,13 @@
       const subs = sec.subtiles.filter(s =>
         !selected || (s.years || []).some(y => selected.has(y)));
       if (!subs.length) return;
-      host.appendChild(el('div', 'tier-head',
-        `<h3>${esc(sec.title)}</h3><span class="count">${subs.length} building${subs.length !== 1 ? 's' : ''}</span>`));
+      // `unit` names what a sub-tile is (building / site / road); roofs predate it.
+      // An untitled section (highways' single flat list) renders without a header bar.
+      const unit = tile.unit || 'building';
+      if (sec.title) {
+        host.appendChild(el('div', 'tier-head',
+          `<h3>${esc(sec.title)}</h3><span class="count">${subs.length} ${esc(unit)}${subs.length !== 1 ? 's' : ''}</span>`));
+      }
       const grid = el('div', 'tiles tiles--dense tiles--mosaic');
       subs.forEach(s => grid.appendChild(buildSubtile(tile, s)));
       host.appendChild(grid);

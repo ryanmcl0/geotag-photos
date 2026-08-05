@@ -424,6 +424,15 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
     except Exception as e:
         click.echo(f"⚠ backfill_manifest_ar failed: {e}", err=True)
 
+    # Rebuild the public coverage file (plain pins for gated places). Last, so it
+    # sees the settled public flags and the split manifests.
+    try:
+        click.echo("\nBuilding private coverage pins...")
+        from private_coverage import build as build_private_coverage
+        build_private_coverage(echo=click.echo)
+    except Exception as e:
+        click.echo(f"⚠ private_coverage failed: {e}", err=True)
+
 
 if __name__ == '__main__':
     process_all()

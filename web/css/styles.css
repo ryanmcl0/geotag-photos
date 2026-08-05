@@ -545,6 +545,46 @@ details[open] .country-summary::after {
 .pending-popup strong { display: block; margin-bottom: 2px; }
 .pending-popup span { color: #8a8f98; font-size: 12px; }
 
+/* Private coverage pin: a plain teardrop marking a gated place (private trip, or
+   a photo hidden inside a public trip). Never clustered and never a thumbnail, so
+   it reads as "been here" without pretending to be a photo marker. */
+.coverage-marker-icon {
+    cursor: pointer;
+    line-height: 0;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+    transition: transform 0.12s ease;
+    transform-origin: 50% 100%;
+}
+.coverage-pin path {
+    fill: #3b82f6;
+    stroke: #ffffff;
+    stroke-width: 1.6;
+}
+.coverage-pin circle { fill: #ffffff; }
+.coverage-marker-icon:hover {
+    transform: scale(1.15);
+    z-index: 650 !important;
+}
+.coverage-popup { text-align: center; }
+.coverage-popup strong { display: block; margin-bottom: 2px; }
+.coverage-popup span { display: block; color: #8a8f98; font-size: 12px; }
+.coverage-popup-note { margin-top: 3px; font-size: 11px; }
+
+
+/* ?mapdebug=1 readout (see initLayerWatchdog) */
+#map-debug {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    z-index: 1200;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.78);
+    color: #7dd3fc;
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    pointer-events: none;
+    white-space: nowrap;
+}
 
 /* Custom cluster markers - clean minimal style */
 .marker-cluster {
@@ -750,6 +790,20 @@ details[open] .country-summary::after {
     .map-top-filters,
     .route-filter-wrapper,
     .map-settings {
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        will-change: transform;
+    }
+
+    /* Same treatment for the layer panes themselves. The tile pane repaints
+       constantly (new <img> per tile) so it survives, but the marker and route
+       panes are static between gestures and iOS Safari can drop their layers
+       during repeated pinch-zooming — clusters and routes vanish while the
+       basemap keeps drawing. Pinning them to their own compositing layers keeps
+       them painted. */
+    .leaflet-marker-pane,
+    .leaflet-shadow-pane,
+    .leaflet-overlay-pane {
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
         will-change: transform;

@@ -41,6 +41,14 @@ let photoIndexMap = {}; // photoId → index in pswpItems
 const tripLayers = {};
 const loadedTripIds = new Set();
 
+// Private-coverage layer: plain pins for places that are gated (private trips, and
+// photos hidden inside public trips). Shown only while LOCKED. Once unlocked the
+// real photo clusters take their place. See private_coverage.py for what the file
+// does and doesn't contain (coords rounded to ~1 km, no photos, no place names).
+let coverageData = null;          // parsed trips/private_coverage.json (fetched once)
+let coverageMarkers = [];         // every coverage marker, pre-built
+let coverageLayer = null;         // cluster group holding the currently-shown subset
+
 function checkAllAccess() {
     return document.cookie.split(';').some(c => {
         const t = c.trim();
@@ -133,7 +141,9 @@ function syncVisibleTripLayers({ fit = false } = {}) {
     rebuildGlobalSiblingChain(); // one chain across all now-visible trips
     updateTripInfo();
     reinitLightbox();
-    if (fit) fitMapToBounds();
+    // Coverage pins follow the same filters. Fit after they've settled so a filter
+    // that leaves only private coverage still frames the map on something.
+    syncPrivateCoverage().then(() => { if (fit) fitMapToBounds(); });
 }
 
 // On phones/tablets the year + country + route controls collapse behind a single
@@ -649,20 +659,134 @@ function initMap() {
 
     initMapStyleControl();
     initDoubleTapZoom();
+    initLayerWatchdog();
 
     // Re-measure the map whenever iOS changes the viewport (rotation, address
     // bar show/hide, keyboard). Without this Leaflet keeps a stale size and the
     // tiles render at the wrong offset.
-    let resizeRAF;
+    //
+    // Two rules, both of which exist because iOS fires viewport resizes *during*
+    // map gestures — the address bar slides away as you pan, and pinch-zooming
+    // re-fires it repeatedly:
+    //
+    //  - pan:false. invalidateSize defaults to pan:true, which shifts the map pane
+    //    by half the size delta. Every layer (markers, clusters, routes) is
+    //    positioned relative to that pane, so moving it mid-gesture strands them:
+    //    the tile layer keeps fetching tiles for wherever the map now thinks it is
+    //    and the basemap looks fine, while everything else sits off-screen at the
+    //    old origin. That is the map going blank.
+    //  - never mid-zoom-animation. During a zoom the pane is under a CSS transform
+    //    that Leaflet owns; writing a position into it corrupts the end state the
+    //    same way. Defer to zoomend instead (Leaflet always ends a zoom within
+    //    250 ms, so the deferred measure can't be lost).
+    let resizeRAF, remeasurePending = false;
     const remeasure = () => {
+        if (map._animatingZoom) { remeasurePending = true; return; }
         cancelAnimationFrame(resizeRAF);
-        resizeRAF = requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+        resizeRAF = requestAnimationFrame(
+            () => map.invalidateSize({ animate: false, pan: false }));
     };
+    map.on('zoomend', () => {
+        if (!remeasurePending) return;
+        remeasurePending = false;
+        remeasure();
+    });
     window.addEventListener('resize', remeasure);
     window.addEventListener('orientationchange', remeasure);
     if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', remeasure);
     }
+}
+
+/**
+ * Layer watchdog for the mobile "map goes blank" bug.
+ *
+ * Counts the markers Leaflet has in the DOM whose position is inside the current
+ * view, then counts how many of those actually land inside the container on
+ * screen. In a healthy map the two agree. If Leaflet believes markers are in view
+ * but not one of them is rendered there, the layer panes have been left behind by
+ * a gesture, which is the state where the map shows tiles and nothing else.
+ *
+ * setView with the current centre and zoom is a no-op for the user but forces
+ * Leaflet through _resetView, which re-anchors every pane. Rate-limited, and
+ * never run mid-animation, so a normal gesture can't trip it.
+ */
+function inspectLayerHealth() {
+    const rect = map.getContainer().getBoundingClientRect();
+    let drift = 0, markers = 0, rendered = 0;
+    map.eachLayer(layer => {
+        if (!layer._icon || !layer.getLatLng) return;
+        const r = layer._icon.getBoundingClientRect();
+        if (!r.width) return;
+        markers++;
+        if (r.right > rect.left && r.left < rect.right
+            && r.bottom > rect.top && r.top < rect.bottom) rendered++;
+        // Where the icon actually sits vs where Leaflet's own projection says that
+        // lat/lng belongs. These are computed from different state, so a pane left
+        // behind by a gesture shows up here and cannot cancel itself out. A healthy
+        // map reads a few px (icon anchors differ between marker types).
+        const want = map.latLngToContainerPoint(layer.getLatLng());
+        const d = Math.hypot(r.left + r.width / 2 - rect.left - want.x,
+                             r.top + r.height / 2 - rect.top - want.y);
+        if (d > drift) drift = d;
+    });
+    return { markers, rendered, drift: Math.round(drift) };
+}
+
+let lastLayerRecovery = 0;
+
+// Cluster animations move icons for a few hundred ms after a zoom, so a big drift
+// reading is normal mid-animation. Only a drift that survives the settle delay and
+// is far larger than any icon anchor is the stranded state.
+const LAYER_DRIFT_LIMIT = 300;
+
+function checkLayerHealth() {
+    if (map._animatingZoom) return;
+    const health = inspectLayerHealth();
+    updateMapDebug(health);
+    if (health.drift < LAYER_DRIFT_LIMIT) return;
+    if (Date.now() - lastLayerRecovery < 3000) return;
+    lastLayerRecovery = Date.now();
+    console.warn(`Map layers stranded (${health.drift}px drift, `
+        + `${health.rendered}/${health.markers} icons on screen), resetting view`);
+    // reset:true is what does the work. Without it setView takes the animated-pan
+    // path, sees a zero offset for the unchanged centre and returns early, never
+    // reaching _resetView. With it, Leaflet re-anchors every pane and repositions
+    // the layers, which is invisible to the user at the same centre and zoom.
+    map.setView(map.getCenter(), map.getZoom(), { reset: true });
+}
+
+/**
+ * ?mapdebug=1 — a readout of the same counts, so a failure that only happens on a
+ * real phone can be identified without a debugger. "in view" vs "rendered"
+ * disagreeing means the panes are misplaced; agreeing while the screen looks
+ * empty means the elements are in the right place and the browser is not
+ * painting them.
+ */
+function updateMapDebug(health) {
+    const el = document.getElementById('map-debug');
+    if (!el) return;
+    const pos = L.DomUtil.getPosition(map._mapPane) || { x: 0, y: 0 };
+    el.textContent = `z${map.getZoom().toFixed(1)}  drift ${health.drift}px  `
+        + `on screen ${health.rendered}/${health.markers}  `
+        + `pane ${Math.round(pos.x)},${Math.round(pos.y)}  `
+        + `icons ${document.querySelectorAll('.leaflet-marker-pane > *').length}  `
+        + `paths ${document.querySelectorAll('.leaflet-overlay-pane path').length}`;
+}
+
+function initLayerWatchdog() {
+    if (new URLSearchParams(location.search).get('mapdebug')) {
+        const el = document.createElement('div');
+        el.id = 'map-debug';
+        document.getElementById('map').appendChild(el);
+    }
+    let timer;
+    const schedule = () => {
+        clearTimeout(timer);
+        // Long enough for the cluster group's own animations to finish.
+        timer = setTimeout(checkLayerHealth, 700);
+    };
+    map.on('zoomend moveend', schedule);
 }
 
 function initDoubleTapZoom() {
@@ -672,6 +796,11 @@ function initDoubleTapZoom() {
     map.getContainer().addEventListener('touchend', function(e) {
         if (e.touches.length > 0) return;
         if (e.changedTouches.length !== 1) return;
+        // A zoom animation owns the map pane until it finishes. Starting another
+        // zoom from a raw touch handler mid-flight leaves the panes stranded (see
+        // the remeasure notes in initMap), which is easy to trigger by tapping
+        // straight after a pinch.
+        if (map._animatingZoom) return;
 
         const touch = e.changedTouches[0];
         const now = Date.now();
@@ -817,6 +946,8 @@ async function loadTripData() {
 
         if (trips.length === 0) {
             document.getElementById('trip-name').textContent = 'No trips found';
+            await syncPrivateCoverage();   // gated places still show as plain pins
+            fitMapToBounds();
             return;
         }
 
@@ -834,6 +965,7 @@ async function loadTripData() {
         // through there.)
         rebuildGlobalSiblingChain();
         updateTripInfo();
+        await syncPrivateCoverage();
         fitMapToBounds();
 
     } catch (error) {
@@ -863,18 +995,32 @@ async function loadSingleTrip(trip, basePath) {
                            `<span>Photos pending</span></div>`)
                 .addTo(markers);
         }
+        // A placeholder can still carry a route (GPX merged, photos not edited yet).
+        // Draw the line now; the photo clusters arrive when the trip is processed.
+        let route = L.featureGroup();
+        if (trip.route) {
+            try {
+                const res = await fetch(`${tripPath}/route.geojson?t=${Date.now()}`);
+                if (res.ok) route = buildRouteLayer(await res.json(), color, trip.name);
+            } catch (e) {
+                console.warn(`No route for pending trip ${trip.id}:`, e.message);
+            }
+        }
         tripLayers[trip.id] = {
-            route: L.featureGroup(),
+            route,
             markers,
             color,
-            hasGpx: false,
+            hasGpx: Boolean(trip.route),
             visible: true,
             pending: true,
         };
         allTrips.push(trip);
         allManifests.push({ tripId: trip.id, photos: [], clusters: [] });
         loadedTripIds.add(trip.id);
-        if (shouldDisplayTrip(trip)) tripLayers[trip.id].markers.addTo(map);
+        if (shouldDisplayTrip(trip)) {
+            tripLayers[trip.id].route.addTo(map);
+            tripLayers[trip.id].markers.addTo(map);
+        }
         return;
     }
 
@@ -1316,6 +1462,115 @@ function createPhotoIcon(count, thumbnailUrl, endpoint) {
     });
 }
 
+/* ---------------------------------------------------------------------------
+ * Private coverage pins
+ *
+ * Gated places (private trips + photos hidden inside public trips) are invisible
+ * to a locked visitor, which loses the shape of where the travel actually went.
+ * trips/private_coverage.json is a public, deliberately thin file (rounded
+ * coordinates, trip name and dates, nothing else), rendered here as plain pins.
+ * No thumbnails, no photo counts, no place names, and no clustering; unlocking
+ * replaces them with the real photo clusters.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A plain map pin, Google My Maps style: teardrop, no thumbnail, no count.
+ * Deliberately NOT clustered (see syncPrivateCoverage) so overlapping pins read
+ * as "lots of places here", which is the whole point of the coverage layer.
+ */
+function createCoverageIcon() {
+    return L.divIcon({
+        html: `
+            <svg class="coverage-pin" viewBox="0 0 24 34" width="24" height="34" aria-hidden="true">
+                <path d="M12 1C6.5 1 2 5.4 2 10.9 2 18.3 12 33 12 33s10-14.7 10-22.1C22 5.4 17.5 1 12 1z"/>
+                <circle cx="12" cy="10.9" r="3.6"/>
+            </svg>
+        `,
+        className: 'coverage-marker-icon',
+        iconSize: L.point(24, 34),
+        iconAnchor: L.point(12, 33),
+        popupAnchor: L.point(0, -30)
+    });
+}
+
+/** Fetch the coverage file once. Missing/unreadable is not an error, just no pins. */
+async function loadCoverageData() {
+    if (coverageData) return coverageData;
+    const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+    try {
+        const res = await fetch(`${basePath}trips/private_coverage.json?t=${Date.now()}`);
+        coverageData = res.ok ? await res.json() : { trips: [] };
+    } catch (e) {
+        coverageData = { trips: [] };
+    }
+    return coverageData;
+}
+
+function buildCoverageMarkers() {
+    coverageMarkers = [];
+    (coverageData.trips || []).forEach(trip => {
+        const dates = trip.dates || {};
+        const range = dates.start
+            ? (dates.end && dates.end !== dates.start
+                ? `${formatDate(dates.start)} – ${formatDate(dates.end)}`
+                : formatDate(dates.start))
+            : '';
+        (trip.points || []).forEach(pt => {
+            const marker = L.marker([pt.lat, pt.lon], { icon: createCoverageIcon() });
+            marker.bindPopup(
+                `<div class="coverage-popup"><strong>${escapeHtml(trip.name)}</strong>` +
+                (range ? `<span>${range}</span>` : '') +
+                `<span class="coverage-popup-note">🔒 Private, photos hidden</span></div>`
+            );
+            marker.country = pt.country || null;
+            marker.coverageYear = trip.year || null;
+            coverageMarkers.push(marker);
+        });
+    });
+}
+
+/** Coverage pins honour the same year/country/route filters as trips. */
+function coverageMarkerVisible(marker) {
+    if (activeRouteFilter === 'gpx') return false;   // coverage has no route
+    if (activeCountryFilter !== null) {
+        if (!marker.country) return true;            // unknown country: never hide silently
+        return activeCountryFilter.has(marker.country);
+    }
+    if (activeYearFilter && marker.coverageYear !== activeYearFilter) return false;
+    return true;
+}
+
+/**
+ * Show/hide/refresh the coverage layer for the current lock state and filters.
+ * Called on load, after every filter change, and on unlock/lock.
+ */
+async function syncPrivateCoverage() {
+    const viewMode = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.mode) || 'all';
+    // Single-trip and collection views are about specific photos, so coverage pins
+    // from other trips would be noise there.
+    const wanted = !checkAllAccess() && (viewMode === 'all' || viewMode === 'year');
+
+    if (!wanted) {
+        if (coverageLayer) map.removeLayer(coverageLayer);
+        return;
+    }
+
+    await loadCoverageData();
+    if (!coverageMarkers.length) buildCoverageMarkers();
+    // A plain feature group, not a cluster group: coverage pins stay individual at
+    // every zoom, the way My Maps shows them.
+    if (!coverageLayer) coverageLayer = L.featureGroup();
+
+    let visible = coverageMarkers.filter(coverageMarkerVisible);
+    if (viewMode === 'year' && VIEW_CONFIG.year) {
+        visible = visible.filter(m => m.coverageYear === VIEW_CONFIG.year);
+    }
+    coverageLayer.clearLayers();
+    visible.forEach(m => coverageLayer.addLayer(m));
+    if (visible.length && !map.hasLayer(coverageLayer)) coverageLayer.addTo(map);
+    else if (!visible.length && map.hasLayer(coverageLayer)) map.removeLayer(coverageLayer);
+}
+
 /**
  * Marker for a placeholder ("Photos pending") trip — a muted dashed pill so it reads as
  * "been here, photos not up yet" rather than a photo cluster.
@@ -1520,7 +1775,11 @@ function createMultiPhotoPopup(marker, startPage) {
  * Fit map to show currently-visible trips' content
  */
 function fitMapToBounds() {
-    if (window.matchMedia('(max-width: 768px)').matches) map.invalidateSize();
+    // pan:false — a fitBounds follows immediately, and the default pan would shift
+    // the layer pane out from under the markers first (see initMap).
+    if (window.matchMedia('(max-width: 768px)').matches) {
+        map.invalidateSize({ animate: false, pan: false });
+    }
     const bounds = L.latLngBounds([]);
     allTrips.forEach(trip => {
         if (!shouldDisplayTrip(trip)) return;
@@ -1530,6 +1789,11 @@ function fitMapToBounds() {
             bounds.extend(entry.markers.getBounds());
         }
     });
+    // Private coverage pins are on the map too, so frame them: a filter matching
+    // only gated places would fit to nothing.
+    if (coverageLayer && map.hasLayer(coverageLayer) && coverageLayer.getLayers().length > 0) {
+        bounds.extend(coverageLayer.getBounds());
+    }
     if (bounds.isValid()) {
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
         map.fitBounds(bounds, { padding: [50, 50], animate: !isMobile });
@@ -1627,7 +1891,7 @@ async function mobileSubmitPassword() {
             document.getElementById('mobile-pw-input').blur();
             // Wait for keyboard to fully retract and iOS to restore compositing
             await new Promise(r => setTimeout(r, 450));
-            map.invalidateSize();
+            map.invalidateSize({ animate: false, pan: false });
             await unlockAllAccess();
             window.SidebarNav && window.SidebarNav.refresh();
             // Force-repaint fixed controls after all viewport changes settle
@@ -1665,7 +1929,7 @@ window.repaintFixedControls = repaintFixedControls;
 // keyboard-height offset on the layout viewport.
 window.remeasureMap = function() {
     if (map && typeof map.invalidateSize === 'function') {
-        map.invalidateSize({ animate: false });
+        map.invalidateSize({ animate: false, pan: false });
     }
     // iOS can retain a non-zero document scroll offset after the soft
     // keyboard retracts even with overflow:hidden / position:fixed on the

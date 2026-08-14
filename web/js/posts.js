@@ -104,6 +104,8 @@ window.Posts = (function () {
         return saveChain;
     }
 
+    const MAX_PHOTOS = 20;   // Instagram carousel limit
+
     const keyOf = ref => `${ref.trip}::${ref.id}`;
     const plural = n => `${n} photo${n === 1 ? '' : 's'}`;
     const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -123,14 +125,15 @@ window.Posts = (function () {
 
     function addRefsToPost(post, refs) {
         const have = new Set(post.photos.map(keyOf));
-        let added = 0;
+        let added = 0, hitCap = false;
         refs.forEach(ref => {
             if (have.has(keyOf(ref))) return;
+            if (post.photos.length >= MAX_PHOTOS) { hitCap = true; return; }
             post.photos.push(cleanRef(ref));
             have.add(keyOf(ref));
             added++;
         });
-        return added;
+        return { added, hitCap, count: post.photos.length };
     }
 
     // ---------- Small UI primitives ----------
@@ -164,18 +167,26 @@ window.Posts = (function () {
             const close = () => overlay.remove();
             const choose = postId => {
                 close();
-                const name = { value: '' };
+                const result = {};
                 mutate(posts => {
                     let post = posts.find(p => p.id === postId);
                     if (!post) {
                         post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
                         posts.push(post);
                     }
-                    name.value = post.name;
-                    addRefsToPost(post, refs);
+                    result.name = post.name;
+                    Object.assign(result, addRefsToPost(post, refs));
                 }).then(okSave => {
-                    if (okSave) toast(`Added to ${name.value}`);
-                    if (okSave && onDone) onDone();
+                    if (!okSave) return;
+                    if (result.hitCap && result.added) {
+                        toast(`Added ${result.added}, ${result.name} is now full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
+                    } else if (result.hitCap) {
+                        toast(`${result.name} is full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
+                        return;   // nothing was added, keep the selection
+                    } else {
+                        toast(`Added to ${result.name} (${result.count}/${MAX_PHOTOS})`);
+                    }
+                    if (onDone) onDone();
                 });
             };
 
@@ -183,9 +194,10 @@ window.Posts = (function () {
                 const row = document.createElement('button');
                 row.type = 'button';
                 row.className = 'posts-picker-row';
+                if (p.photos.length >= MAX_PHOTOS) row.classList.add('posts-picker-full');
                 row.innerHTML = `<span class="posts-picker-name"></span><span class="posts-picker-count"></span>`;
                 row.querySelector('.posts-picker-name').textContent = p.name;
-                row.querySelector('.posts-picker-count').textContent = plural(p.photos.length);
+                row.querySelector('.posts-picker-count').textContent = `${p.photos.length}/${MAX_PHOTOS}`;
                 row.addEventListener('click', () => choose(p.id));
                 sheet.appendChild(row);
             });
@@ -285,7 +297,9 @@ window.Posts = (function () {
         fab.classList.toggle('active', selectMode);
         fab.textContent = selectMode ? 'Selecting...' : 'Select';
         actionBar.classList.toggle('visible', selectMode);
-        actionCount.textContent = `${selected.size} selected`;
+        actionCount.textContent = selected.size > MAX_PHOTOS
+            ? `${selected.size} selected (max ${MAX_PHOTOS} per post)`
+            : `${selected.size} selected`;
     }
 
     function restampSelections() {
@@ -387,7 +401,8 @@ window.Posts = (function () {
         });
         const count = document.createElement('span');
         count.className = 'posts-count';
-        count.textContent = plural(post.photos.length);
+        count.textContent = `${post.photos.length}/${MAX_PHOTOS} photos`;
+        if (post.photos.length >= MAX_PHOTOS) count.classList.add('posts-count-full');
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'posts-delete';

@@ -72,6 +72,9 @@ body.posts-selecting .photo-cell { position: relative; }
 .posts-picker-row:hover { background: #2a2a2a; }
 .posts-picker-name { font-weight: 600; }
 .posts-picker-count { color: #888; font-size: 12px; }
+.posts-picker-full { opacity: .45; }
+.posts-picker-full .posts-picker-count { color: #f87171; }
+.posts-count-full { color: #f87171; }
 .posts-picker-new { justify-content: center; color: #fff; font-weight: 600; }
 .posts-picker-cancel {
   display: block; width: 100%; background: none; border: none; color: #888;

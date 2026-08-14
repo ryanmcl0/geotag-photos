@@ -10,6 +10,7 @@
 
 const STATE_KEY = '_state/posts.json';
 const MAX_BODY_BYTES = 512 * 1024;
+const MAX_PHOTOS_PER_POST = 20;   // Instagram carousel limit
 
 const hex = (buf: ArrayBuffer) =>
     [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -27,6 +28,7 @@ function validPosts(posts: unknown): posts is Post[] {
         typeof (p as Post).id === 'string' &&
         typeof (p as Post).name === 'string' &&
         Array.isArray((p as Post).photos) &&
+        (p as Post).photos.length <= MAX_PHOTOS_PER_POST &&
         (p as Post).photos.every(ph =>
             ph && typeof ph === 'object' &&
             typeof ph.trip === 'string' && typeof ph.id === 'string'));

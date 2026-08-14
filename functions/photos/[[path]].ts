@@ -21,6 +21,12 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD
     const parts = context.params.path as string[];
     const key = parts.join('/');
     const slug = parts[0] || '';
+
+    // Underscore prefixes are reserved for site state (e.g. _state/posts.json),
+    // never photos — without this they'd be served publicly with immutable caching.
+    if (slug.startsWith('_')) {
+        return new Response('Not found', { status: 404 });
+    }
     const stem = (parts[parts.length - 1] || '').replace(/\.[a-z0-9]+$/i, '');
 
     const forced = (ACCESS.force_public[slug] || []).includes(stem);

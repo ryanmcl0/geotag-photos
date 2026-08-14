@@ -80,10 +80,13 @@ def find_orphans():
 
 def _r2_trip_prefixes(s3, r2_bucket):
     """Top-level '<slug>/' prefixes present in the R2 bucket (one LIST with Delimiter,
-    not a full object enumeration)."""
+    not a full object enumeration). Prefixes starting with '_' are reserved for site
+    state (e.g. _state/posts.json) — never trips, never prunable."""
     prefixes = set()
     for page in s3.get_paginator('list_objects_v2').paginate(Bucket=r2_bucket, Delimiter='/'):
         for cp in page.get('CommonPrefixes', []):
+            if cp['Prefix'].startswith('_'):
+                continue
             prefixes.add(cp['Prefix'].rstrip('/'))
     return prefixes
 

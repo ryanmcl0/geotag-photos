@@ -2026,6 +2026,7 @@ function rebuildLightbox() {
                 w,
                 h,
                 _needsSize: needsSize,
+                ref: { trip: manifest.tripId, id: photo.id },
                 title: buildLightboxCaption({
                     year,
                     tripName,
@@ -2189,6 +2190,7 @@ function openGallery(photo) {
     gallery.init();
     addDoubleTapDragZoom(gallery, pswpEl);
     addWheelZoom(gallery, pswpEl);
+    if (window.Posts) Posts.attachLightbox(gallery, pswpEl);
 }
 
 function reinitLightbox() {

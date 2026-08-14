@@ -1,0 +1,502 @@
+/**
+ * Owner-only Instagram post drafts ("Posts").
+ *
+ * Included on every photo page but completely inert unless the posts_auth
+ * cookie is present (set by /auth-posts, a separate owner-only password):
+ * no DOM, no network, no CSS. The server re-checks the cookie on every
+ * /api/posts call, so a forged cookie only ever produces 404s.
+ *
+ * Surfaces when unlocked:
+ *  - "+ Post" button in every PhotoSwipe top bar (hooked via attachLightbox).
+ *  - Select mode on photo grids (hooked via onGridRender from gallery.js).
+ *  - The /posts manager page (initPostsPage, called by posts.html).
+ *
+ * All state lives server-side in one versioned JSON doc; every mutation is a
+ * re-appliable function so a 409 (edited on another device) can merge cleanly.
+ */
+window.Posts = (function () {
+    function unlocked() {
+        return document.cookie.split(';').some(c => {
+            const t = c.trim();
+            return t.startsWith('posts_auth=') && t.length > 'posts_auth='.length;
+        });
+    }
+
+    // ---------- Locked: no-op stubs + the /posts password prompt ----------
+
+    function renderPasswordForm(root) {
+        root.innerHTML = `
+            <div class="posts-login">
+                <h1>Posts</h1>
+                <input type="password" id="posts-pw" placeholder="Password" autocomplete="current-password">
+                <p class="posts-login-error" id="posts-pw-error"></p>
+                <button type="button" id="posts-pw-submit">Enter</button>
+            </div>`;
+        const input = root.querySelector('#posts-pw');
+        const error = root.querySelector('#posts-pw-error');
+        async function submit() {
+            const fd = new FormData();
+            fd.append('password', input.value);
+            try {
+                const r = await fetch('/auth-posts', { method: 'POST', body: fd });
+                if (r.ok) location.reload();
+                else error.textContent = 'Incorrect password';
+            } catch (err) {
+                error.textContent = 'Error: ' + err.message;
+            }
+        }
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+        root.querySelector('#posts-pw-submit').addEventListener('click', submit);
+        input.focus();
+    }
+
+    if (!unlocked()) {
+        return {
+            enabled: false,
+            attachLightbox() {},
+            onGridRender() {},
+            initPostsPage() {
+                const root = document.getElementById('posts-app');
+                if (root) renderPasswordForm(root);
+            }
+        };
+    }
+
+    // ---------- Unlocked ----------
+
+    const cssLink = document.createElement('link');
+    cssLink.rel = 'stylesheet';
+    cssLink.href = '/css/posts.css';
+    document.head.appendChild(cssLink);
+
+    let doc = null;           // { version, posts } once loaded; null on failure
+    let saveChain = Promise.resolve();
+
+    const ready = fetch('/api/posts', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { doc = d; return !!d; })
+        .catch(() => false);
+
+    // Every mutation is a function of (posts) that can be re-applied to a fresh
+    // server copy after a 409, so concurrent edits from another device merge
+    // instead of clobbering. Mutations are serialized through saveChain.
+    function mutate(fn) {
+        const run = async () => {
+            if (!doc) throw new Error('posts unavailable');
+            fn(doc.posts);
+            const put = () => fetch('/api/posts', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ baseVersion: doc.version, posts: doc.posts })
+            });
+            let r = await put();
+            if (r.status === 409) {
+                doc = await r.json();
+                fn(doc.posts);
+                r = await put();
+            }
+            if (!r.ok) throw new Error('save failed (' + r.status + ')');
+            doc.version = (await r.json()).version;
+        };
+        saveChain = saveChain
+            .then(run)
+            .then(() => true, err => { toast('Save failed: ' + err.message); return false; });
+        return saveChain;
+    }
+
+    const keyOf = ref => `${ref.trip}::${ref.id}`;
+    const plural = n => `${n} photo${n === 1 ? '' : 's'}`;
+    const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+    function defaultName(posts) {
+        let n = posts.length + 1;
+        while (posts.some(p => p.name === `Post ${n}`)) n++;
+        return `Post ${n}`;
+    }
+
+    // Strip to the fields the API accepts (grid/lightbox refs can carry extras).
+    function cleanRef(ref) {
+        const out = { trip: ref.trip, id: ref.id };
+        if (typeof ref.ar === 'number') out.ar = ref.ar;
+        return out;
+    }
+
+    function addRefsToPost(post, refs) {
+        const have = new Set(post.photos.map(keyOf));
+        let added = 0;
+        refs.forEach(ref => {
+            if (have.has(keyOf(ref))) return;
+            post.photos.push(cleanRef(ref));
+            have.add(keyOf(ref));
+            added++;
+        });
+        return added;
+    }
+
+    // ---------- Small UI primitives ----------
+
+    let toastTimer;
+    function toast(msg) {
+        let el = document.getElementById('posts-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'posts-toast';
+            document.body.appendChild(el);
+        }
+        el.textContent = msg;
+        el.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove('visible'), 2200);
+    }
+
+    /** Bottom sheet listing posts; resolves with a post id (creating if needed) or null. */
+    function openPicker(refs, onDone) {
+        ready.then(ok => {
+            if (!ok) { toast('Posts unavailable, try re-entering the password at /posts'); return; }
+            const overlay = document.createElement('div');
+            overlay.className = 'posts-picker-overlay';
+            const sheet = document.createElement('div');
+            sheet.className = 'posts-picker';
+            const title = document.createElement('h3');
+            title.textContent = refs.length === 1 ? 'Add photo to' : `Add ${refs.length} photos to`;
+            sheet.appendChild(title);
+
+            const close = () => overlay.remove();
+            const choose = postId => {
+                close();
+                const name = { value: '' };
+                mutate(posts => {
+                    let post = posts.find(p => p.id === postId);
+                    if (!post) {
+                        post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                        posts.push(post);
+                    }
+                    name.value = post.name;
+                    addRefsToPost(post, refs);
+                }).then(okSave => {
+                    if (okSave) toast(`Added to ${name.value}`);
+                    if (okSave && onDone) onDone();
+                });
+            };
+
+            doc.posts.forEach(p => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'posts-picker-row';
+                row.innerHTML = `<span class="posts-picker-name"></span><span class="posts-picker-count"></span>`;
+                row.querySelector('.posts-picker-name').textContent = p.name;
+                row.querySelector('.posts-picker-count').textContent = plural(p.photos.length);
+                row.addEventListener('click', () => choose(p.id));
+                sheet.appendChild(row);
+            });
+
+            const create = document.createElement('button');
+            create.type = 'button';
+            create.className = 'posts-picker-row posts-picker-new';
+            create.textContent = '+ New post';
+            create.addEventListener('click', () => choose(newId()));
+            sheet.appendChild(create);
+
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'posts-picker-cancel';
+            cancel.textContent = 'Cancel';
+            cancel.addEventListener('click', close);
+            sheet.appendChild(cancel);
+
+            overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+            overlay.appendChild(sheet);
+            document.body.appendChild(overlay);
+        });
+    }
+
+    // ---------- Lightbox button ----------
+
+    let currentGallery = null;
+
+    function attachLightbox(gallery, pswpEl) {
+        currentGallery = gallery;
+        gallery.listen('destroy', () => { if (currentGallery === gallery) currentGallery = null; });
+        const bar = pswpEl && pswpEl.querySelector('.pswp__top-bar');
+        if (!bar || bar.querySelector('.posts-add-btn')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pswp__button posts-add-btn';
+        btn.title = 'Add to post';
+        btn.textContent = '+ Post';
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const item = currentGallery && currentGallery.currItem;
+            if (!item || !item.ref) { toast('This photo cannot be added'); return; }
+            openPicker([item.ref]);
+        });
+        const closeBtn = bar.querySelector('.pswp__button--close');
+        bar.insertBefore(btn, closeBtn || null);
+    }
+
+    // ---------- Grid select mode ----------
+
+    let selectMode = false;
+    const selected = new Map();   // key -> ref
+    const refByKey = new Map();   // key -> ref, for every grid photo seen on this page
+    let fab = null, actionBar = null, actionCount = null;
+
+    function ensureSelectUi() {
+        if (fab) return;
+        fab = document.createElement('button');
+        fab.type = 'button';
+        fab.id = 'posts-fab';
+        fab.textContent = 'Select';
+        fab.title = 'Select photos for a post';
+        fab.addEventListener('click', () => setSelectMode(!selectMode));
+        document.body.appendChild(fab);
+
+        actionBar = document.createElement('div');
+        actionBar.id = 'posts-actionbar';
+        actionCount = document.createElement('span');
+        actionCount.className = 'posts-action-count';
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'posts-action-add';
+        add.textContent = 'Add to post';
+        add.addEventListener('click', () => {
+            if (!selected.size) { toast('Nothing selected'); return; }
+            openPicker([...selected.values()], () => setSelectMode(false));
+        });
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'posts-action-cancel';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => setSelectMode(false));
+        actionBar.append(actionCount, add, cancel);
+        document.body.appendChild(actionBar);
+    }
+
+    function setSelectMode(on) {
+        selectMode = on;
+        if (!on) selected.clear();
+        document.body.classList.toggle('posts-selecting', on);
+        updateSelectUi();
+        restampSelections();
+    }
+
+    function updateSelectUi() {
+        if (!fab) return;
+        fab.classList.toggle('active', selectMode);
+        fab.textContent = selectMode ? 'Selecting...' : 'Select';
+        actionBar.classList.toggle('visible', selectMode);
+        actionCount.textContent = `${selected.size} selected`;
+    }
+
+    function restampSelections() {
+        document.querySelectorAll('.photo-cell[data-trip]').forEach(cell => {
+            const key = `${cell.dataset.trip}::${cell.dataset.id}`;
+            cell.classList.toggle('posts-selected', selectMode && selected.has(key));
+        });
+    }
+
+    // Capture phase: runs before the cell's own click handler, so in select
+    // mode a tap toggles selection instead of opening the lightbox.
+    document.addEventListener('click', e => {
+        if (!selectMode) return;
+        const cell = e.target.closest && e.target.closest('.photo-cell');
+        if (!cell || !cell.dataset.trip) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const key = `${cell.dataset.trip}::${cell.dataset.id}`;
+        if (selected.has(key)) {
+            selected.delete(key);
+        } else {
+            const ref = refByKey.get(key) || { trip: cell.dataset.trip, id: cell.dataset.id };
+            selected.set(key, ref);
+        }
+        cell.classList.toggle('posts-selected', selected.has(key));
+        updateSelectUi();
+    }, true);
+
+    /** Called by gallery.js after every grid (re)layout. */
+    function onGridRender(grid, order) {
+        (order || []).forEach(ref => {
+            if (ref && ref.trip && ref.id) refByKey.set(keyOf(ref), ref);
+        });
+        ready.then(ok => { if (ok) ensureSelectUi(); });
+        restampSelections();   // relayout rebuilds cells, so re-apply check marks
+    }
+
+    // ---------- /posts manager page ----------
+
+    function initPostsPage() {
+        const root = document.getElementById('posts-app');
+        if (!root) return;
+        ready.then(ok => {
+            if (!ok) {
+                // Cookie present but the API rejects it (stale after a password
+                // change): fall back to the prompt instead of a dead page.
+                renderPasswordForm(root);
+                return;
+            }
+            renderManager(root);
+        });
+    }
+
+    function renderManager(root) {
+        root.innerHTML = '';
+        const head = document.createElement('div');
+        head.className = 'posts-head';
+        const h1 = document.createElement('h1');
+        h1.textContent = 'Posts';
+        const newBtn = document.createElement('button');
+        newBtn.type = 'button';
+        newBtn.className = 'posts-new-btn';
+        newBtn.textContent = '+ New post';
+        newBtn.addEventListener('click', () => {
+            mutate(posts => {
+                posts.push({ id: newId(), name: defaultName(posts), created: new Date().toISOString(), photos: [] });
+            }).then(() => renderManager(root));
+        });
+        head.append(h1, newBtn);
+        root.appendChild(head);
+
+        if (!doc.posts.length) {
+            const empty = document.createElement('p');
+            empty.className = 'posts-empty';
+            empty.textContent = 'No post drafts yet. Browse the map or a gallery and use "+ Post" in the photo viewer, or "Select" on a grid.';
+            root.appendChild(empty);
+            return;
+        }
+
+        doc.posts.forEach(post => root.appendChild(renderCard(root, post)));
+    }
+
+    function renderCard(root, post) {
+        const card = document.createElement('section');
+        card.className = 'posts-card';
+
+        const bar = document.createElement('div');
+        bar.className = 'posts-card-bar';
+        const name = document.createElement('input');
+        name.className = 'posts-name';
+        name.value = post.name;
+        name.addEventListener('change', () => {
+            const v = name.value.trim() || post.name;
+            name.value = v;
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (p) p.name = v;
+            });
+        });
+        const count = document.createElement('span');
+        count.className = 'posts-count';
+        count.textContent = plural(post.photos.length);
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'posts-delete';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => {
+            if (!confirm(`Delete "${post.name}"? The photos themselves are not affected.`)) return;
+            mutate(posts => {
+                const i = posts.findIndex(x => x.id === post.id);
+                if (i !== -1) posts.splice(i, 1);
+            }).then(() => renderManager(root));
+        });
+        bar.append(name, count, del);
+        card.appendChild(bar);
+
+        const strip = document.createElement('div');
+        strip.className = 'posts-strip';
+        post.photos.forEach((ref, idx) => strip.appendChild(renderThumb(root, post, ref, idx)));
+        if (!post.photos.length) {
+            const hint = document.createElement('p');
+            hint.className = 'posts-empty';
+            hint.textContent = 'Empty. Add photos from the map, galleries or blogs.';
+            strip.appendChild(hint);
+        }
+        card.appendChild(strip);
+        return card;
+    }
+
+    function renderThumb(root, post, ref, idx) {
+        const cell = document.createElement('div');
+        cell.className = 'posts-thumb';
+        cell.draggable = true;
+
+        const orderBadge = document.createElement('span');
+        orderBadge.className = 'posts-order';
+        orderBadge.textContent = idx + 1;
+
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.alt = '';
+        img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
+        img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+        img.addEventListener('click', () => {
+            if (window.Gallery) Gallery.openLightbox(post.photos, idx);
+        });
+
+        const move = pos => mutate(posts => {
+            const p = posts.find(x => x.id === post.id);
+            if (!p) return;
+            const from = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
+            if (from === -1) return;
+            const to = Math.max(0, Math.min(p.photos.length - 1, pos));
+            p.photos.splice(to, 0, p.photos.splice(from, 1)[0]);
+        }).then(() => renderManager(root));
+
+        const controls = document.createElement('div');
+        controls.className = 'posts-thumb-controls';
+        const left = document.createElement('button');
+        left.type = 'button'; left.textContent = '◀'; left.title = 'Move earlier';
+        left.disabled = idx === 0;
+        left.addEventListener('click', () => move(idx - 1));
+        const right = document.createElement('button');
+        right.type = 'button'; right.textContent = '▶'; right.title = 'Move later';
+        right.disabled = idx === post.photos.length - 1;
+        right.addEventListener('click', () => move(idx + 1));
+        const rm = document.createElement('button');
+        rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove from post';
+        rm.addEventListener('click', () => {
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
+                if (i !== -1) p.photos.splice(i, 1);
+            }).then(() => renderManager(root));
+        });
+        controls.append(left, rm, right);
+
+        // Desktop drag to reorder; phones use the arrow buttons.
+        cell.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('text/plain', keyOf(ref));
+            e.dataTransfer.effectAllowed = 'move';
+        });
+        cell.addEventListener('dragover', e => { e.preventDefault(); cell.classList.add('drag-over'); });
+        cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'));
+        cell.addEventListener('drop', e => {
+            e.preventDefault();
+            cell.classList.remove('drag-over');
+            const fromKey = e.dataTransfer.getData('text/plain');
+            if (!fromKey || fromKey === keyOf(ref)) return;
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const from = p.photos.findIndex(ph => keyOf(ph) === fromKey);
+                const to = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
+                if (from === -1 || to === -1) return;
+                p.photos.splice(to, 0, p.photos.splice(from, 1)[0]);
+            }).then(() => renderManager(root));
+        });
+
+        cell.append(orderBadge, img, controls);
+        return cell;
+    }
+
+    // Blogs render their grids synchronously from inline JSON before this
+    // script loads, so their onGridRender call never happens — pick up any
+    // already-rendered grid once the state is in.
+    ready.then(ok => {
+        if (ok && document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
+    });
+
+    return { enabled: true, attachLightbox, onGridRender, initPostsPage };
+})();

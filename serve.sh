@@ -26,4 +26,5 @@ npx wrangler pages dev web --ip 0.0.0.0 \
     --compatibility-date=2026-06-10 \
     --live-reload \
     --binding CF_SITE_PASSWORD="$CF_SITE_PASSWORD" \
-    --binding CF_ALL_PASSWORD="$CF_ALL_PASSWORD"
+    --binding CF_ALL_PASSWORD="$CF_ALL_PASSWORD" \
+    --binding CF_POSTS_PASSWORD="$CF_POSTS_PASSWORD"

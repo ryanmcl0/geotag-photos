@@ -19,6 +19,8 @@ Environment variables (set in .env.deploy):
                      skip touching this secret).
   CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional).
                      Same "" convention as CF_SITE_PASSWORD.
+  CF_POSTS_PASSWORD  Password for the owner-only Posts feature (optional;
+                     unset = feature off). Same "" convention as above.
   CF_PAGES_GIT_REPO  Path to the local git repo for the site (optional)
   CF_CONFIG_BACKUP_REPO  Path to a private git repo that source-controls
                          config/ (gitignored in this public repo) (optional)
@@ -573,6 +575,7 @@ def main():
     config = DeployConfig()
     password = os.getenv('CF_SITE_PASSWORD')
     all_password = os.getenv('CF_ALL_PASSWORD')
+    posts_password = os.getenv('CF_POSTS_PASSWORD')
 
     print(f"🚀 Deploying to Cloudflare")
     print(f"   Account:  {config.account_id[:8]}...")
@@ -584,6 +587,7 @@ def main():
         print(f"   Git Repo: {config.git_repo}")
     print(f"   Auth:     {'password protected' if password else 'none'}")
     print(f"   All-access: {'password protected' if all_password else 'none'}")
+    print(f"   Posts:    {'password protected' if posts_password else 'off'}")
     if args.dry_run:
         print(f"   Mode:     DRY RUN")
     print()
@@ -679,7 +683,9 @@ def main():
     if not args.skip_pages:
         site_password_in_env = 'CF_SITE_PASSWORD' in os.environ
         all_password_in_env = 'CF_ALL_PASSWORD' in os.environ
-        if password or all_password or site_password_in_env or all_password_in_env:
+        posts_password_in_env = 'CF_POSTS_PASSWORD' in os.environ
+        if (password or all_password or posts_password
+                or site_password_in_env or all_password_in_env or posts_password_in_env):
             print("🔐 Setting password secrets...")
             if password:
                 deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
@@ -689,6 +695,10 @@ def main():
                 deployer.set_secret('CF_ALL_PASSWORD', all_password, dry_run=args.dry_run)
             elif all_password_in_env:
                 deployer.delete_secret('CF_ALL_PASSWORD', dry_run=args.dry_run)
+            if posts_password:
+                deployer.set_secret('CF_POSTS_PASSWORD', posts_password, dry_run=args.dry_run)
+            elif posts_password_in_env:
+                deployer.delete_secret('CF_POSTS_PASSWORD', dry_run=args.dry_run)
             print()
 
     # Step 6: Deploy to Pages

@@ -295,9 +295,17 @@ img { display: block; }
 .bridge-row.in { opacity: 1; transform: none; }
 .bridge-rank { order: -2; font-family: var(--head); font-size: clamp(54px, 6vw, 96px); line-height: 1; color: #2c2c2c; text-align: right; }
 .bridge-row--flip .bridge-media { order: -1; }
-/* photos at their natural aspect — no crop, no panel box */
+/* Fixed 3:2, matching the tile grids, so the row rhythm holds whatever shot a cover
+   comes from: the Sony is 3:2 but the drone is 16:9, and at natural aspect a drone
+   cover made its row visibly shallower than its neighbours. Cropped to fill. */
 .bridge-media { display: flex; justify-content: center; align-items: center; overflow: hidden; }
-.bridge-media img { width: auto; max-width: 100%; max-height: 62vh; display: block; transition: transform .6s ease; }
+.bridge-media img {
+  width: 100%; aspect-ratio: 3 / 2; object-fit: cover; display: block;
+  /* the old 62vh height cap, expressed as width so the 3:2 box survives it —
+     a max-height would win over aspect-ratio and reshape the element */
+  max-width: calc(62vh * 3 / 2);
+  transition: transform .6s ease;
+}
 a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
 .bridge-text { min-width: 0; }
 .bridge-name { font-family: var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--text); font-size: clamp(24px, 2.4vw, 38px); line-height: 1.05; }

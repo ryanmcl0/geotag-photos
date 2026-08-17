@@ -207,6 +207,7 @@ def load_member_photos(prov_index, exclude: set, echo) -> list:
             records.append({
                 'trip': slug, 'id': ph['id'], 'lat': lat, 'lon': lon,
                 'building': (ph.get('building') or '').strip(),
+                'section': (ph.get('section') or '').strip(),
                 'province': province, 'year': year,
                 'ts': ph.get('timestamp') or '',
                 'public': meta.get('public', False),
@@ -370,12 +371,49 @@ def facet_roads(facet, records, echo):
     return {'kind': 'tilegroup', 'infographic': info, 'subtiles': subtiles}, [r for r in records]
 
 
+def _bridge_folder_map(roster):
+    """normalised folder name → bridge name, from each roster entry's match tokens.
+
+    Safe here where token-matching `building` was not: `section` is a folder the photo
+    was deliberately filed into ("Guizhou/Jinqi Bridge"), not a day-itinerary string
+    that happens to name several places at once."""
+    out = {}
+    for b in roster.get('bridges', []):
+        for t in list(b.get('match') or []) + [b['name']]:
+            key = re.sub(r'[^a-z0-9]+', ' ', (t or '').lower()).strip()
+            if key:
+                out.setdefault(key, b['name'])
+    return out
+
+
+def _bridge_for_folder(section, folder_map):
+    """Bridge named by the leaf of `section`, else None."""
+    leaf = re.sub(r'[^a-z0-9]+', ' ', (section or '').split('/')[-1].lower()).strip()
+    if not leaf:
+        return None
+    if leaf in folder_map:
+        return folder_map[leaf]
+    for key, name in folder_map.items():           # "Guniuhe Bridge" ← token "Guniuhe"
+        if re.search(r'(?<!\w)' + re.escape(key) + r'(?!\w)', leaf):
+            return name
+    return None
+
+
 def facet_bridges(facet, records, echo):
-    """Geofence: a photo belongs to a bridge iff it lies within radius_km of the
-    bridge's roster lat/lon. (Token-matching the day-itinerary `building` strings
-    swept in whole days of unrelated photos — parking garages and all.)
-    config/bridge_visits.json sessions add same-visit photos whose GPS drifted
-    outside the fence (canyon multipath scatters mid-visit shots kilometres out)."""
+    """A photo belongs to a bridge either by its edits FOLDER or by geofence.
+
+    Geofence (the default): within radius_km of the bridge's roster lat/lon.
+    (Token-matching the day-itinerary `building` strings swept in whole days of
+    unrelated photos — parking garages and all.) config/bridge_visits.json sessions
+    add same-visit photos whose GPS drifted outside the fence (canyon multipath
+    scatters mid-visit shots kilometres out).
+
+    Folder, for trips listed in the roster's `section_source_trips`: once a trip's
+    edits are filed per bridge, the filing IS the answer and it beats a radius in both
+    directions — it keeps approach shots filed under a bridge (Tianmen's ran to 26 km
+    out along the access road) and stops a bridge claiming a photo that merely passed
+    within its radius. Those trips are removed from the geofence pass entirely, so the
+    two rules can't double-count."""
     roster = json.loads((ROOT / facet['roster']).read_text())
     session_ids = {}   # bridge name → [(trip, id), ...] in session order
     if BRIDGE_VISITS.exists():
@@ -385,6 +423,23 @@ def facet_bridges(facet, records, echo):
         except (OSError, json.JSONDecodeError):
             pass
     rec_by_key = {(r['trip'], r['id']): r for r in records}
+
+    folder_trips = set(roster.get('section_source_trips') or [])
+    folder_map = _bridge_folder_map(roster) if folder_trips else {}
+    folder_bridge = {}      # (trip, id) → bridge name, for folder-source trips
+    folder_records = set()  # every key from a folder-source trip (excluded from geofence)
+    for r in records:
+        if r['trip'] not in folder_trips:
+            continue
+        folder_records.add((r['trip'], r['id']))
+        name = _bridge_for_folder(r.get('section'), folder_map)
+        if name:
+            folder_bridge[(r['trip'], r['id'])] = name
+    if folder_trips:
+        echo(f"    folder-assigned trips: {', '.join(sorted(folder_trips))} — "
+             f"{len(folder_bridge)}/{len(folder_records)} photos filed under a roster bridge")
+    geo_records = [r for r in records if (r['trip'], r['id']) not in folder_records]
+
     subtiles, done_with_photos = [], 0
     cover_pool = []
     for b in roster.get('bridges', []):
@@ -401,11 +456,16 @@ def facet_bridges(facet, records, echo):
                 sub['pending'] = 'No photos yet'
                 echo(f"    ⚠ {b['name']}: done but no coords in roster — set lat/lon to populate")
             else:
-                near = [(dist_km(lat, lon, r['lat'], r['lon']), r) for r in records]
-                photos = by_time([r for d, r in near if d <= radius])
+                near = [(dist_km(lat, lon, r['lat'], r['lon']), r) for r in geo_records]
+                photos = by_time([r for d, r in near if d <= radius]
+                                 + [rec_by_key[k] for k, n in folder_bridge.items()
+                                    if n == b['name'] and k in rec_by_key])
                 have = {(p['trip'], p['id']) for p in photos}
+                # Session extras rescue GPS drift during a visit — the very thing a
+                # per-bridge folder settles, so they must not reach folder-source trips
+                # (their sessions predate the folders and can disagree with them).
                 extra = [rec_by_key[k] for k in session_ids.get(b['name'], [])
-                         if k in rec_by_key and k not in have]
+                         if k in rec_by_key and k not in have and k not in folder_records]
                 if extra:
                     photos = by_time(photos + extra)
                 sub['photos'] = [_photo_ref(p) for p in photos]
@@ -416,9 +476,9 @@ def facet_bridges(facet, records, echo):
                     if pinned:
                         sub['cover'] = _photo_ref(pinned)
                     else:
-                        in_fence = [r for d, r in sorted([x for x in near if x[0] <= radius], key=lambda x: x[0])]
-                        cands = ([r for r in in_fence if r['id'].upper().startswith('DJI')] +
-                                 [r for r in in_fence if not r['id'].upper().startswith('DJI')])
+                        ranked = sorted(photos, key=lambda r: dist_km(lat, lon, r['lat'], r['lon']))
+                        cands = ([r for r in ranked if r['id'].upper().startswith('DJI')] +
+                                 [r for r in ranked if not r['id'].upper().startswith('DJI')])
                         sub['cover'] = _photo_ref(next((r for r in cands if _is_landscape(r)), cands[0]))
                     cover_pool.extend(photos)
                     done_with_photos += 1

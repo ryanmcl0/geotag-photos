@@ -232,6 +232,56 @@ def load_geotag_overrides(raw_overrides: list) -> list:
     return result
 
 
+def load_time_overrides(raw_overrides: list) -> list:
+    """
+    Parse time_overrides from trip config: per-camera clock corrections for bodies
+    whose RTC was wrong for part of a trip (a drone that lost its GPS time fix keeps
+    counting from a stale date, so its frames land a year+ away from the trip).
+
+    Each entry selects frames by filename prefix and/or by the stamped date range
+    (`stamped_from`/`stamped_to`, YYYY-MM-DD, inclusive), and shifts them by
+    `shift_seconds`. Selecting on the STAMPED date is what makes this safe: the same
+    camera can be wrong for one leg and right for another, and only the wrong leg
+    carries the bad dates. Returns (prefix, from_date, to_date, shift) tuples.
+
+    Applied to the raw EXIF time BEFORE --geosync, so the shift is expressed in the
+    camera's own local clock and geosync still converts local → UTC afterwards.
+    """
+    result = []
+    for o in (raw_overrides or []):
+        try:
+            shift = int(o['shift_seconds'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        prefix = (o.get('filename_prefix') or '').upper()
+
+        def _d(key):
+            v = o.get(key)
+            return datetime.strptime(v, '%Y-%m-%d').date() if v else None
+        try:
+            result.append((prefix, _d('stamped_from'), _d('stamped_to'), shift))
+        except ValueError:
+            continue
+    return result
+
+
+def apply_time_override(photo_stem: str, photo_time, overrides: list):
+    """Return photo_time shifted by the first matching override, else unchanged."""
+    if not overrides or photo_time is None:
+        return photo_time
+    stem_u = photo_stem.upper()
+    for prefix, d_from, d_to, shift in overrides:
+        if prefix and not stem_u.startswith(prefix):
+            continue
+        d = photo_time.date()
+        if d_from and d < d_from:
+            continue
+        if d_to and d > d_to:
+            continue
+        return photo_time + timedelta(seconds=shift)
+    return photo_time
+
+
 def apply_geotag_override(photo_stem: str, overrides: list) -> Optional[dict]:
     """Return fixed {lat, lon} if photo_stem's numeric ID falls in any override range."""
     digits = ''.join(filter(str.isdigit, photo_stem))
@@ -604,7 +654,33 @@ def find_photos(photo_dir: Path) -> list[Path]:
                 if any(part.lower() in SKIP_SUBDIRS for part in rel_parts):
                     continue
                 photos.append(p)
-    return sorted(set(photos))
+    return _dedupe_edit_stems(sorted(set(photos)), photo_dir)
+
+
+def _dedupe_edit_stems(photos: list[Path], photo_dir: Path) -> list[Path]:
+    """Keep one edit per stem — the most recently modified.
+
+    The photo id is the filename stem, so two edits sharing one (the same frame
+    re-exported into a second folder during a re-organise) would collide: two
+    manifest entries with the same id, both writing the same derivative filenames,
+    and — since privacy can key on the folder — an ambiguous public/private verdict
+    decided by directory-walk order. Newest wins because the later export is the
+    current edit; the drop is announced rather than silent.
+    """
+    by_stem: dict[str, list[Path]] = {}
+    for p in photos:
+        by_stem.setdefault(p.stem, []).append(p)
+    dupes = {s: v for s, v in by_stem.items() if len(v) > 1}
+    if not dupes:
+        return photos
+    dropped = set()
+    for stem, paths in dupes.items():
+        ranked = sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+        dropped.update(ranked[1:])
+        click.echo(f"  ⚠ duplicate edit stem {stem}: keeping "
+                   f"{ranked[0].relative_to(photo_dir)}, ignoring "
+                   + ', '.join(str(p.relative_to(photo_dir)) for p in ranked[1:]))
+    return [p for p in photos if p not in dropped]
 
 
 def batch_read_exif(paths: list[Path]) -> dict[str, dict]:
@@ -1597,6 +1673,12 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--hosted-photos-dir', default=None, type=click.Path(),
               help='Root for compressed image storage (default: <project>/hosted-photos)')
 @click.option('--geosync', default='', help='Timezone offset for camera sync (e.g., +02:00)')
+@click.option('--time-overrides', 'time_overrides_json', default=None, metavar='JSON',
+              help='JSON list of per-camera clock corrections, e.g. '
+                   '[{"filename_prefix":"DJI_","stamped_from":"2025-01-01",'
+                   '"stamped_to":"2025-12-31","shift_seconds":34954980}]. Selects frames by '
+                   'filename prefix and/or stamped date range and shifts them; applied BEFORE '
+                   '--geosync. For a camera whose clock was wrong on part of a trip.')
 @click.option('--gpx-tolerance-hours', default=2.0, type=float,
               help='Photos this far outside the GPX window get fallback placement (default: 2)')
 @click.option('--gpx-split-gap-km', default=5.0, type=float,
@@ -1741,7 +1823,8 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 @click.option('--dry-run', is_flag=True, help='Preview without writing files')
 def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
-                 geosync: str, gpx_tolerance_hours: float, gpx_split_gap_km: float,
+                 geosync: str, time_overrides_json: Optional[str],
+                 gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float, max_gap_interp_km: float,
                  phone_gps: bool, phone_gps_dir: str, phone_gps_threshold_min: float,
                  phone_gps_offset_hours: float,
@@ -2053,6 +2136,13 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         geotag_overrides_parsed = load_geotag_overrides(_json.loads(geotag_overrides_json))
         if geotag_overrides_parsed:
             click.echo(f"Loaded {len(geotag_overrides_parsed)} geotag override range(s)")
+
+    time_overrides_parsed: list = []
+    if time_overrides_json:
+        import json as _json
+        time_overrides_parsed = load_time_overrides(_json.loads(time_overrides_json))
+        if time_overrides_parsed:
+            click.echo(f"Loaded {len(time_overrides_parsed)} camera clock override(s)")
 
     # Discovery mode: report building names derived from the raw folders, then exit.
     if dump_buildings:
@@ -2407,6 +2497,10 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
                 })
                 continue
 
+        # Correct a wrong camera clock first (still in the camera's local time), then
+        # convert local → UTC. Order matters: geosync is a timezone, not a clock fix.
+        photo_time = apply_time_override(photo_file.stem, photo_time, time_overrides_parsed)
+
         # Apply timezone offset
         if geosync:
             photo_time = apply_timezone_offset(photo_time, geosync)
@@ -2620,6 +2714,16 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         }
         if building_name:
             photo_entry['building'] = building_name
+        # Where the EDIT lives relative to the edits root ("Guangdong",
+        # "Guizhou/Jinqi Bridge"). `building` comes from the RAWS tree and answers
+        # "what is this a photo of"; `section` answers "how did you file it", which is
+        # what the privacy review is organised around. Omitted for edits at the root.
+        try:
+            _sect = photo_file.parent.relative_to(photos_path).as_posix()
+        except ValueError:
+            _sect = ''
+        if _sect and _sect != '.':
+            photo_entry['section'] = _sect
         if on_route:
             photo_entry['on_route'] = True
         processed_photos.append(photo_entry)

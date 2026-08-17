@@ -122,6 +122,7 @@ window.Gallery = (function () {
           const cell = document.createElement('button');
           cell.className = 'photo-cell';
           cell.type = 'button';
+          if (p.trip && p.id) { cell.dataset.trip = p.trip; cell.dataset.id = p.id; }
           cell.style.width = `${(arOf(p) * h).toFixed(2)}px`;
           cell.style.height = `${h.toFixed(2)}px`;
           const img = document.createElement('img');
@@ -135,6 +136,9 @@ window.Gallery = (function () {
         });
         grid.appendChild(rowEl);
       });
+      // Owner-only Posts feature (no-op stub when locked); called after every
+      // (re)layout because a relayout rebuilds all cells.
+      if (window.Posts) Posts.onGridRender(grid, order);
     }
 
     layout();
@@ -194,7 +198,8 @@ window.Gallery = (function () {
         src: photoUrl(p, 'display'),
         msrc: photoUrl(p, 'thumbnails'),
         w, h, _needsSize: !p.ar,
-        title: p.title || ''
+        title: p.title || '',
+        ref: p
       };
     });
     const gallery = new PhotoSwipe(pswpEl, PhotoSwipeUI_Default, items, {
@@ -213,6 +218,7 @@ window.Gallery = (function () {
     });
     addWheelZoom(gallery, pswpEl);
     gallery.init();
+    if (window.Posts) Posts.attachLightbox(gallery, pswpEl);
   }
 
   return { photoUrl, renderGrid, openLightbox, lockedCover };

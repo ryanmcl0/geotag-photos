@@ -528,6 +528,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <script src="/js/gallery.js"></script>
     <script src="/js/blog.js"></script>
     <script src="/js/blog-map.js"></script>
+    <script src="/js/posts.js"></script>
     <script>
     (function () {{
         const el = document.querySelector('.blog-hero[data-cover-src]');

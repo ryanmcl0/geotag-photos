@@ -12,6 +12,7 @@ const ACCESS = ACCESS_INDEX as {
 interface Env {
     CF_SITE_PASSWORD: string;
     CF_ALL_PASSWORD: string;
+    CF_POSTS_PASSWORD: string;
     ASSETS: Fetcher;
 }
 
@@ -99,7 +100,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         return m ? m.split('=').slice(1).join('=') : null;
     };
 
-    if (context.request.method === 'POST' && (path === '/auth' || path === '/auth-all')) {
+    if (context.request.method === 'POST' && ['/auth', '/auth-all', '/auth-posts'].includes(path)) {
         const ip = context.request.headers.get('CF-Connecting-IP') || 'local';
         const retry = authRetryAfter(ip);
         if (retry) {
@@ -132,9 +133,31 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         });
     }
 
+    // Owner-only posts unlock. Unlike /auth-all there is no open-when-unset
+    // fallback and failures are 404s: with no CF_POSTS_PASSWORD configured, or
+    // a wrong guess, the feature doesn't visibly exist.
+    if (path === '/auth-posts' && context.request.method === 'POST') {
+        const postsPassword = context.env.CF_POSTS_PASSWORD;
+        const formData = await context.request.formData();
+        const submitted = formData.get('password') as string;
+
+        if (postsPassword && submitted && submitted === postsPassword) {
+            const isSecure = url.protocol === 'https:';
+            const token = await tokenFor(postsPassword);
+            return new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Set-Cookie': `posts_auth=${token}; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
+                }
+            });
+        }
+        return new Response('Not found', { status: 404 });
+    }
+
     const sitePassword = context.env.CF_SITE_PASSWORD;
     const allPassword = context.env.CF_ALL_PASSWORD;
-    const isAuthPath = ['/login', '/login.html', '/auth', '/auth-all'].includes(path);
+    const isAuthPath = ['/login', '/login.html', '/auth', '/auth-all', '/auth-posts'].includes(path);
 
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {

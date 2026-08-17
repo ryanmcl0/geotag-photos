@@ -29,6 +29,7 @@ Run standalone (./photo_privacy.py [--dry-run]) or via build_collections.py /
 deploy.py, both of which call sync().
 """
 
+import fnmatch
 import json
 import math
 import re
@@ -174,6 +175,47 @@ def load_bridge_labels() -> dict | None:
     return labels
 
 
+def load_section_rules(overrides: dict) -> dict:
+    """slug → ordered [(glob, public)] from config/photo_privacy.json `section_rules`.
+
+    A section is where the EDIT was filed relative to the edits root ("Guangdong",
+    "Guizhou/Jinqi Bridge"); process_trip writes it onto each photo. Rules let a whole
+    folder default public or private without listing every id, which matters because
+    id-keyed overrides silently go stale when a re-edit renames the file
+    (RM102034 → RM102034-Enhanced-NR).
+
+    First matching glob wins, so put the specific patterns first:
+        [{"section": "Guizhou/*", "public": false},   # bridge subfolders
+         {"section": "Guizhou",   "public": true}]    # the province folder itself
+    """
+    rules = {}
+    for slug, entries in (overrides.get('section_rules') or {}).items():
+        if slug.startswith('_'):
+            continue
+        out = []
+        for e in entries or []:
+            pat = e.get('section')
+            if pat and 'public' in e:
+                out.append((pat, bool(e['public'])))
+        if out:
+            rules[slug] = out
+    return rules
+
+
+def section_verdict(section: str | None, rules: list):
+    """True = section defaults public, False = defaults private, None = no rule.
+
+    A `public` verdict deliberately outranks the roof/bridge auto-rules: the filing
+    IS the decision (a photo filed under the province folder rather than the bridge
+    folder is a landscape shot that happens to be near a bridge, not a climb)."""
+    if not rules or not section:
+        return None
+    for pat, public in rules:
+        if fnmatch.fnmatch(section, pat):
+            return public
+    return None
+
+
 def compute_private_map(echo=lambda *a: None) -> dict:
     """trip slug → set of private photo ids, for PUBLIC trips only.
     (Private trips are gated wholesale at the trip level.)"""
@@ -185,6 +227,7 @@ def compute_private_map(echo=lambda *a: None) -> dict:
     overrides = load_overrides()
     force_public = {k: set(v) for k, v in (overrides.get('force_public') or {}).items()}
     force_private = {k: set(v) for k, v in (overrides.get('force_private') or {}).items()}
+    section_rules = load_section_rules(overrides)
 
     private_map = {}
     for trip_dir in sorted(WEB_TRIPS.iterdir()):
@@ -213,7 +256,8 @@ def compute_private_map(echo=lambda *a: None) -> dict:
         fp = force_public.get(slug, set())
         if '*' in fp:
             continue  # whole trip exempted (e.g. Mongolia UB rooftops stay public)
-        roofs_n = bridges_n = 0
+        roofs_n = bridges_n = sections_n = 0
+        rules = section_rules.get(slug, [])
         priv = set()
         for ph in manifest.get('photos', []):
             pid = ph['id']
@@ -221,6 +265,15 @@ def compute_private_map(echo=lambda *a: None) -> dict:
                 continue
             if pid in force_private.get(slug, ()):
                 priv.add(pid)
+                continue
+            # Folder-level default, checked before the drone exemption: a folder marked
+            # private is private for every camera in it, aerials included.
+            verdict = section_verdict(ph.get('section'), rules)
+            if verdict is False:
+                priv.add(pid)
+                sections_n += 1
+                continue
+            if verdict is True:
                 continue
             if pid.upper().startswith('DJI'):
                 continue  # drone aerials stay listed
@@ -246,7 +299,8 @@ def compute_private_map(echo=lambda *a: None) -> dict:
         priv |= (force_private.get(slug, set()) & {p['id'] for p in manifest.get('photos', [])})
         if priv:
             private_map[slug] = priv
-            echo(f"  {slug}: {len(priv)} private (roofs {roofs_n}, bridges {bridges_n})")
+            echo(f"  {slug}: {len(priv)} private (roofs {roofs_n}, bridges {bridges_n}, "
+                 f"sections {sections_n})")
     return private_map
 
 

@@ -163,6 +163,9 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
     opts = trip.get('options', {})
     if opts.get('geosync'):
         cmd += ['--geosync', opts['geosync']]
+    if opts.get('time_overrides'):
+        import json as _json
+        cmd += ['--time-overrides', _json.dumps(opts['time_overrides'])]
     if opts.get('filter_raws'):
         cmd += ['--filter-by-raws-in', opts['filter_raws']]
     if opts.get('exclude_raws'):

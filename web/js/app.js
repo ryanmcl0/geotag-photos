@@ -677,11 +677,20 @@ function initMap() {
     //    old origin. That is the map going blank.
     //  - never mid-zoom-animation. During a zoom the pane is under a CSS transform
     //    that Leaflet owns; writing a position into it corrupts the end state the
-    //    same way. Defer to zoomend instead (Leaflet always ends a zoom within
-    //    250 ms, so the deferred measure can't be lost).
-    let resizeRAF, remeasurePending = false;
+    //    same way. Defer to zoomend instead — but NOT only to zoomend: iOS can
+    //    drop the transitionend that produces it (see forceFinishStuckZoom), so
+    //    also retry on a short timer, or the deferred measure is lost forever
+    //    and the map keeps rendering at a stale size.
+    let resizeRAF, remeasurePending = false, remeasureRetry;
     const remeasure = () => {
-        if (map._animatingZoom) { remeasurePending = true; return; }
+        if (map._animatingZoom) {
+            remeasurePending = true;
+            clearTimeout(remeasureRetry);
+            remeasureRetry = setTimeout(remeasure, 400);
+            return;
+        }
+        remeasurePending = false;
+        clearTimeout(remeasureRetry);
         cancelAnimationFrame(resizeRAF);
         resizeRAF = requestAnimationFrame(
             () => map.invalidateSize({ animate: false, pan: false }));
@@ -740,11 +749,54 @@ let lastLayerRecovery = 0;
 // is far larger than any icon anchor is the stranded state.
 const LAYER_DRIFT_LIMIT = 300;
 
+// _animatingZoom is cleared by a transitionend on Leaflet's zoom proxy, and iOS
+// Safari drops that event when a transition is interrupted (a new touch mid-
+// animation) or the compositor discards the layer. The flag then sticks true
+// forever, which used to disarm every safety net at once: the watchdog bailed,
+// the deferred invalidateSize waited for a zoomend that never came (stale-size
+// tiles covering a fraction of the screen), and the double-tap zoom went dead.
+// A real zoom transition is 250 ms, so a flag older than a second is stuck.
+// _onZoomTransitionEnd is the handler the lost event should have run: it clears
+// the flag, finishes the move and fires zoom/move/moveend, so everything queued
+// on those events (remeasure, this watchdog) runs. Returns true while a
+// legitimate animation is in flight.
+let animatingSince = 0;
+function forceFinishStuckZoom() {
+    if (!map._animatingZoom) { animatingSince = 0; return false; }
+    if (!animatingSince) animatingSince = Date.now();
+    if (Date.now() - animatingSince < 1000) return true;
+    animatingSince = 0;
+    console.warn('Zoom animation stuck (transitionend never fired), force-finishing');
+    if (typeof map._onZoomTransitionEnd === 'function') {
+        map._onZoomTransitionEnd();
+    } else {
+        map._animatingZoom = false;
+    }
+    return false;
+}
+
 function checkLayerHealth() {
-    if (map._animatingZoom) return;
+    if (forceFinishStuckZoom()) return;
+    // Stale size: the container changed while every resize path was blocked.
+    // Compare Leaflet's cached size against the real element; remeasuring here
+    // both fixes the tiles and re-anchors the panes for the checks below.
+    const container = map.getContainer();
+    const size = map.getSize();
+    if (Math.abs(size.x - container.clientWidth) > 1
+        || Math.abs(size.y - container.clientHeight) > 1) {
+        console.warn(`Map size stale (${size.x}x${size.y} vs `
+            + `${container.clientWidth}x${container.clientHeight}), remeasuring`);
+        map.invalidateSize({ animate: false, pan: false });
+    }
     const health = inspectLayerHealth();
     updateMapDebug(health);
-    if (health.drift < LAYER_DRIFT_LIMIT) return;
+    // Stranded: either measurable drift, or icons exist in the DOM but not one
+    // lands inside the container (drift can't be measured if the rects are all
+    // stale together). Recovery at the same centre/zoom is invisible, so a
+    // false positive here costs nothing.
+    const stranded = health.drift >= LAYER_DRIFT_LIMIT
+        || (health.markers > 0 && health.rendered === 0);
+    if (!stranded) return;
     if (Date.now() - lastLayerRecovery < 3000) return;
     lastLayerRecovery = Date.now();
     console.warn(`Map layers stranded (${health.drift}px drift, `
@@ -767,8 +819,11 @@ function updateMapDebug(health) {
     const el = document.getElementById('map-debug');
     if (!el) return;
     const pos = L.DomUtil.getPosition(map._mapPane) || { x: 0, y: 0 };
+    const size = map.getSize();
     el.textContent = `z${map.getZoom().toFixed(1)}  drift ${health.drift}px  `
         + `on screen ${health.rendered}/${health.markers}  `
+        + `anim ${map._animatingZoom ? 1 : 0}  `
+        + `size ${size.x}x${size.y}  `
         + `pane ${Math.round(pos.x)},${Math.round(pos.y)}  `
         + `icons ${document.querySelectorAll('.leaflet-marker-pane > *').length}  `
         + `paths ${document.querySelectorAll('.leaflet-overlay-pane path').length}`;
@@ -787,6 +842,10 @@ function initLayerWatchdog() {
         timer = setTimeout(checkLayerHealth, 700);
     };
     map.on('zoomend moveend', schedule);
+    // Backstop poll: the stranded state can arrive with no further map events
+    // (a viewport resize mid-gesture, a dropped transitionend), and a stuck
+    // _animatingZoom suppresses the very zoomend/moveend this hangs off.
+    setInterval(() => { if (!document.hidden) checkLayerHealth(); }, 2000);
 }
 
 function initDoubleTapZoom() {

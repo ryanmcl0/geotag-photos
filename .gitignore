@@ -90,6 +90,8 @@ web/videos.html
 # Privacy audit galleries (tools/public_photo_audit.py [--private])
 _public_photo_audit.html
 _private_photo_audit.html
+# Per-trip folder-by-folder privacy review (tools/trip_privacy_review.py)
+_trip_privacy_review.html
 
 *.txt
 _publish_review.html

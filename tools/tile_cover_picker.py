@@ -8,6 +8,7 @@ Run it with ONE section name from config/tile_covers.json:
     tools/tile_cover_picker.py roads         # per-road-trip subtile covers
     tools/tile_cover_picker.py provinces     # per-province subtile covers
     tools/tile_cover_picker.py roofs         # per-building subtile covers
+    tools/tile_cover_picker.py energy        # per-site Energy & Infrastructure covers
     tools/tile_cover_picker.py china         # hub facet + hero covers
     tools/tile_cover_picker.py rooftopping   # rooftopping hero
     tools/tile_cover_picker.py blogs         # per-blog covers
@@ -41,7 +42,7 @@ COLLECTIONS = ROOT / 'web' / 'collections'
 CONFIG = ROOT / 'config' / 'tile_covers.json'
 
 SECTIONS = ['home', 'galleries', 'blogs', 'china', 'rooftopping',
-            'provinces', 'bridges', 'roads', 'roofs']
+            'provinces', 'bridges', 'roads', 'roofs', 'energy']
 INITIAL_SHOWN = 150       # cells rendered visible per tile; the rest reveal on demand
 
 
@@ -123,6 +124,18 @@ def dedup(refs):
 # ---------------------------------------------------------------- per-section candidates
 
 def _china_tile(tile_id):
+    """The facet tile, preferring the PUBLIC build.
+
+    A cover on an ungated tile has to load for a logged-out visitor, so its
+    candidates must come from the public build — offering private photos there
+    invites a pick the image proxy will block. Gated facets (bridges, roofs) carry
+    no subtiles in the public build, so they fall through to the full one, where a
+    private cover is legitimate (photo_privacy.cover_serve_map serves it)."""
+    for name in ('china.json', 'china.all.json'):
+        d = _load(COLLECTIONS / name) or {}
+        tile = next((t for t in d.get('tiles', []) if t['id'] == tile_id), None)
+        if tile and not tile.get('locked') and _subtiles(tile):
+            return tile
     d = _load(COLLECTIONS / 'china.all.json') or {}
     return next((t for t in d.get('tiles', []) if t['id'] == tile_id), None)
 
@@ -173,7 +186,7 @@ def build_candidates(section, config):
             add(slug, trip_landscape(slug, block.get(slug), public_only=True),
                 '' if (TRIPS / slug).exists() else 'trip not processed')
 
-    elif section in ('bridges', 'roads', 'provinces'):
+    elif section in ('bridges', 'roads', 'provinces', 'energy'):
         tile = _china_tile(section)
         by_title = {s.get('title'): s for s in _subtiles(tile)}
         for key in keys:

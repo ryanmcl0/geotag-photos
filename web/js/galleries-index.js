@@ -106,9 +106,10 @@
         }
 
         const href = `${BASE}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
-        // photo_count = public (locked) count; photo_count_all = full count revealed once
-        // the See All gate is unlocked. Trips with no gated photos have them equal.
-        const n = (unlocked() && trip.photo_count_all) ? trip.photo_count_all : trip.photo_count;
+        // Always the FULL (public + private) count, so a tile reads the same locked or
+        // unlocked — matches the China hub, where sub-tiles carry the full count too.
+        // photo_count is the public-only count (fallback for trips with no full figure).
+        const n = trip.photo_count_all || trip.photo_count;
         const count = n ? `${n} photo${n === 1 ? '' : 's'}` : '';
 
         const card = el('a', 'tile');

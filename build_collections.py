@@ -984,6 +984,7 @@ def main(collection, do_category, force):
         build_collection(coll, do_category, force, private_map)
     emit_site_stats(click.echo)
     emit_gallery_covers(click.echo)
+    emit_gallery_highlights(click.echo)
     save_dims_cache()
 
 
@@ -1298,6 +1299,34 @@ def emit_gallery_covers(echo):
     (OUT_DIR / 'gallery_covers.json').write_text(json.dumps(covers, indent=2))
     echo(f"✓ Wrote web/collections/gallery_covers.json ({len(covers)} pinned cover"
          f"{'' if len(covers) == 1 else 's'})")
+
+
+def emit_gallery_highlights(echo):
+    """Hand-picked per-trip highlight photos (tools/gallery_highlights_picker.py →
+    config/gallery_highlights.json) → web/collections/gallery_highlights.json.
+    Ids are validated against each trip's full manifest; trips without picks get
+    no entry, and their gallery renders no Highlights section. The picker also
+    emits this file directly on Apply — this keeps it in sync on full builds."""
+    cfg_path = ROOT / 'config' / 'gallery_highlights.json'
+    if not cfg_path.exists():
+        return
+    picks = json.loads(cfg_path.read_text()).get('highlights') or {}
+    out = {}
+    for slug, ids in picks.items():
+        man = photo_privacy.load_full_manifest(WEB_TRIPS / slug)
+        if not man:
+            echo(f"  ⚠ highlights: trip '{slug}' not processed — skipped")
+            continue
+        known = {p['id'] for p in man.get('photos', [])}
+        for bad in [i for i in ids if i not in known]:
+            echo(f"  ⚠ highlights: {slug}/{bad} not in manifest — skipped")
+        valid = [i for i in ids if i in known]
+        if valid:
+            out[slug] = valid
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / 'gallery_highlights.json').write_text(json.dumps(out, indent=2))
+    echo(f"✓ Wrote web/collections/gallery_highlights.json "
+         f"({len(out)} galler{'y' if len(out) == 1 else 'ies'})")
 
 
 def emit_site_stats(echo):

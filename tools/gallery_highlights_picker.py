@@ -6,7 +6,11 @@ Trip gallery pages (gallery.html) show their photos chronologically; a hand-pick
 This picker shows every processed trip as a collapsible section (newest first) with
 all its photos in gallery order — multi-select the highlights, hit Apply.
 
-    tools/gallery_highlights_picker.py
+    tools/gallery_highlights_picker.py [--public | --private]
+
+A header filter switches between all photos, public only, and private only
+(--public/--private just set the starting state). A photo counts as public when
+its trip is public and it survives the privacy filter into manifest.json.
 
 Apply rewrites the picks for the CHANGED trips only in config/gallery_highlights.json
 (ids stored in time order, matching the gallery) and immediately re-emits
@@ -58,6 +62,11 @@ def build_candidates():
         photos = sorted(man.get('photos', []), key=lambda p: p.get('timestamp') or '')
         if not photos:
             continue
+        # public = the trip is public AND the photo survives into the filtered
+        # manifest.json (private trips have no public photos at all)
+        pub_ids = set()
+        if trip.get('public') is not False:
+            pub_ids = {p['id'] for p in (_load(TRIPS / slug / 'manifest.json') or {}).get('photos', [])}
         picked = set(picks.get(slug) or [])
         cands[slug] = {
             'name': trip.get('name') or slug,
@@ -67,6 +76,7 @@ def build_candidates():
                 'disp': f'hosted-photos/{slug}/display/{p["id"]}.webp',
                 'label': p.get('building') or p.get('section') or '',
                 'sel': p['id'] in picked,
+                'pub': p['id'] in pub_ids,
             } for p in photos],
             'total': len(photos),
             'n_picked': sum(1 for p in photos if p['id'] in picked),
@@ -130,6 +140,13 @@ header.top button.navtoggle:hover{background:#34343a}
 .applybar button.apply:hover{background:#357d49}
 .applybar button:disabled{opacity:.4;cursor:default}
 .applybar .msg{font-size:12px;color:var(--muted)}
+.vis{display:flex;gap:6px}
+.vis button{background:#26262a;color:var(--muted);border:1px solid var(--line);border-radius:12px;
+  padding:3px 11px;font-size:12px;cursor:pointer}
+.vis button.on{color:var(--fg);border-color:#4a9eff}
+body.f-public .cell[data-pub="0"]{display:none}
+body.f-private .cell[data-pub="1"]{display:none}
+.sec.novis{display:none}
 .lightbox{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.88);display:none;
   align-items:center;justify-content:center;cursor:zoom-out}
 .lightbox.open{display:flex}
@@ -137,16 +154,21 @@ header.top button.navtoggle:hover{background:#34343a}
 """
 
 
-def render(cands):
+def render(cands, visibility='all'):
     P = []
     P.append('<!doctype html><html lang=en><head><meta charset=utf-8>')
     P.append('<meta name=viewport content="width=device-width,initial-scale=1">')
     P.append('<title>gallery highlights picker</title>')
-    P.append(f'<style>{PAGE_CSS}</style></head><body>')
+    body_cls = {'public': ' class=f-public', 'private': ' class=f-private'}.get(visibility, '')
+    P.append(f'<style>{PAGE_CSS}</style></head><body{body_cls}>')
     P.append('<header class=top>')
     P.append('<h1>gallery highlights</h1>')
     P.append('<span class=sub>click a trip to expand · multi-select the photos for its '
              'Highlights section · <span style="color:var(--ok)">▦</span> picked</span>')
+    P.append('<span class=vis id=vis>'
+             + ''.join(f'<button data-vis="{v}"{" class=on" if v == visibility else ""}>{t}</button>'
+                       for v, t in (('all', 'All'), ('public', 'Public only'), ('private', 'Private only')))
+             + '</span>')
     P.append(f'<button class=navtoggle id=navtoggle aria-expanded=false>jump to trip ({len(cands)}) ▾</button>')
     P.append('<nav id=nav>')
     for i, (slug, info) in enumerate(cands.items()):
@@ -165,7 +187,7 @@ def render(cands):
             cls = 'cell' + (' sel' if ph['sel'] else '') + hidden
             info_tag = f'<span class=info>{html.escape(ph["label"])}</span>' if ph['label'] else ''
             P.append(
-                f'<div class="{cls}" data-id="{html.escape(ph["id"])}" '
+                f'<div class="{cls}" data-id="{html.escape(ph["id"])}" data-pub="{1 if ph["pub"] else 0}" '
                 f'title="{html.escape(slug + "/" + ph["id"])}">'
                 f'{info_tag}'
                 f'<a class=open href="{html.escape(ph["disp"])}" target=_blank rel=noopener title="open full size">⤢</a>'
@@ -188,6 +210,27 @@ def render(cands):
   <div class=msg id=msg></div>
 </div>
 <script>
+// public / private / all visibility filter — hides non-matching cells and
+// whole trips left with nothing to show (selections persist regardless)
+const vis=document.getElementById('vis');
+function applyVis(){
+  const mode=document.body.classList.contains('f-public')?'public'
+    :document.body.classList.contains('f-private')?'private':'all';
+  document.querySelectorAll('.sec').forEach(s=>{
+    const any=mode==='all'||s.querySelector(`.cell[data-pub="${mode==='public'?1:0}"]`);
+    s.classList.toggle('novis',!any);
+  });
+}
+vis.addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  vis.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  document.body.classList.remove('f-public','f-private');
+  if(b.dataset.vis==='public')document.body.classList.add('f-public');
+  if(b.dataset.vis==='private')document.body.classList.add('f-private');
+  applyVis();
+});
+applyVis();
 // collapsible jump-to nav (collapsed by default so it doesn't eat the viewport)
 const nav=document.getElementById('nav'), navBtn=document.getElementById('navtoggle');
 navBtn.onclick=()=>{const o=nav.classList.toggle('open');navBtn.setAttribute('aria-expanded',o);
@@ -370,11 +413,13 @@ def make_handler(page_html):
 def main():
     if not CONFIG.exists():
         CONFIG.write_text(json.dumps({'highlights': {}}, indent=2) + '\n')
+    visibility = ('public' if '--public' in sys.argv
+                  else 'private' if '--private' in sys.argv else 'all')
     cands = build_candidates()
     if not cands:
         print('no processed trips found — nothing to pick')
         sys.exit(1)
-    page = render(cands)
+    page = render(cands, visibility)
 
     httpd = ThreadingHTTPServer(('127.0.0.1', 0), make_handler(page))
     port = httpd.server_address[1]

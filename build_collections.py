@@ -41,6 +41,7 @@ OUT_DIR = ROOT / 'web' / 'collections'
 CLASSIFY_CONFIG = ROOT / 'config' / 'classifications.json'
 CLIP_CACHE = ROOT / 'config' / '.classify_cache.json'
 BRIDGE_VISITS = ROOT / 'config' / 'bridge_visits.json'
+BRIDGE_PICKS = ROOT / 'config' / 'bridge_photo_picks.json'
 
 # One user-maintained file controls every tile cover on the site (hub facets,
 # heroes, per-province/bridge/roof/road-leg subtiles, landing-page tiles).
@@ -413,13 +414,27 @@ def facet_bridges(facet, records, echo):
     directions — it keeps approach shots filed under a bridge (Tianmen's ran to 26 km
     out along the access road) and stops a bridge claiming a photo that merely passed
     within its radius. Those trips are removed from the geofence pass entirely, so the
-    two rules can't double-count."""
+    two rules can't double-count.
+
+    Manual picks (config/bridge_photo_picks.json, written by tools/bridge_photo_picker.py)
+    are a third source: bridges flagged `manual_photos` in the roster use ONLY their
+    picks (no geofence — the folder and session rules don't apply to them anyway), and a
+    NOT-done bridge with picks (visited while under construction) gets its picked photos
+    attached to its pending subtile so the front-end can link the name into the gallery
+    without giving it a photo tile."""
     roster = json.loads((ROOT / facet['roster']).read_text())
     session_ids = {}   # bridge name → [(trip, id), ...] in session order
     if BRIDGE_VISITS.exists():
         try:
             for s in json.loads(BRIDGE_VISITS.read_text()).get('sessions', []):
                 session_ids.setdefault(s['bridge'], []).extend((s['trip'], pid) for pid in s['photos'])
+        except (OSError, json.JSONDecodeError):
+            pass
+    picks_ids = {}     # bridge name → [(trip, id), ...] in picked order
+    if BRIDGE_PICKS.exists():
+        try:
+            for name, refs in (json.loads(BRIDGE_PICKS.read_text()).get('picks') or {}).items():
+                picks_ids[name] = [(p['trip'], p['id']) for p in refs]
         except (OSError, json.JSONDecodeError):
             pass
     rec_by_key = {(r['trip'], r['id']): r for r in records}
@@ -448,24 +463,36 @@ def facet_bridges(facet, records, echo):
                'province': b.get('province'), 'status': b.get('status')}
         if b.get('name_zh'):
             sub['name_zh'] = b['name_zh']
+        picked = [rec_by_key[k] for k in picks_ids.get(b['name'], []) if k in rec_by_key]
+        missing = [k for k in picks_ids.get(b['name'], []) if k not in rec_by_key]
+        if missing:
+            echo(f"    ⚠ {b['name']}: {len(missing)} picked photo(s) not on the map "
+                 f"(no GPS / not processed) — skipped: {', '.join(pid for _, pid in missing[:5])}")
         if b.get('done'):
             lat, lon = b.get('lat'), b.get('lon')
             radius = b.get('radius_km', 3.0)
-            if lat is None or lon is None:
+            manual = b.get('manual_photos', False)
+            if (lat is None or lon is None) and not (manual and picked):
                 sub['photos'] = []
                 sub['pending'] = 'No photos yet'
                 echo(f"    ⚠ {b['name']}: done but no coords in roster — set lat/lon to populate")
             else:
-                near = [(dist_km(lat, lon, r['lat'], r['lon']), r) for r in geo_records]
-                photos = by_time([r for d, r in near if d <= radius]
-                                 + [rec_by_key[k] for k, n in folder_bridge.items()
-                                    if n == b['name'] and k in rec_by_key])
+                pool = list(picked)
+                if not manual:
+                    near = [(dist_km(lat, lon, r['lat'], r['lon']), r) for r in geo_records]
+                    pool += [r for d, r in near if d <= radius]
+                    pool += [rec_by_key[k] for k, n in folder_bridge.items()
+                             if n == b['name'] and k in rec_by_key]
+                seen = set()
+                photos = by_time([p for p in pool
+                                  if (k := (p['trip'], p['id'])) not in seen and not seen.add(k)])
                 have = {(p['trip'], p['id']) for p in photos}
                 # Session extras rescue GPS drift during a visit — the very thing a
                 # per-bridge folder settles, so they must not reach folder-source trips
                 # (their sessions predate the folders and can disagree with them).
-                extra = [rec_by_key[k] for k in session_ids.get(b['name'], [])
-                         if k in rec_by_key and k not in have and k not in folder_records]
+                extra = [] if manual else \
+                    [rec_by_key[k] for k in session_ids.get(b['name'], [])
+                     if k in rec_by_key and k not in have and k not in folder_records]
                 if extra:
                     photos = by_time(photos + extra)
                 sub['photos'] = [_photo_ref(p) for p in photos]
@@ -476,7 +503,8 @@ def facet_bridges(facet, records, echo):
                     if pinned:
                         sub['cover'] = _photo_ref(pinned)
                     else:
-                        ranked = sorted(photos, key=lambda r: dist_km(lat, lon, r['lat'], r['lon']))
+                        ranked = sorted(photos, key=lambda r: dist_km(lat, lon, r['lat'], r['lon'])) \
+                            if lat is not None and lon is not None else list(photos)
                         cands = ([r for r in ranked if r['id'].upper().startswith('DJI')] +
                                  [r for r in ranked if not r['id'].upper().startswith('DJI')])
                         sub['cover'] = _photo_ref(next((r for r in cands if _is_landscape(r)), cands[0]))
@@ -486,6 +514,11 @@ def facet_bridges(facet, records, echo):
                     sub['pending'] = 'No photos yet'
         else:
             sub['pending'] = 'Pending' + (f" · UC {b['uc_year']}" if b.get('uc_year') else '')
+            if picked:
+                # Visited while under construction: the pending row stays (no tile),
+                # but the picked gallery hangs off it so the name can link in.
+                sub['photos'] = [_photo_ref(p) for p in by_time(picked)]
+                cover_pool.extend(picked)
         subtiles.append(sub)
     total = len(roster.get('bridges', []))
     # Infographic counts bridges VISITED (roster done) — matches the masthead stat;
@@ -497,8 +530,8 @@ def facet_bridges(facet, records, echo):
         ranked_total=sum(1 for b in roster.get('bridges', []) if b.get('rank')))
     echo(f"  bridges: {visited}/{total} visited, {done_with_photos} with geofenced photos")
     for s in subtiles:
-        if s['done'] and s.get('photos'):
-            echo(f"    {s['title']}: {len(s['photos'])}")
+        if s.get('photos'):
+            echo(f"    {s['title']}: {len(s['photos'])}" + ('' if s['done'] else ' (pending row, linked gallery)'))
     return {'kind': 'tilegroup', 'infographic': info, 'subtiles': subtiles}, cover_pool
 
 

@@ -122,6 +122,10 @@ h2.year .cnt{{color:var(--muted);font-size:15px;font-weight:400}}
 .selbar button:hover{{background:#34343a}}
 .selbar button.clear{{color:#ff9a9a}}
 .selbar.empty{{opacity:.5}}
+.lightbox{{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.88);display:none;
+  align-items:center;justify-content:center;cursor:zoom-out}}
+.lightbox.open{{display:flex}}
+.lightbox img{{max-width:94vw;max-height:94vh;object-fit:contain;box-shadow:0 8px 40px rgba(0,0,0,.8);cursor:default}}
 </style></head><body>
 <header class=top>
 <h1>{LABEL} photo audit</h1>
@@ -212,6 +216,19 @@ async function copy(txt,btn){
 copypaths.onclick=e=>copy(pathsText(),e.target);
 copyjson.onclick=e=>copy(jsonText(),e.target);
 clearsel.onclick=()=>{if(sel.size&&confirm('Clear '+sel.size+' flagged?')){sel.clear();save();paint();}};
+// full-size preview: in-page lightbox instead of a new tab — click outside (or Esc) to close
+const lb=document.createElement('div');lb.className='lightbox';lb.innerHTML='<img alt="">';
+document.body.appendChild(lb);
+const lbImg=lb.querySelector('img');
+const lbClose=()=>{lb.classList.remove('open');lbImg.removeAttribute('src');};
+document.addEventListener('click',e=>{
+  const a=e.target.closest('a.open'); if(!a)return;
+  e.preventDefault();
+  lbImg.src=a.getAttribute('href');
+  lb.classList.add('open');
+});
+lb.addEventListener('click',e=>{if(e.target!==lbImg)lbClose();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')lbClose();});
 paint();
 </script>
 </body></html>""")

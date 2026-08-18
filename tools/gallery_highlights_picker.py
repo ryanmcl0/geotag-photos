@@ -150,7 +150,13 @@ body.f-private .cell[data-pub="1"]{display:none}
 .lightbox{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.88);display:none;
   align-items:center;justify-content:center;cursor:zoom-out}
 .lightbox.open{display:flex}
-.lightbox img{max-width:94vw;max-height:94vh;object-fit:contain;box-shadow:0 8px 40px rgba(0,0,0,.8);cursor:default}
+.lightbox img{max-width:94vw;max-height:90vh;object-fit:contain;box-shadow:0 8px 40px rgba(0,0,0,.8);cursor:pointer}
+.lightbox .lbbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
+  gap:16px;padding:14px 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.75));
+  font-size:13px;color:#ddd;cursor:default}
+.lightbox .lbstate{cursor:pointer;padding:3px 12px;border-radius:12px;border:1px solid #666;color:#bbb;user-select:none}
+.lightbox .lbstate.on{color:var(--ok);border-color:var(--ok)}
+.lightbox .lbhint{color:#888;font-size:11px}
 """
 
 
@@ -280,14 +286,17 @@ function refresh(){
     a.classList.toggle('done',!sameSet(cur.get(k),orig.get(k)));
   }
 }
-document.addEventListener('click',e=>{
-  if(e.target.closest('.open'))return;
-  const cell=e.target.closest('.cell'); if(!cell)return;
+function toggleCell(cell){
   const k=cell.closest('.sec').dataset.key;
   const set=cur.get(k), id=cell.dataset.id;
   if(set.has(id)){set.delete(id);cell.classList.remove('sel');}
   else{set.add(id);cell.classList.add('sel');}
   refresh();
+}
+document.addEventListener('click',e=>{
+  if(e.target.closest('.open'))return;
+  const cell=e.target.closest('.cell'); if(!cell)return;
+  toggleCell(cell);
 });
 document.getElementById('reset').onclick=()=>{
   for(const s of secs){
@@ -314,19 +323,51 @@ applyBtn.onclick=async()=>{
   }catch(err){msg.textContent='error: '+err;}
   refresh();
 };
-// full-size preview: in-page lightbox instead of a new tab — click outside (or Esc) to close
-const lb=document.createElement('div');lb.className='lightbox';lb.innerHTML='<img alt="">';
+// full-size preview: in-page lightbox — arrows navigate the trip's visible photos,
+// space / clicking the photo (or the badge) toggles it in the highlights,
+// click outside or Esc closes
+const lb=document.createElement('div');lb.className='lightbox';
+lb.innerHTML='<img alt=""><div class=lbbar><span class=lbinfo></span><span class=lbstate></span>'
+  +'<span class=lbhint>← → navigate · space or click photo to toggle · esc close</span></div>';
 document.body.appendChild(lb);
-const lbImg=lb.querySelector('img');
-const lbClose=()=>{lb.classList.remove('open');lbImg.removeAttribute('src');};
+const lbImg=lb.querySelector('img'),lbInfo=lb.querySelector('.lbinfo'),lbState=lb.querySelector('.lbstate');
+let lbCells=[],lbIdx=-1;
+const lbDisp=c=>c.querySelector('a.open').getAttribute('href');
+function lbPaint(){
+  const c=lbCells[lbIdx]; if(!c)return;
+  lbImg.src=lbDisp(c);
+  lbInfo.textContent=c.dataset.id+' · '+(lbIdx+1)+' / '+lbCells.length;
+  const on=c.classList.contains('sel');
+  lbState.textContent=on?'✓ in highlights':'add to highlights';
+  lbState.classList.toggle('on',on);
+  [lbIdx-1,lbIdx+1].forEach(i=>{if(lbCells[i])new Image().src=lbDisp(lbCells[i]);});  // preload neighbours
+}
+function lbShow(i){if(i<0||i>=lbCells.length)return;lbIdx=i;lbPaint();}
+function lbToggle(){const c=lbCells[lbIdx];if(!c)return;toggleCell(c);lbPaint();}
+const lbClose=()=>{lb.classList.remove('open');lbImg.removeAttribute('src');lbCells=[];lbIdx=-1;};
 document.addEventListener('click',e=>{
   const a=e.target.closest('a.open'); if(!a)return;
   e.preventDefault();
-  lbImg.src=a.getAttribute('href');
+  const cell=a.closest('.cell');
+  // navigate within the photos actually on screen: same trip, current visibility
+  // filter applied, "Show more" overflow excluded until revealed
+  lbCells=[...cell.closest('.sec').querySelectorAll('.cell')].filter(c=>c.offsetParent!==null);
+  lbIdx=lbCells.indexOf(cell);
   lb.classList.add('open');
+  lbPaint();
 });
-lb.addEventListener('click',e=>{if(e.target!==lbImg)lbClose();});
-document.addEventListener('keydown',e=>{if(e.key==='Escape')lbClose();});
+lb.addEventListener('click',e=>{
+  if(e.target===lbImg||e.target===lbState){lbToggle();return;}
+  if(e.target.closest('.lbbar'))return;
+  lbClose();
+});
+document.addEventListener('keydown',e=>{
+  if(!lb.classList.contains('open'))return;
+  if(e.key==='Escape')lbClose();
+  else if(e.key==='ArrowRight'){e.preventDefault();lbShow(lbIdx+1);}
+  else if(e.key==='ArrowLeft'){e.preventDefault();lbShow(lbIdx-1);}
+  else if(e.key===' '||e.key==='Enter'){e.preventDefault();lbToggle();}
+});
 refresh();
 </script>
 </body></html>""")

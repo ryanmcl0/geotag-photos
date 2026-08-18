@@ -50,8 +50,10 @@ function tripFlags(context: EventContext<Env, string, unknown>): Promise<Record<
     return tripFlagsCache.data;
 }
 
+// gallery_highlights.json is id lists only — the gallery page renders just the ids
+// present in the manifest the visitor could load, and images stay behind the proxy.
 const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json',
-    '/collections/gallery_covers.json'];
+    '/collections/gallery_covers.json', '/collections/gallery_highlights.json'];
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
     if (['/rooftopping', '/rooftopping.html'].includes(path)) return true;

@@ -331,7 +331,12 @@
     const hasPhotos = s.done && (s.photos || []).length;
 
     if (!hasPhotos) {
-      const row = el('div', 'bridge-row bridge-row--pending');
+      // A pending bridge can still carry a picked gallery (visited while under
+      // construction, e.g. Yalong Liangshan): same compact row, no photo tile,
+      // but the whole row links into the gallery and shows the count.
+      const n = (s.photos || []).length;
+      const row = el(n ? 'a' : 'div', 'bridge-row bridge-row--pending');
+      if (n) row.href = `#${tile.id}/${s.id}`;
       metaBits.push(s.pending || 'Pending');
       row.innerHTML = `
         <div class="bridge-rank">${esc(String(rank))}</div>
@@ -339,6 +344,7 @@
           <span class="bridge-name">${esc(s.title)}</span>
           ${s.name_zh ? `<span class="bridge-zh">${esc(s.name_zh)}</span>` : ''}
           <div class="bridge-meta">${esc(metaBits.join(' · '))}</div>
+          ${n ? `<div class="bridge-count">${n} photos →</div>` : ''}
         </div>`;
       return row;
     }
@@ -546,7 +552,8 @@
     }
     if (!subId) return renderFacet(tile);
     const s = subById(tile, subId);
-    if (!s || !s.done) return renderFacet(tile);
+    // not-done subtiles can still carry a linked gallery (bridge visited under construction)
+    if (!s || !(s.done || (s.photos || []).length)) return renderFacet(tile);
     renderSubGallery(tile, s);
   }
 

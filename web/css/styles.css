@@ -1749,6 +1749,11 @@ details[open] .country-summary::after {
     white-space: nowrap;
 }
 
+/* hand-picked Highlights section above the chronological flow */
+.gallery-highlights-grid {
+    margin-bottom: 36px;
+}
+
 @media (max-width: 768px) {
     .gallery-view {
         padding: 14px 12px 64px;

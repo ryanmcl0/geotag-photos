@@ -88,6 +88,36 @@
         });
     }
 
+    // Hand-picked highlight photos (web/collections/gallery_highlights.json,
+    // curated with tools/gallery_highlights_picker.py) shown above the
+    // chronological flow. Only ids present in the loaded manifest render, so a
+    // locked visitor never sees a private highlight.
+    async function loadHighlights(tripId, photos) {
+        try {
+            const base = VIEW_CONFIG.basePath || '';
+            const res = await fetch(`${base}collections/gallery_highlights.json?t=${Date.now()}`);
+            if (!res.ok) return [];
+            const ids = (await res.json())[tripId] || [];
+            const byId = new Map(photos.map(p => [p.id, p]));
+            return ids.map(id => byId.get(id)).filter(Boolean);
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function renderHighlights(container, photos) {
+        const banner = document.createElement('div');
+        banner.className = 'gallery-date-banner gallery-highlights-banner';
+        banner.innerHTML =
+            `<span class="gallery-date-label">✦ Highlights</span>` +
+            `<span class="gallery-date-count">${photos.length} photo${photos.length === 1 ? '' : 's'}</span>`;
+        container.appendChild(banner);
+        const sub = document.createElement('div');
+        sub.className = 'gallery-highlights-grid';
+        container.appendChild(sub);
+        Gallery.renderGrid(sub, photos);
+    }
+
     function setInfo(name, dates, count) {
         const nameEl = document.getElementById('trip-name');
         const dateEl = document.getElementById('trip-dates');
@@ -208,8 +238,14 @@
             `${photos.length} photo${photos.length === 1 ? '' : 's'}`
         );
 
+        const highlights = await loadHighlights(trip.id, photos);
+
         await ensureAspectRatios(photos);
-        renderByDate(grid, photos, { emptyText: 'No photos in this trip yet.' });
+        grid.innerHTML = '';
+        if (highlights.length) renderHighlights(grid, highlights);
+        const flow = document.createElement('div');
+        grid.appendChild(flow);
+        renderByDate(flow, photos, { emptyText: 'No photos in this trip yet.' });
     }
 
     if (document.readyState === 'loading') {

@@ -319,6 +319,11 @@ a.bridge-row:hover .bridge-media img { transform: scale(1.04); }
 .bridge-row--pending .bridge-name { font-size: 19px; color: #6e6e6e; display: inline; }
 .bridge-row--pending .bridge-zh { display: inline; margin: 0 0 0 12px; font-size: 13px; color: #555; }
 .bridge-row--pending .bridge-meta { margin-top: 5px; font-size: 11px; color: #5a5a5a; }
+/* pending row that carries a picked gallery (visited under construction) — the row links in */
+a.bridge-row--pending { text-decoration: none; }
+a.bridge-row--pending .bridge-name { color: var(--text); }
+a.bridge-row--pending:hover .bridge-name { text-decoration: underline; text-underline-offset: 4px; }
+a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 .bridge-extras-head { margin: 60px 0 6px; font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 15px; }
 
 /* ---------- landing footer ---------- */

@@ -18,6 +18,26 @@
 }
 .pswp__button.posts-add-btn:hover { opacity: 1; }
 
+/* ---------- sitewide "Posts mode" pill ---------- */
+#posts-pill {
+  position: fixed; left: 18px; bottom: 18px; z-index: 3000;
+  display: flex; align-items: center; gap: 2px;
+  background: #1d1d1d; border: 1px solid #3a3a3a; border-radius: 999px;
+  padding: 6px 6px 6px 14px;
+}
+#posts-pill a {
+  color: #ddd; font-size: 12px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; text-decoration: none;
+}
+#posts-pill a:hover { color: #fff; }
+#posts-pill button {
+  background: none; border: none; color: #888; width: 24px; height: 24px;
+  border-radius: 50%; cursor: pointer; font-size: 12px; line-height: 1;
+}
+#posts-pill button:hover { color: #fff; background: #333; }
+/* while selecting, the action bar is the mode UI - keep the corner clear */
+body.posts-selecting #posts-pill { display: none; }
+
 /* ---------- grid select mode ---------- */
 #posts-fab {
   position: fixed; right: 18px; bottom: 18px; z-index: 3000;

@@ -374,7 +374,7 @@ window.Posts = (function () {
         if (!doc.posts.length) {
             const empty = document.createElement('p');
             empty.className = 'posts-empty';
-            empty.textContent = 'No post drafts yet. Browse the map or a gallery and use "+ Post" in the photo viewer, or "Select" on a grid.';
+            empty.textContent = 'No post drafts yet. Browse anywhere on the site and use "+ Post" in the photo viewer, or "Select" on any photo grid.';
             root.appendChild(empty);
             return;
         }
@@ -423,7 +423,7 @@ window.Posts = (function () {
         if (!post.photos.length) {
             const hint = document.createElement('p');
             hint.className = 'posts-empty';
-            hint.textContent = 'Empty. Add photos from the map, galleries or blogs.';
+            hint.textContent = 'Empty. Add photos from anywhere on the site.';
             strip.appendChild(hint);
         }
         card.appendChild(strip);

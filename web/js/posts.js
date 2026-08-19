@@ -97,6 +97,16 @@ window.Posts = (function () {
         document.body.appendChild(pill);
     })();
 
+    // "Posts" entry in the nav "More" dropdown while posts mode is on. The
+    // script loads at the end of body, so the nav is already in the DOM.
+    document.querySelectorAll('.nav-more-menu').forEach(menu => {
+        if (menu.querySelector('a[href="/posts"]')) return;
+        const a = document.createElement('a');
+        a.href = '/posts';
+        a.textContent = 'Posts';
+        menu.appendChild(a);
+    });
+
     let doc = null;           // { version, posts } once loaded; null on failure
     let saveChain = Promise.resolve();
 
@@ -153,15 +163,28 @@ window.Posts = (function () {
 
     function addRefsToPost(post, refs) {
         const have = new Set(post.photos.map(keyOf));
-        let added = 0, hitCap = false;
+        let added = 0, dupes = 0, hitCap = false;
         refs.forEach(ref => {
-            if (have.has(keyOf(ref))) return;
+            if (have.has(keyOf(ref))) { dupes++; return; }
             if (post.photos.length >= MAX_PHOTOS) { hitCap = true; return; }
             post.photos.push(cleanRef(ref));
             have.add(keyOf(ref));
             added++;
         });
-        return { added, hitCap, count: post.photos.length };
+        return { added, dupes, hitCap, count: post.photos.length };
+    }
+
+    // The "current post": the last post photos were added to (or picked in the
+    // sheet). "+ Post" and "Add to post" go straight here without re-asking.
+    const TARGET_KEY = 'posts_target_id';
+    function targetPost() {
+        if (!doc) return null;
+        let id = null;
+        try { id = localStorage.getItem(TARGET_KEY); } catch (e) { /* private mode */ }
+        return (id && doc.posts.find(p => p.id === id)) || null;
+    }
+    function setTarget(id) {
+        try { localStorage.setItem(TARGET_KEY, id); } catch (e) { /* private mode */ }
     }
 
     // ---------- Small UI primitives ----------
@@ -180,8 +203,46 @@ window.Posts = (function () {
         toastTimer = setTimeout(() => el.classList.remove('visible'), 2200);
     }
 
-    /** Bottom sheet listing posts; resolves with a post id (creating if needed) or null. */
-    function openPicker(refs, onDone) {
+    /** Add refs to a post (creating it if postId is new), remember it as the
+     *  current post, and toast the outcome. Duplicates are skipped and named. */
+    function addToPost(postId, refs, onDone) {
+        const result = {};
+        mutate(posts => {
+            let post = posts.find(p => p.id === postId);
+            if (!post) {
+                post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                posts.push(post);
+            }
+            result.name = post.name;
+            Object.assign(result, addRefsToPost(post, refs));
+        }).then(okSave => {
+            if (!okSave) return;
+            setTarget(postId);
+            updateSelectUi();
+            restampSelections();
+            if (result.hitCap && result.added) {
+                toast(`Added ${result.added}, ${result.name} is now full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
+            } else if (result.hitCap) {
+                toast(`${result.name} is full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
+                return;   // nothing was added, keep the selection
+            } else if (!result.added) {
+                toast(refs.length === 1
+                    ? `Already in ${result.name} (${result.count}/${MAX_PHOTOS})`
+                    : `All ${refs.length} already in ${result.name} (${result.count}/${MAX_PHOTOS})`);
+                return;   // nothing was added, keep the selection
+            } else if (result.dupes) {
+                toast(`Added ${result.added} to ${result.name} (${result.count}/${MAX_PHOTOS}), ${result.dupes} already in it`);
+            } else {
+                toast(`Added to ${result.name} (${result.count}/${MAX_PHOTOS})`);
+            }
+            if (onDone) onDone();
+        });
+    }
+
+    /** Bottom sheet listing posts. Default: adds refs to the chosen post.
+     *  With opts.selectOnly it just switches the current post (no adding). */
+    function openPicker(refs, onDone, opts) {
+        const selectOnly = !!(opts && opts.selectOnly);
         ready.then(ok => {
             if (!ok) { toast('Posts unavailable, try re-entering the password at /posts'); return; }
             const overlay = document.createElement('div');
@@ -189,43 +250,51 @@ window.Posts = (function () {
             const sheet = document.createElement('div');
             sheet.className = 'posts-picker';
             const title = document.createElement('h3');
-            title.textContent = refs.length === 1 ? 'Add photo to' : `Add ${refs.length} photos to`;
+            title.textContent = selectOnly ? 'Set current post'
+                : refs.length === 1 ? 'Add photo to' : `Add ${refs.length} photos to`;
             sheet.appendChild(title);
 
             const close = () => overlay.remove();
             const choose = postId => {
                 close();
+                if (!selectOnly) { addToPost(postId, refs, onDone); return; }
+                const existing = doc.posts.find(p => p.id === postId);
+                if (existing) {
+                    setTarget(postId);
+                    updateSelectUi();
+                    restampSelections();
+                    toast(`Current post: ${existing.name}`);
+                    if (onDone) onDone();
+                    return;
+                }
                 const result = {};
                 mutate(posts => {
-                    let post = posts.find(p => p.id === postId);
-                    if (!post) {
-                        post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                    if (!posts.find(p => p.id === postId)) {
+                        const post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
                         posts.push(post);
+                        result.name = post.name;
                     }
-                    result.name = post.name;
-                    Object.assign(result, addRefsToPost(post, refs));
                 }).then(okSave => {
                     if (!okSave) return;
-                    if (result.hitCap && result.added) {
-                        toast(`Added ${result.added}, ${result.name} is now full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
-                    } else if (result.hitCap) {
-                        toast(`${result.name} is full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
-                        return;   // nothing was added, keep the selection
-                    } else {
-                        toast(`Added to ${result.name} (${result.count}/${MAX_PHOTOS})`);
-                    }
+                    setTarget(postId);
+                    updateSelectUi();
+                    restampSelections();
+                    toast(`Current post: ${result.name}`);
                     if (onDone) onDone();
                 });
             };
 
+            const current = targetPost();
             doc.posts.forEach(p => {
                 const row = document.createElement('button');
                 row.type = 'button';
                 row.className = 'posts-picker-row';
                 if (p.photos.length >= MAX_PHOTOS) row.classList.add('posts-picker-full');
+                if (current && current.id === p.id) row.classList.add('posts-picker-current');
                 row.innerHTML = `<span class="posts-picker-name"></span><span class="posts-picker-count"></span>`;
                 row.querySelector('.posts-picker-name').textContent = p.name;
-                row.querySelector('.posts-picker-count').textContent = `${p.photos.length}/${MAX_PHOTOS}`;
+                row.querySelector('.posts-picker-count').textContent = (current && current.id === p.id ? 'current · ' : '')
+                    + `${p.photos.length}/${MAX_PHOTOS}`;
                 row.addEventListener('click', () => choose(p.id));
                 sheet.appendChild(row);
             });
@@ -268,10 +337,25 @@ window.Posts = (function () {
             e.stopPropagation();
             const item = currentGallery && currentGallery.currItem;
             if (!item || !item.ref) { toast('This photo cannot be added'); return; }
-            openPicker([item.ref]);
+            ready.then(ok => {
+                if (!ok) { toast('Posts unavailable, try re-entering the password at /posts'); return; }
+                const t = targetPost();
+                if (t) addToPost(t.id, [item.ref]);   // straight into the current post
+                else openPicker([item.ref]);          // no current post yet: ask once
+            });
+        });
+        const pick = document.createElement('button');
+        pick.type = 'button';
+        pick.className = 'pswp__button posts-pick-btn';
+        pick.title = 'Choose which post "+ Post" adds to';
+        pick.textContent = '▾';
+        pick.addEventListener('click', e => {
+            e.stopPropagation();
+            openPicker([], null, { selectOnly: true });
         });
         const closeBtn = bar.querySelector('.pswp__button--close');
         bar.insertBefore(btn, closeBtn || null);
+        bar.insertBefore(pick, closeBtn || null);
     }
 
     // ---------- Grid select mode ----------
@@ -279,7 +363,7 @@ window.Posts = (function () {
     let selectMode = false;
     const selected = new Map();   // key -> ref
     const refByKey = new Map();   // key -> ref, for every grid photo seen on this page
-    let fab = null, actionBar = null, actionCount = null;
+    let fab = null, actionBar = null, actionCount = null, actionTarget = null, actionAdd = null;
 
     function ensureSelectUi() {
         if (fab) return;
@@ -295,20 +379,28 @@ window.Posts = (function () {
         actionBar.id = 'posts-actionbar';
         actionCount = document.createElement('span');
         actionCount.className = 'posts-action-count';
-        const add = document.createElement('button');
-        add.type = 'button';
-        add.className = 'posts-action-add';
-        add.textContent = 'Add to post';
-        add.addEventListener('click', () => {
+        actionTarget = document.createElement('button');
+        actionTarget.type = 'button';
+        actionTarget.className = 'posts-action-target';
+        actionTarget.title = 'Change which post photos are added to';
+        actionTarget.addEventListener('click', () => openPicker([], null, { selectOnly: true }));
+        actionAdd = document.createElement('button');
+        actionAdd.type = 'button';
+        actionAdd.className = 'posts-action-add';
+        actionAdd.textContent = 'Add';
+        actionAdd.addEventListener('click', () => {
             if (!selected.size) { toast('Nothing selected'); return; }
-            openPicker([...selected.values()], () => setSelectMode(false));
+            const refs = [...selected.values()];
+            const t = targetPost();
+            if (t) addToPost(t.id, refs, () => setSelectMode(false));  // straight into the current post
+            else openPicker(refs, () => setSelectMode(false));         // no current post yet: ask once
         });
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'posts-action-cancel';
         cancel.textContent = 'Cancel';
         cancel.addEventListener('click', () => setSelectMode(false));
-        actionBar.append(actionCount, add, cancel);
+        actionBar.append(actionCount, actionTarget, actionAdd, cancel);
         document.body.appendChild(actionBar);
     }
 
@@ -328,12 +420,18 @@ window.Posts = (function () {
         actionCount.textContent = selected.size > MAX_PHOTOS
             ? `${selected.size} selected (max ${MAX_PHOTOS} per post)`
             : `${selected.size} selected`;
+        const t = targetPost();
+        actionTarget.textContent = t ? `${t.name} · ${t.photos.length}/${MAX_PHOTOS}` : 'Choose post';
+        actionAdd.textContent = t ? 'Add' : 'Add to post';
     }
 
     function restampSelections() {
+        const t = selectMode ? targetPost() : null;
+        const inTarget = t ? new Set(t.photos.map(keyOf)) : null;
         document.querySelectorAll('.photo-cell[data-trip]').forEach(cell => {
             const key = `${cell.dataset.trip}::${cell.dataset.id}`;
             cell.classList.toggle('posts-selected', selectMode && selected.has(key));
+            cell.classList.toggle('posts-in-target', !!inTarget && inTarget.has(key));
         });
     }
 
@@ -349,6 +447,11 @@ window.Posts = (function () {
         if (selected.has(key)) {
             selected.delete(key);
         } else {
+            const t = targetPost();
+            if (t && t.photos.some(ph => keyOf(ph) === key)) {
+                toast(`Already in ${t.name}`);
+                return;
+            }
             const ref = refByKey.get(key) || { trip: cell.dataset.trip, id: cell.dataset.id };
             selected.set(key, ref);
         }

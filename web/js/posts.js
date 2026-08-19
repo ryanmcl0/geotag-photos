@@ -7,6 +7,8 @@
  * /api/posts call, so a forged cookie only ever produces 404s.
  *
  * Surfaces when unlocked:
+ *  - Sitewide "Posts mode" pill (bottom-left) linking to /posts, with an ✕
+ *    that exits posts mode by clearing the cookie.
  *  - "+ Post" button in every PhotoSwipe top bar (hooked via attachLightbox).
  *  - Select mode on photo grids (hooked via onGridRender from gallery.js).
  *  - The /posts manager page (initPostsPage, called by posts.html).
@@ -68,6 +70,32 @@ window.Posts = (function () {
     cssLink.rel = 'stylesheet';
     cssLink.href = '/css/posts.css';
     document.head.appendChild(cssLink);
+
+    // Sitewide "Posts mode" pill: shows on every page while the posts_auth
+    // cookie is present, links to the /posts manager, and its ✕ exits posts
+    // mode by clearing the cookie (it is not HttpOnly, so JS can).
+    function exitPostsMode() {
+        if (!confirm('Exit posts mode? You will need the posts password to get back in.')) return;
+        document.cookie = 'posts_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
+            + (location.protocol === 'https:' ? ' Secure;' : '');
+        location.reload();
+    }
+
+    (function addModePill() {
+        const pill = document.createElement('div');
+        pill.id = 'posts-pill';
+        const link = document.createElement('a');
+        link.href = '/posts';
+        link.textContent = 'Posts mode';
+        link.title = 'Open the posts manager';
+        const exit = document.createElement('button');
+        exit.type = 'button';
+        exit.title = 'Exit posts mode';
+        exit.textContent = '✕';
+        exit.addEventListener('click', exitPostsMode);
+        pill.append(link, exit);
+        document.body.appendChild(pill);
+    })();
 
     let doc = null;           // { version, posts } once loaded; null on failure
     let saveChain = Promise.resolve();

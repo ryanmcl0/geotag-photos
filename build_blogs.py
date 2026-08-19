@@ -565,6 +565,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
     </main>
 
     <script src="/js/unlock.js"></script>
+    <script src="/js/posts.js"></script>
     <script>
     (function () {{
         const H = location.hostname;

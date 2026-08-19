@@ -9,6 +9,9 @@ locations.json.bak
 # Compressed images — hosted on R2, never in git
 hosted-photos/
 
+# Pulled Instagram post drafts (full-size photos, posts_pull.py output)
+/Posts/
+
 # Symlinks into hosted-photos/
 web/trips/*/thumbnails
 web/trips/*/display

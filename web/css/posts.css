@@ -17,6 +17,11 @@
   opacity: .8; float: right;
 }
 .pswp__button.posts-add-btn:hover { opacity: 1; }
+.pswp__button.posts-pick-btn {
+  width: auto; padding: 0 8px; background: none; color: #fff;
+  font-size: 11px; opacity: .8; float: right;
+}
+.pswp__button.posts-pick-btn:hover { opacity: 1; }
 
 /* ---------- sitewide "Posts mode" pill ---------- */
 #posts-pill {
@@ -60,7 +65,12 @@ body.posts-selecting #posts-fab { display: none; }
   border: none; border-radius: 999px; padding: 8px 14px; font-size: 13px;
   font-weight: 600; cursor: pointer; letter-spacing: .04em;
 }
-#posts-actionbar .posts-action-add { background: #eee; color: #111; }
+#posts-actionbar .posts-action-target {
+  background: none; border: 1px solid #3a3a3a; color: #ddd; font-weight: 500;
+  max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#posts-actionbar .posts-action-target:hover { border-color: #777; color: #fff; }
+#posts-actionbar .posts-action-add { background: #eee; color: #111; white-space: nowrap; }
 #posts-actionbar .posts-action-cancel { background: none; color: #999; }
 #posts-actionbar .posts-action-cancel:hover { color: #fff; }
 
@@ -72,6 +82,14 @@ body.posts-selecting .photo-cell { cursor: copy; }
   display: flex; align-items: center; justify-content: center; pointer-events: none;
 }
 body.posts-selecting .photo-cell { position: relative; }
+
+/* already in the current post: dimmed with a grey check, tap just toasts */
+body.posts-selecting .photo-cell.posts-in-target { opacity: .4; cursor: default; }
+body.posts-selecting .photo-cell.posts-in-target::after {
+  content: '✓'; position: absolute; top: 6px; right: 6px; width: 22px; height: 22px;
+  border-radius: 50%; background: #555; color: #ddd; font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; pointer-events: none;
+}
 
 /* ---------- post picker sheet ---------- */
 .posts-picker-overlay {
@@ -92,6 +110,7 @@ body.posts-selecting .photo-cell { position: relative; }
 .posts-picker-row:hover { background: #2a2a2a; }
 .posts-picker-name { font-weight: 600; }
 .posts-picker-count { color: #888; font-size: 12px; }
+.posts-picker-current { border-color: #888; }
 .posts-picker-full { opacity: .45; }
 .posts-picker-full .posts-picker-count { color: #f87171; }
 .posts-count-full { color: #f87171; }

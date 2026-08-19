@@ -8,8 +8,9 @@ manifests, and copy the files into per-post folders in carousel order.
 Usage:
   ./posts_pull.py [--dest DIR] [--post NAME] [--url URL] [--dry-run] [--list]
 
-  --dest DIR   Destination root (default: ./Posts). Each post becomes
-               <dest>/<post name>/NN_<filename>, NN = carousel order.
+  --dest DIR   Destination root (default: /Volumes/RYAN/Edits/Posts). Each post
+               becomes <dest>/<post name>/NN_<filename>, NN = carousel order.
+               Warns and exits if the RYAN drive is not mounted.
   --post NAME  Only pull the named post (default: all).
   --url URL    Posts API URL (default: https://<CF_PAGES_PROJECT>.pages.dev/api/posts).
   --list       Just print the drafts and their resolved paths, copy nothing.
@@ -61,7 +62,11 @@ def fetch_posts(url, site_password, posts_password):
     cookies = [f'posts_auth={token_for(posts_password)}']
     if site_password:
         cookies.insert(0, f'site_auth={token_for(site_password)}')
-    req = urllib.request.Request(url, headers={'Cookie': '; '.join(cookies)})
+    # Cloudflare's bot rules 403 the default Python-urllib user agent
+    req = urllib.request.Request(url, headers={
+        'Cookie': '; '.join(cookies),
+        'User-Agent': 'posts-pull/1.0',
+    })
     try:
         with urllib.request.urlopen(req) as r:
             return json.loads(r.read())
@@ -135,14 +140,64 @@ def sanitize(name):
     return re.sub(r'[\\/:*?"<>|]', '_', name).strip() or 'untitled'
 
 
+def sync_post_dir(dest_dir, plan):
+    """Bring dest_dir in line with the plan. Reorders done on the site are
+    applied by renaming the existing local NN_ files (in-place edits kept);
+    only genuinely new photos are copied from the drive. Returns (copied,
+    renamed)."""
+    planned = {dst.name for _, _, _, dst in plan}
+
+    # Local NN_<file>s that are no longer at their planned name, keyed by base
+    # filename. Two-phase (park under a temp name, then place) so swapped
+    # order numbers can't collide mid-rename.
+    parked, parked_n = {}, 0
+    for f in sorted(dest_dir.iterdir()):
+        m = re.match(r'^\d{2,3}_(.+)$', f.name)
+        if not m or not f.is_file() or f.name in planned:
+            continue
+        tmp = dest_dir / f'.reorder_{parked_n}_{m.group(1)}'
+        parked_n += 1
+        f.rename(tmp)
+        parked.setdefault(m.group(1), []).append(tmp)
+
+    copied = renamed = 0
+    for i, ref, src, dst in plan:
+        if dst.exists():   # right place already; local edits are never clobbered
+            continue
+        if parked.get(src.name):
+            parked[src.name].pop(0).rename(dst)
+            renamed += 1
+            continue
+        shutil.copy2(src, dst)
+        copied += 1
+
+    # Whatever is still parked was removed from the post on the site.
+    for tmps in parked.values():
+        for tmp in tmps:
+            orig = tmp.name.split('_', 2)[2]
+            tmp.rename(dest_dir / f'removed_{orig}')
+            print(f'   ⚠️  {orig} is no longer in this post, kept as removed_{orig}')
+    return copied, renamed
+
+
 def main():
     ap = argparse.ArgumentParser(description='Pull post drafts and copy their source files.')
-    ap.add_argument('--dest', default='Posts', help='Destination root (default: ./Posts)')
+    ap.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
+                    help='Destination root (default: /Volumes/RYAN/Edits/Posts)')
     ap.add_argument('--post', help='Only this post name')
     ap.add_argument('--url', help='Posts API URL')
     ap.add_argument('--dry-run', action='store_true', help='Print the copy plan only')
     ap.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
     args = ap.parse_args()
+
+    # The dest (and the source files) live on the network drive: fail fast
+    # with a clear message if it isn't mounted.
+    dest_root = Path(args.dest)
+    if str(dest_root).startswith('/Volumes/'):
+        mount = Path(*dest_root.parts[:3])
+        if not mount.exists():
+            sys.exit(f"⚠️  {mount} is not mounted. Connect the RYAN drive first — "
+                     "the post folders and their source files both live on it.")
 
     env = load_env()
     posts_password = env.get('CF_POSTS_PASSWORD')
@@ -188,12 +243,7 @@ def main():
             continue
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        copied = 0
-        for i, ref, src, dst in plan:
-            if dst.exists() and dst.stat().st_size == src.stat().st_size:
-                continue
-            shutil.copy2(src, dst)
-            copied += 1
+        copied, renamed = sync_post_dir(dest_dir, plan)
         manifest = {
             'name': post['name'],
             'version': doc.get('version'),
@@ -202,7 +252,22 @@ def main():
                        for i, ref, src, dst in plan],
         }
         (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        print(f"   ✓ {copied} copied, {len(plan) - copied} already up to date\n")
+        parts = [f'{copied} copied']
+        if renamed:
+            parts.append(f'{renamed} reordered')
+        parts.append(f'{len(plan) - copied - renamed} already up to date')
+        print(f"   ✓ {', '.join(parts)}")
+
+        # Lightroom smart collection matching these photos (filename + capture
+        # date), so the post is one import away in the LR Collections panel.
+        try:
+            sys.path.insert(0, str(ROOT / 'tools'))
+            from lr_smart_collection import write_lrsmcol
+            lr_out = dest_dir / f'{name}.lrsmcol'
+            write_lrsmcol([dst for _, _, _, dst in plan], post['name'], lr_out)
+            print(f"   ✓ Lightroom smart collection → {lr_out}\n")
+        except Exception as e:
+            print(f"   ⚠️  Lightroom smart collection not written: {e}\n")
 
     if unresolved:
         sys.exit(f'⚠️  {unresolved} photo(s) could not be resolved (see above).')

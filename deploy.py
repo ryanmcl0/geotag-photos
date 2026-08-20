@@ -338,6 +338,38 @@ class R2Uploader:
         return stats
 
 
+def upload_source_index(config: 'DeployConfig', dry_run: bool = False):
+    """Build and upload the photo source index to R2 (_state/source_index.json,
+    served by the posts-gated /api/source-index). It maps every {trip, id} to
+    its source path + filename, so the NAS posts-puller can resolve drafts to
+    files without this repo's web/trips manifests. Reads the UNPATCHED local
+    manifests (run before ManifestPatcher)."""
+    index = {}
+    for trip_dir in sorted(Path('web/trips').iterdir()):
+        photos, photos_path = {}, None
+        for name in ('manifest.json', 'manifest.all.json'):
+            p = trip_dir / name
+            if not p.exists():
+                continue
+            m = json.loads(p.read_text())
+            photos_path = (m.get('source') or {}).get('photos_path') or photos_path
+            for ph in m.get('photos', []):
+                photos.setdefault(ph['id'], ph.get('source_filename', f"{ph['id']}.jpg"))
+        if photos and photos_path:
+            index[trip_dir.name] = {'photos_path': photos_path, 'photos': photos}
+    body = json.dumps(index, separators=(',', ':')).encode()
+    n = sum(len(t['photos']) for t in index.values())
+    if dry_run:
+        print(f"    [dry-run] would upload _state/source_index.json "
+              f"({len(index)} trips, {n} photos, {len(body) / 1024:.0f} KB)")
+        return
+    R2Uploader(config).s3.put_object(
+        Bucket=config.r2_bucket, Key='_state/source_index.json', Body=body,
+        ContentType='application/json')
+    print(f"    ✓ _state/source_index.json: {len(index)} trips, {n} photos, "
+          f"{len(body) / 1024:.0f} KB")
+
+
 class ManifestPatcher:
     """Patch manifest.json files with CDN URLs for deployment.
     Saves originals and restores them after Pages deploy so local dev is unaffected."""
@@ -661,6 +693,13 @@ def main():
             if not args.dry_run and total_bytes:
                 print(f"   Total uploaded: {total_bytes / 1e9:.2f} GB")
         print()
+
+    # Step 2a: Photo source index for the NAS posts-puller. Must run on the
+    # UNPATCHED manifests (before Step 2's CDN rewrite). Uploaded on every
+    # deploy, including --skip-images (it's one small JSON).
+    print("🗂️  Uploading photo source index...")
+    upload_source_index(config, dry_run=args.dry_run)
+    print()
 
     # Step 2: Patch manifests with CDN URLs
     print("📝 Patching manifests with CDN URLs...")

@@ -8,6 +8,9 @@
     'use strict';
 
     const BASE = '';
+    // ?library=phone -> local-only mirror dataset under web/phone/ (never deployed)
+    const PHONE_LIB = new URLSearchParams(location.search).get('library') === 'phone';
+    const DATA_BASE = BASE + (PHONE_LIB ? 'phone/' : '');
 
     // Per-trip cover overrides (config/tile_covers.json → gallery_covers.json),
     // keyed by trip id. Trips without an entry auto-pick from their manifest.
@@ -77,7 +80,7 @@
 
         if (!path) return;
         try {
-            const res = await fetch(`${BASE}${path}/manifest.json?t=${Date.now()}`);
+            const res = await fetch(`${DATA_BASE}${path}/manifest.json?t=${Date.now()}`);
             if (!res.ok) throw new Error(`manifest ${res.status}`);
             const manifest = await res.json();
             const cover = pickCover(manifest.photos);
@@ -105,7 +108,7 @@
             return card;
         }
 
-        const href = `${BASE}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
+        const href = `${BASE}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}${PHONE_LIB ? '&library=phone' : ''}`;
         // Always the FULL (public + private) count, so a tile reads the same locked or
         // unlocked — matches the China hub, where sub-tiles carry the full count too.
         // photo_count is the public-only count (fallback for trips with no full figure).
@@ -218,7 +221,7 @@
         } catch (e) { /* no overrides → auto-pick everywhere */ }
 
         try {
-            const res = await fetch(`${BASE}trips/index.json?t=${Date.now()}`);
+            const res = await fetch(`${DATA_BASE}trips/index.json?t=${Date.now()}`);
             const data = await res.json();
             render(data.trips || []);
         } catch (e) {

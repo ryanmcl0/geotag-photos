@@ -159,6 +159,7 @@ def build() -> None:
 
     <script src="js/unlock.js"></script>
     <script src="js/posts.js"></script>
+    <script src="js/phone-mode.js"></script>
     <script src="js/videos.js"></script>
 </body>
 </html>

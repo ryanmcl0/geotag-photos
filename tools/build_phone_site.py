@@ -27,6 +27,62 @@ CLUSTER_RADIUS_M = 1000
 THUMB_DIRNAME = "thumbs"  # compressor's output dir name; exposed as "thumbnails"
 
 
+VIDEO_EXTS = {".mp4", ".mov", ".3gp"}
+FNAME_DATE = re.compile(r"(20[12]\d)(\d\d)(\d\d)[_-](\d\d)(\d\d)(\d\d)")
+
+
+def video_timestamps(phone_dir: Path):
+    """{relpath: 'YYYY:MM:DD HH:MM:SS' local wall-clock} for every video.
+
+    Samsung names encode local time; iPhone .mov carries an Apple CreationDate
+    tag with the local UTC offset (exiftool). CreateDate (UTC) and file mtime
+    are progressively worse fallbacks — hours-scale error at worst, which the
+    companion's dt badges make visible rather than hiding.
+    """
+    import re as _re
+    import subprocess
+    vids = [f for f in sorted(phone_dir.rglob("*"))
+            if f.is_file() and f.suffix.lower() in VIDEO_EXTS
+            and not f.name.startswith("._")]
+    import time as _time
+    epoch_ms = re.compile(r"(1[3-9]\d{11})")  # e.g. WeChat mmexport<ms> names
+    out = {}
+    need_exif = []
+    for f in vids:
+        m = FNAME_DATE.search(f.name)
+        e = epoch_ms.search(f.name)
+        if m:
+            y, mo, dd, hh, mi, ss = m.groups()
+            out[str(f.relative_to(phone_dir))] = f"{y}:{mo}:{dd} {hh}:{mi}:{ss}"
+        elif e:
+            out[str(f.relative_to(phone_dir))] = _time.strftime(
+                "%Y:%m:%d %H:%M:%S", _time.localtime(int(e.group(1)) / 1000))
+        else:
+            need_exif.append(f)
+    for i in range(0, len(need_exif), 200):
+        batch = need_exif[i:i + 200]
+        try:
+            r = subprocess.run(
+                ["exiftool", "-fast2", "-j", "-QuickTime:CreationDate",
+                 "-QuickTime:CreateDate"] + [str(f) for f in batch],
+                capture_output=True, text=True, timeout=600)
+            rows = json.loads(r.stdout) if r.stdout.strip() else []
+        except Exception:
+            rows = []
+        by_src = {row.get("SourceFile"): row for row in rows}
+        for f in batch:
+            row = by_src.get(str(f), {})
+            d = row.get("CreationDate") or row.get("CreateDate") or ""
+            m = _re.match(r"(20\d\d:\d\d:\d\d \d\d:\d\d:\d\d)", str(d))
+            if m and not str(d).startswith("0000"):
+                out[str(f.relative_to(phone_dir))] = m.group(1)
+            else:
+                import time as _time
+                out[str(f.relative_to(phone_dir))] = _time.strftime(
+                    "%Y:%m:%d %H:%M:%S", _time.localtime(f.stat().st_mtime))
+    return out, {str(f.relative_to(phone_dir)): f.stat().st_size for f in vids}
+
+
 def clean_trip_name(src_path: str, slug: str) -> tuple[str, str]:
     """('2026', 'Norway') from a source path like /Volumes/RYAN/2026/04.26 Norway/Phone/x.jpg"""
     parts = Path(src_path).parts
@@ -101,6 +157,13 @@ def main():
                 "ar": round(r["w"] / r["h"], 3) if r.get("h") else 1.5,
             })
 
+        phone_dir = Path(rows[0]["src"]).parent
+        while phone_dir.name.lower() != "phone" and phone_dir != phone_dir.parent:
+            phone_dir = phone_dir.parent
+        vid_ts, vid_sizes = video_timestamps(phone_dir)
+        videos = [{"file": rel, "timestamp": iso(ts), "bytes": vid_sizes[rel]}
+                  for rel, ts in sorted(vid_ts.items(), key=lambda kv: kv[1])]
+
         clusters = cluster_photos(photos)
         countries = []
         if clusters:
@@ -126,6 +189,7 @@ def main():
             "route": None,
             "photos": photos,
             "clusters": clusters,
+            "videos": videos,
             "skipped": [],
         }
         (tdir / "manifest.json").write_text(json.dumps(manifest))
@@ -134,9 +198,14 @@ def main():
         (tdir / "route.geojson").write_text(
             json.dumps({"type": "FeatureCollection", "features": []}))
 
-        for link_name, target_dir in (("display", "display"), ("thumbnails", THUMB_DIRNAME)):
+        links = [("display", NAS / "photos" / slug / "display"),
+                 ("thumbnails", NAS / "photos" / slug / THUMB_DIRNAME)]
+        if videos:
+            # originals are not copied or compressed — videos/ points straight
+            # at the trip's Phone source folder on the NAS
+            links.append(("videos", phone_dir))
+        for link_name, target in links:
             link = tdir / link_name
-            target = NAS / "photos" / slug / target_dir
             if link.is_symlink() or link.exists():
                 link.unlink()
             link.symlink_to(target)
@@ -152,7 +221,8 @@ def main():
             "public": True,
             "path": f"trips/{trip_id}",
         })
-        print(f"{trip_id}: {len(photos)} photos, {len(clusters)} clusters, {countries}")
+        print(f"{trip_id}: {len(photos)} photos, {len(videos)} videos, "
+              f"{len(clusters)} clusters, {countries}")
 
     trips_index.sort(key=lambda t: t["dates"]["start"], reverse=True)
     OUT.mkdir(parents=True, exist_ok=True)

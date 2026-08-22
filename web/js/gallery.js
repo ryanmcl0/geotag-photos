@@ -19,7 +19,10 @@ window.Gallery = (function () {
   const PHOTO_BASE = (window.CHINA_PHOTO_BASE || (LOCAL ? '/trips' : '/photos'));
 
   function photoUrl(ref, kind /* 'thumbnails' | 'display' */) {
-    return `${PHOTO_BASE}/${ref.trip}/${kind}/${encodeURIComponent(ref.id)}.webp`;
+    // "phone-" trips live in the local-only phone library (web/phone/, never
+    // deployed); route them there on any host so mixed posts render locally.
+    const base = ref.trip.startsWith('phone-') ? '/phone/trips' : PHOTO_BASE;
+    return `${base}/${ref.trip}/${kind}/${encodeURIComponent(ref.id)}.webp`;
   }
 
   // Cover image failed to load (gated photo) → padlock placeholder instead of

@@ -956,7 +956,9 @@ function createClusterIcon(cluster) {
  */
 async function loadTripData() {
     try {
-        const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+        let basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+        // ?library=phone -> local-only mirror dataset under web/phone/ (never deployed)
+        if (new URLSearchParams(location.search).get('library') === 'phone') basePath += 'phone/';
 
         const indexResponse = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
         const index = await indexResponse.json();
@@ -1037,7 +1039,10 @@ async function loadTripData() {
  * Fetch and render a single trip's manifest + route onto the map.
  */
 async function loadSingleTrip(trip, basePath) {
-    basePath = basePath !== undefined ? basePath : ((typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '');
+    if (basePath === undefined) {
+        basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
+        if (new URLSearchParams(location.search).get('library') === 'phone') basePath += 'phone/';
+    }
     const colorIndex = allTrips.length;
     const tripPath = `${basePath}${trip.path}`;
     const color = CONFIG.routeColors[colorIndex % CONFIG.routeColors.length];
@@ -1554,6 +1559,12 @@ function createCoverageIcon() {
 
 /** Fetch the coverage file once. Missing/unreadable is not an error, just no pins. */
 async function loadCoverageData() {
+    // The coverage layer belongs to the camera library; phone mode has no
+    // gated-places concept, so show nothing there.
+    if (new URLSearchParams(location.search).get('library') === 'phone') {
+        coverageData = { trips: [] };
+        return coverageData;
+    }
     if (coverageData) return coverageData;
     const basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
     try {

@@ -529,6 +529,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <script src="/js/blog.js"></script>
     <script src="/js/blog-map.js"></script>
     <script src="/js/posts.js"></script>
+    <script src="/js/phone-mode.js"></script>
     <script>
     (function () {{
         const el = document.querySelector('.blog-hero[data-cover-src]');
@@ -566,6 +567,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
 
     <script src="/js/unlock.js"></script>
     <script src="/js/posts.js"></script>
+    <script src="/js/phone-mode.js"></script>
     <script>
     (function () {{
         const H = location.hostname;

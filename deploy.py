@@ -506,6 +506,8 @@ class GitSyncer:
                     '--exclude', 'plans',
                     '--exclude', 'trips/*/thumbnails',
                     '--exclude', 'trips/*/display',
+                    # local-only phone library mirror — never deployed
+                    '--exclude', 'phone',
                     str(web_src) + '/', str(self.target_path) + '/'
                 ], check=True, capture_output=True)
                 print("    ✓ Synced web/ contents")

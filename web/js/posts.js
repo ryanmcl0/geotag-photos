@@ -546,6 +546,10 @@ window.Posts = (function () {
             }).then(() => renderManager(root));
         });
         bar.append(name, count, del);
+        // Local-only phone-library companion: shows phone photos taken around
+        // the same time as this post's camera picks. No-op when the phone
+        // library (or the script) is absent.
+        if (window.PhoneCompanion) PhoneCompanion.decorateCard(bar, post);
         card.appendChild(bar);
 
         const strip = document.createElement('div');

@@ -76,7 +76,8 @@
      */
     async function loadTripsData() {
         try {
-            const basePath = VIEW_CONFIG.basePath || '';
+            const phoneLib = new URLSearchParams(location.search).get('library') === 'phone';
+            const basePath = (VIEW_CONFIG.basePath || '') + (phoneLib ? 'phone/' : '');
             const response = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
             const data = await response.json();
             allSidebarTrips = data.trips || [];
@@ -130,10 +131,12 @@
                 `;
                 }
                 const tripSlug = trip.id.replace(/-\d{4}$/, '');
-                const galleryHref = `${basePath}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}`;
+                const phoneLib = new URLSearchParams(location.search).get('library') === 'phone';
+                const librarySuffix = phoneLib ? '&library=phone' : '';
+                const galleryHref = `${basePath}gallery.html?trip=${encodeURIComponent(trip.id)}&year=${year}${librarySuffix}`;
                 return `
                     <li class="trip-item">
-                        <a href="${basePath}${year}/${tripSlug}/index.html"
+                        <a href="${phoneLib ? `${basePath}map.html?mode=trip&trip=${encodeURIComponent(trip.id)}&library=phone` : `${basePath}${year}/${tripSlug}/index.html`}"
                            class="nav-link trip-map-link"
                            data-trip-id="${trip.id}">
                             ${formatTripName(trip.name)}

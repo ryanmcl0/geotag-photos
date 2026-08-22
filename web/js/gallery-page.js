@@ -158,7 +158,8 @@
     }
 
     async function loadManifest(trip) {
-        const base = VIEW_CONFIG.basePath || '';
+        const base = (VIEW_CONFIG.basePath || '') +
+            (new URLSearchParams(location.search).get('library') === 'phone' ? 'phone/' : '');
         const res = await fetch(`${base}${trip.path}/manifest.json?t=${Date.now()}`);
         if (!res.ok) throw new Error(`manifest ${res.status}`);
         let manifest = await res.json();
@@ -184,7 +185,8 @@
 
         let trip;
         try {
-            const base = VIEW_CONFIG.basePath || '';
+            const base = (VIEW_CONFIG.basePath || '') +
+                (new URLSearchParams(location.search).get('library') === 'phone' ? 'phone/' : '');
             const idxRes = await fetch(`${base}trips/index.json?t=${Date.now()}`);
             const index = await idxRes.json();
             trip = (index.trips || []).find(t => t.id === VIEW_CONFIG.tripId);

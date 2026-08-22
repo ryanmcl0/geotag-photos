@@ -1,0 +1,258 @@
+/**
+ * "Phone photos" companion view for post drafts.
+ *
+ * A post is a curated set of CAMERA photos; this shows the PHONE photos taken
+ * around the same wall-clock time as each selected camera photo (behind-the-
+ * scenes shots for the post). Time is the matching key, not GPS: many phone
+ * photos have no GPS, and clock proximity is what "same moment" really means.
+ *
+ * Each phone photo is assigned to its NEAREST camera photo in the post (so a
+ * shot never appears twice), capped at +/-24h, and the visible window is
+ * user-adjustable with chips (15m ... 24h) because the right bound varies by
+ * situation. Timestamps on both sides are local wall-clock (the pipeline's
+ * pseudo-Z ISO strings), compared directly.
+ *
+ * Only activates when the local-only phone library (web/phone/, never
+ * deployed) is present — same probe as phone-mode.js, so this code is inert
+ * in production. posts.js calls PhoneCompanion.decorateCard(bar, post) on
+ * each post card.
+ */
+window.PhoneCompanion = (function () {
+    let availableP = null;
+    function available() {
+        if (!availableP) {
+            availableP = fetch('/phone/trips/index.json', { method: 'HEAD' })
+                .then(r => r.ok && (r.headers.get('content-type') || '').includes('json'))
+                .catch(() => false);
+        }
+        return availableP;
+    }
+
+    const H = 3600e3;
+    const WINDOWS = [
+        { label: '±15m', ms: 0.25 * H },
+        { label: '±1h', ms: 1 * H },
+        { label: '±3h', ms: 3 * H },
+        { label: '±12h', ms: 12 * H },
+        { label: '±24h', ms: 24 * H },
+    ];
+    const HARD_CAP = 24 * H;
+    const PER_SECTION = 80;
+    let windowMs = 3 * H;
+
+    // Both libraries store local wall-clock time with a decorative Z; strip it
+    // so the comparison stays wall-clock and browser-timezone-independent.
+    const parseTs = s => new Date(s.replace('Z', '')).getTime();
+
+    async function j(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`${r.status} ${url}`);
+        return r.json();
+    }
+
+    async function collectCameraPhotos(refs) {
+        const byTrip = new Map();
+        refs.forEach((ref, i) => {
+            if (ref.trip.startsWith('phone-')) return;  // already a phone shot
+            if (!byTrip.has(ref.trip)) byTrip.set(ref.trip, []);
+            byTrip.get(ref.trip).push({ ref, order: i });
+        });
+        const out = [];
+        for (const [trip, list] of byTrip) {
+            let idx;
+            try {
+                const m = await j(`trips/${trip}/manifest.json?t=${Date.now()}`);
+                idx = new Map(m.photos.map(p => [p.id, p]));
+                if (m.filtered && list.some(x => !idx.has(x.ref.id))) {
+                    const full = await j(`trips/${trip}/manifest.all.json?t=${Date.now()}`);
+                    idx = new Map(full.photos.map(p => [p.id, p]));
+                }
+            } catch (e) { continue; }
+            for (const { ref, order } of list) {
+                const p = idx.get(ref.id);
+                if (p && p.timestamp) out.push({ ref, order, ts: parseTs(p.timestamp), raw: p.timestamp });
+            }
+        }
+        return out.sort((a, b) => a.order - b.order);
+    }
+
+    async function collectPhonePhotos(cameraPhotos) {
+        const idx = await j(`/phone/trips/index.json?t=${Date.now()}`);
+        const times = cameraPhotos.map(c => c.ts);
+        const out = [];
+        for (const t of idx.trips) {
+            const start = parseTs(`${t.dates.start}T00:00:00`) - HARD_CAP;
+            const end = parseTs(`${t.dates.end}T23:59:59`) + HARD_CAP;
+            if (!times.some(ts => ts >= start && ts <= end)) continue;
+            let m;
+            try { m = await j(`/phone/${t.path}/manifest.json?t=${Date.now()}`); }
+            catch (e) { continue; }
+            for (const p of m.photos) {
+                out.push({ trip: t.id, id: p.id, ts: parseTs(p.timestamp) });
+            }
+        }
+        return out;
+    }
+
+    // Every phone photo goes to its nearest camera photo (within the hard cap),
+    // so tightening the window chips never re-shuffles assignments.
+    function assign(cameraPhotos, phonePhotos) {
+        const matches = new Map(cameraPhotos.map(c => [c, []]));
+        for (const p of phonePhotos) {
+            let best = null, bestD = Infinity;
+            for (const c of cameraPhotos) {
+                const d = Math.abs(p.ts - c.ts);
+                if (d < bestD) { bestD = d; best = c; }
+            }
+            if (best && bestD <= HARD_CAP) {
+                matches.get(best).push({ ...p, dt: p.ts - best.ts, adt: bestD });
+            }
+        }
+        matches.forEach(list => list.sort((a, b) => a.adt - b.adt));
+        return matches;
+    }
+
+    function fmtDt(dt) {
+        const sign = dt < 0 ? '−' : '+';
+        const a = Math.abs(dt);
+        if (a < H) return `${sign}${Math.round(a / 60e3)}m`;
+        return `${sign}${(a / H).toFixed(1)}h`;
+    }
+
+    function fmtWhen(ts) {
+        const d = new Date(ts);
+        return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
+            ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function buildOverlay(post, cameraPhotos, matches) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(10,10,12,.97);' +
+            'overflow-y:auto;padding:20px;color:#eee;font:14px -apple-system,sans-serif';
+
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;' +
+            'position:sticky;top:-20px;background:rgba(10,10,12,.97);padding:12px 0;z-index:1';
+        const title = document.createElement('h2');
+        title.style.cssText = 'margin:0;font-size:17px';
+        const summary = document.createElement('span');
+        summary.style.cssText = 'opacity:.65';
+        const chips = document.createElement('div');
+        chips.style.cssText = 'display:flex;gap:6px;margin-left:auto';
+        const close = document.createElement('button');
+        close.textContent = '✕';
+        close.style.cssText = 'background:none;border:1px solid #555;color:#eee;border-radius:6px;' +
+            'padding:4px 10px;cursor:pointer;font-size:14px';
+        close.addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('keydown', e => { if (e.key === 'Escape') overlay.remove(); });
+
+        const body = document.createElement('div');
+
+        function render() {
+            let total = 0;
+            body.innerHTML = '';
+            for (const c of cameraPhotos) {
+                const list = (matches.get(c) || []).filter(p => p.adt <= windowMs);
+                const sec = document.createElement('div');
+                sec.style.cssText = 'display:flex;gap:14px;padding:14px 0;border-top:1px solid #2a2a2e';
+                const anchor = document.createElement('div');
+                anchor.style.cssText = 'flex:0 0 150px';
+                const aimg = document.createElement('img');
+                aimg.src = Gallery.photoUrl(c.ref, 'thumbnails');
+                aimg.loading = 'lazy';
+                aimg.style.cssText = 'width:150px;border-radius:6px;display:block';
+                const meta = document.createElement('div');
+                meta.style.cssText = 'opacity:.65;font-size:12px;margin-top:6px;line-height:1.4';
+                meta.textContent = `${c.ref.trip}\n${fmtWhen(c.ts)}`;
+                meta.style.whiteSpace = 'pre-line';
+                anchor.append(aimg, meta);
+
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start';
+                if (!list.length) {
+                    const none = document.createElement('span');
+                    none.style.cssText = 'opacity:.4;align-self:center';
+                    none.textContent = 'no phone photos in this window';
+                    row.appendChild(none);
+                }
+                list.slice(0, PER_SECTION).forEach(p => {
+                    const cell = document.createElement('a');
+                    cell.href = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'display');
+                    cell.target = '_blank';
+                    cell.style.cssText = 'position:relative;display:block';
+                    const img = document.createElement('img');
+                    img.src = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'thumbnails');
+                    img.loading = 'lazy';
+                    img.style.cssText = 'height:110px;border-radius:5px;display:block';
+                    const badge = document.createElement('span');
+                    badge.textContent = fmtDt(p.dt);
+                    badge.style.cssText = 'position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.72);' +
+                        'border-radius:4px;padding:1px 5px;font-size:11px';
+                    cell.append(img, badge);
+                    row.appendChild(cell);
+                });
+                if (list.length > PER_SECTION) {
+                    const more = document.createElement('span');
+                    more.style.cssText = 'opacity:.5;align-self:center';
+                    more.textContent = `+${list.length - PER_SECTION} more (tighten the window)`;
+                    row.appendChild(more);
+                }
+                total += list.length;
+                sec.append(anchor, row);
+                body.appendChild(sec);
+            }
+            title.textContent = `📱 ${post.name}`;
+            summary.textContent = `${total} phone photos near ${cameraPhotos.length} camera photos`;
+        }
+
+        WINDOWS.forEach(w => {
+            const b = document.createElement('button');
+            b.textContent = w.label;
+            const style = on => 'border-radius:99px;padding:4px 10px;cursor:pointer;font-size:12px;' +
+                (on ? 'background:#1d4ed8;border:1px solid #1d4ed8;color:#fff'
+                    : 'background:none;border:1px solid #555;color:#ddd');
+            b.style.cssText = style(w.ms === windowMs);
+            b.addEventListener('click', () => {
+                windowMs = w.ms;
+                chips.querySelectorAll('button').forEach((btn, i) => btn.style.cssText = style(WINDOWS[i].ms === windowMs));
+                render();
+            });
+            chips.appendChild(b);
+        });
+
+        head.append(title, summary, chips, close);
+        overlay.append(head, body);
+        render();
+        return overlay;
+    }
+
+    async function open(post) {
+        const cameraPhotos = await collectCameraPhotos(post.photos);
+        if (!cameraPhotos.length) {
+            alert('No camera photos with timestamps in this post.');
+            return;
+        }
+        const phonePhotos = await collectPhonePhotos(cameraPhotos);
+        const matches = assign(cameraPhotos, phonePhotos);
+        document.body.appendChild(buildOverlay(post, cameraPhotos, matches));
+    }
+
+    function decorateCard(bar, post) {
+        available().then(ok => {
+            if (!ok || bar.querySelector('.posts-phone-btn')) return;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'posts-phone-btn';
+            btn.textContent = '📱 Phone photos';
+            btn.style.cssText = 'background:none;border:1px solid #1d4ed8;color:#7ab8ff;' +
+                'border-radius:6px;padding:4px 10px;cursor:pointer;font-size:13px';
+            btn.addEventListener('click', () => {
+                btn.disabled = true;
+                open(post).finally(() => { btn.disabled = false; });
+            });
+            bar.insertBefore(btn, bar.querySelector('.posts-delete'));
+        });
+    }
+
+    return { decorateCard };
+})();

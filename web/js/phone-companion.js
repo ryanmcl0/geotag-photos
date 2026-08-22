@@ -58,22 +58,60 @@ window.PhoneCompanion = (function () {
             byTrip.get(ref.trip).push({ ref, order: i });
         });
         const out = [];
+        const tripTimes = new Map();  // trip -> ALL manifest timestamps, for clock-offset estimation
         for (const [trip, list] of byTrip) {
-            let idx;
+            let idx, all;
             try {
                 const m = await j(`trips/${trip}/manifest.json?t=${Date.now()}`);
                 idx = new Map(m.photos.map(p => [p.id, p]));
+                all = m.photos;
                 if (m.filtered && list.some(x => !idx.has(x.ref.id))) {
                     const full = await j(`trips/${trip}/manifest.all.json?t=${Date.now()}`);
                     idx = new Map(full.photos.map(p => [p.id, p]));
+                    all = full.photos;
                 }
             } catch (e) { continue; }
+            tripTimes.set(trip, all.filter(p => p.timestamp).map(p => parseTs(p.timestamp)));
             for (const { ref, order } of list) {
                 const p = idx.get(ref.id);
                 if (p && p.timestamp) out.push({ ref, order, ts: parseTs(p.timestamp), raw: p.timestamp });
             }
         }
-        return out.sort((a, b) => a.order - b.order);
+        return { photos: out.sort((a, b) => a.order - b.order), tripTimes };
+    }
+
+    /**
+     * The camera clock is not reliably on local time (timezone sometimes
+     * changed mid-trip, sometimes not at all), while the phone always is.
+     * Per camera trip, estimate the constant clock offset that best aligns
+     * the trip's photo times with the phone photo times: try half-hour
+     * offsets in [-14h, +14h] and score each by how many camera photos then
+     * have a phone photo within 20 minutes. Apply only when clearly better
+     * than no offset, and surface it in the overlay header.
+     */
+    function estimateOffset(cameraTs, phoneTs) {
+        if (cameraTs.length < 5 || phoneTs.length < 5) return 0;
+        const P = [...phoneTs].sort((a, b) => a - b);
+        const near = t => {
+            let lo = 0, hi = P.length - 1;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if (P[mid] < t) lo = mid + 1; else hi = mid;
+            }
+            const d1 = Math.abs(P[lo] - t);
+            const d0 = lo > 0 ? Math.abs(P[lo - 1] - t) : Infinity;
+            return Math.min(d0, d1);
+        };
+        const TOL = 20 * 60e3;
+        const score = o => cameraTs.reduce((n, t) => n + (near(t + o) <= TOL ? 1 : 0), 0) / cameraTs.length;
+        const zero = score(0);
+        let best = 0, bestScore = zero;
+        for (let o = -14 * H; o <= 14 * H; o += 0.5 * H) {
+            if (o === 0) continue;
+            const sc = score(o);
+            if (sc > bestScore) { bestScore = sc; best = o; }
+        }
+        return (Math.abs(best) >= H && bestScore >= zero + 0.15) ? best : 0;
     }
 
     async function collectPhonePhotos(cameraPhotos) {
@@ -90,6 +128,13 @@ window.PhoneCompanion = (function () {
             for (const p of m.photos) {
                 out.push({ trip: t.id, id: p.id, ts: parseTs(p.timestamp) });
             }
+            // Videos are indexed but never compressed: the manifest's videos/
+            // symlink points straight at the NAS originals.
+            for (const v of (m.videos || [])) {
+                out.push({ trip: t.id, kind: 'video', file: v.file,
+                           bytes: v.bytes, ts: parseTs(v.timestamp),
+                           path: t.path });
+            }
         }
         return out;
     }
@@ -101,11 +146,11 @@ window.PhoneCompanion = (function () {
         for (const p of phonePhotos) {
             let best = null, bestD = Infinity;
             for (const c of cameraPhotos) {
-                const d = Math.abs(p.ts - c.ts);
+                const d = Math.abs(p.ts - c.effTs);
                 if (d < bestD) { bestD = d; best = c; }
             }
             if (best && bestD <= HARD_CAP) {
-                matches.get(best).push({ ...p, dt: p.ts - best.ts, adt: bestD });
+                matches.get(best).push({ ...p, dt: p.ts - best.effTs, adt: bestD });
             }
         }
         matches.forEach(list => list.sort((a, b) => a.adt - b.adt));
@@ -125,7 +170,7 @@ window.PhoneCompanion = (function () {
             ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
     }
 
-    function buildOverlay(post, cameraPhotos, matches) {
+    function buildOverlay(post, cameraPhotos, matches, offsets) {
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(10,10,12,.97);' +
             'overflow-y:auto;padding:20px;color:#eee;font:14px -apple-system,sans-serif';
@@ -163,7 +208,7 @@ window.PhoneCompanion = (function () {
                 aimg.style.cssText = 'width:150px;border-radius:6px;display:block';
                 const meta = document.createElement('div');
                 meta.style.cssText = 'opacity:.65;font-size:12px;margin-top:6px;line-height:1.4';
-                meta.textContent = `${c.ref.trip}\n${fmtWhen(c.ts)}`;
+                meta.textContent = `${c.ref.trip}\n${fmtWhen(c.effTs)}`;
                 meta.style.whiteSpace = 'pre-line';
                 anchor.append(aimg, meta);
 
@@ -177,18 +222,37 @@ window.PhoneCompanion = (function () {
                 }
                 list.slice(0, PER_SECTION).forEach(p => {
                     const cell = document.createElement('a');
-                    cell.href = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'display');
                     cell.target = '_blank';
                     cell.style.cssText = 'position:relative;display:block';
-                    const img = document.createElement('img');
-                    img.src = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'thumbnails');
-                    img.loading = 'lazy';
-                    img.style.cssText = 'height:110px;border-radius:5px;display:block';
+                    if (p.kind === 'video') {
+                        cell.href = `/phone/${p.path}/videos/` +
+                            p.file.split('/').map(encodeURIComponent).join('/');
+                        cell.style.cssText += ';height:110px;width:150px;border-radius:5px;' +
+                            'background:#26262c;color:#ddd;display:flex;flex-direction:column;' +
+                            'align-items:center;justify-content:center;gap:4px;text-decoration:none';
+                        const play = document.createElement('span');
+                        play.textContent = '▶';
+                        play.style.cssText = 'font-size:26px';
+                        const label = document.createElement('span');
+                        const mb = p.bytes / 1048576;
+                        label.textContent = `${p.file.split('/').pop().slice(0, 18)} · ` +
+                            (mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${Math.round(mb)}MB`);
+                        label.style.cssText = 'font-size:10px;opacity:.7;max-width:140px;' +
+                            'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+                        cell.append(play, label);
+                    } else {
+                        cell.href = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'display');
+                        const img = document.createElement('img');
+                        img.src = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'thumbnails');
+                        img.loading = 'lazy';
+                        img.style.cssText = 'height:110px;border-radius:5px;display:block';
+                        cell.appendChild(img);
+                    }
                     const badge = document.createElement('span');
                     badge.textContent = fmtDt(p.dt);
                     badge.style.cssText = 'position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.72);' +
-                        'border-radius:4px;padding:1px 5px;font-size:11px';
-                    cell.append(img, badge);
+                        'border-radius:4px;padding:1px 5px;font-size:11px;color:#fff';
+                    cell.appendChild(badge);
                     row.appendChild(cell);
                 });
                 if (list.length > PER_SECTION) {
@@ -202,7 +266,7 @@ window.PhoneCompanion = (function () {
                 body.appendChild(sec);
             }
             title.textContent = `📱 ${post.name}`;
-            summary.textContent = `${total} phone photos near ${cameraPhotos.length} camera photos`;
+            summary.textContent = `${total} phone photos/videos near ${cameraPhotos.length} camera photos`;
         }
 
         WINDOWS.forEach(w => {
@@ -221,20 +285,37 @@ window.PhoneCompanion = (function () {
         });
 
         head.append(title, summary, chips, close);
-        overlay.append(head, body);
+        overlay.append(head);
+        if (offsets && offsets.size) {
+            const note = document.createElement('p');
+            note.style.cssText = 'margin:0 0 10px;font-size:12px;color:#f0b429';
+            note.textContent = 'Camera clock offset auto-corrected: ' +
+                [...offsets].map(([t, o]) => `${t} ${o > 0 ? '+' : '−'}${Math.abs(o / H).toFixed(1)}h`).join(', ') +
+                ' (camera vs phone time cross-correlation)';
+            overlay.appendChild(note);
+        }
+        overlay.append(body);
         render();
         return overlay;
     }
 
     async function open(post) {
-        const cameraPhotos = await collectCameraPhotos(post.photos);
+        const { photos: cameraPhotos, tripTimes } = await collectCameraPhotos(post.photos);
         if (!cameraPhotos.length) {
             alert('No camera photos with timestamps in this post.');
             return;
         }
+        cameraPhotos.forEach(c => { c.effTs = c.ts; });
         const phonePhotos = await collectPhonePhotos(cameraPhotos);
+        const phoneTs = phonePhotos.map(p => p.ts);
+        const offsets = new Map();
+        for (const [trip, ts] of tripTimes) {
+            const o = estimateOffset(ts, phoneTs);
+            if (o) offsets.set(trip, o);
+        }
+        cameraPhotos.forEach(c => { c.effTs = c.ts + (offsets.get(c.ref.trip) || 0); });
         const matches = assign(cameraPhotos, phonePhotos);
-        document.body.appendChild(buildOverlay(post, cameraPhotos, matches));
+        document.body.appendChild(buildOverlay(post, cameraPhotos, matches, offsets));
     }
 
     function decorateCard(bar, post) {

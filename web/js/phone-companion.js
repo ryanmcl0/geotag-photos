@@ -126,7 +126,7 @@ window.PhoneCompanion = (function () {
             try { m = await j(`/phone/${t.path}/manifest.json?t=${Date.now()}`); }
             catch (e) { continue; }
             for (const p of m.photos) {
-                out.push({ trip: t.id, id: p.id, ts: parseTs(p.timestamp) });
+                out.push({ trip: t.id, id: p.id, ar: p.ar, ts: parseTs(p.timestamp) });
             }
             // Videos are indexed but never compressed: the manifest's videos/
             // symlink points straight at the NAS originals.
@@ -172,7 +172,7 @@ window.PhoneCompanion = (function () {
 
     function buildOverlay(post, cameraPhotos, matches, offsets) {
         const overlay = document.createElement('div');
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(10,10,12,.97);' +
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:1400;background:rgba(10,10,12,.97);' +
             'overflow-y:auto;padding:20px;color:#eee;font:14px -apple-system,sans-serif';
 
         const head = document.createElement('div');
@@ -188,7 +188,12 @@ window.PhoneCompanion = (function () {
         close.textContent = '✕';
         close.style.cssText = 'background:none;border:1px solid #555;color:#eee;border-radius:6px;' +
             'padding:4px 10px;cursor:pointer;font-size:14px';
-        close.addEventListener('click', () => overlay.remove());
+        close.addEventListener('click', () => {
+            overlay.remove();
+            // Adds made from the overlay changed the doc in place; repaint the
+            // posts page underneath so the Phone section reflects them.
+            if (document.getElementById('posts-app') && window.Posts) Posts.initPostsPage();
+        });
         overlay.addEventListener('keydown', e => { if (e.key === 'Escape') overlay.remove(); });
 
         const body = document.createElement('div');
@@ -196,6 +201,9 @@ window.PhoneCompanion = (function () {
         function render() {
             let total = 0;
             body.innerHTML = '';
+            // Flat list of the currently visible phone PHOTOS across all
+            // sections, so the lightbox arrows walk the whole result set.
+            const visiblePhotos = [];
             for (const c of cameraPhotos) {
                 const list = (matches.get(c) || []).filter(p => p.adt <= windowMs);
                 const sec = document.createElement('div');
@@ -224,6 +232,21 @@ window.PhoneCompanion = (function () {
                     const cell = document.createElement('a');
                     cell.target = '_blank';
                     cell.style.cssText = 'position:relative;display:block';
+                    const addBtn = document.createElement('button');
+                    addBtn.type = 'button';
+                    addBtn.textContent = '+';
+                    addBtn.title = 'Add to this post (Phone section, no cap)';
+                    addBtn.style.cssText = 'position:absolute;top:4px;left:4px;z-index:2;' +
+                        'background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:4px;' +
+                        'cursor:pointer;font-size:13px;line-height:1;padding:2px 7px';
+                    addBtn.addEventListener('click', ev => {
+                        ev.preventDefault(); ev.stopPropagation();
+                        const ref = p.kind === 'video'
+                            ? { trip: p.trip, file: p.file }
+                            : { trip: p.trip, id: p.id, ar: p.ar };
+                        if (window.Posts && Posts.addToPost) Posts.addToPost(post.id, [ref]);
+                        addBtn.textContent = '✓';
+                    });
                     if (p.kind === 'video') {
                         cell.href = `/phone/${p.path}/videos/` +
                             p.file.split('/').map(encodeURIComponent).join('/');
@@ -242,12 +265,23 @@ window.PhoneCompanion = (function () {
                         cell.append(play, label);
                     } else {
                         cell.href = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'display');
+                        const ref = { trip: p.trip, id: p.id, ar: p.ar };
+                        const myIndex = visiblePhotos.length;
+                        visiblePhotos.push(ref);
+                        // in-page viewer with arrow-key navigation; plain href
+                        // still works for cmd/middle-click new-tab
+                        cell.addEventListener('click', ev => {
+                            if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+                            ev.preventDefault();
+                            Gallery.openLightbox(visiblePhotos, myIndex);
+                        });
                         const img = document.createElement('img');
                         img.src = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'thumbnails');
                         img.loading = 'lazy';
                         img.style.cssText = 'height:110px;border-radius:5px;display:block';
                         cell.appendChild(img);
                     }
+                    cell.appendChild(addBtn);
                     const badge = document.createElement('span');
                     badge.textContent = fmtDt(p.dt);
                     badge.style.cssText = 'position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,.72);' +

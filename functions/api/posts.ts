@@ -17,7 +17,7 @@ const hex = (buf: ArrayBuffer) =>
 const tokenFor = async (secret: string) =>
     hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
 
-interface PhotoRef { trip: string; id: string; ar?: number }
+interface PhotoRef { trip: string; id: string; ar?: number; blur?: boolean }
 // Behind-the-scenes items from the local-only phone library: {trip, id}
 // photos or {trip, file} videos. Uncapped (not part of the IG carousel).
 interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
@@ -34,7 +34,8 @@ function validPosts(posts: unknown): posts is Post[] {
         (p as Post).photos.length <= MAX_PHOTOS_PER_POST &&
         (p as Post).photos.every(ph =>
             ph && typeof ph === 'object' &&
-            typeof ph.trip === 'string' && typeof ph.id === 'string') &&
+            typeof ph.trip === 'string' && typeof ph.id === 'string' &&
+            (ph.blur === undefined || typeof ph.blur === 'boolean')) &&
         ((p as Post).phone === undefined || (
             Array.isArray((p as Post).phone) &&
             (p as Post).phone!.length <= 200 &&

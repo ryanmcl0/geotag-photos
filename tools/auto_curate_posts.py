@@ -715,7 +715,7 @@ def load_env():
     return env
 
 
-def push(doc_posts, target, mode='replace'):
+def push(doc_posts, target, mode='replace', which='auto'):
     env = load_env()
     pw = env.get('CF_POSTS_PASSWORD')
     if not pw:
@@ -729,7 +729,7 @@ def push(doc_posts, target, mode='replace'):
         base = f'https://{proj}.pages.dev'
     else:
         base = target.rstrip('/')
-    url = f'{base}/api/posts?set=auto'
+    url = f'{base}/api/posts' + ('?set=auto' if which == 'auto' else '')
     tok = hashlib.sha256(pw.encode()).hexdigest()
     cookies = [f'posts_auth={tok}']
     site_pw = env.get('CF_SITE_PASSWORD')
@@ -747,19 +747,24 @@ def push(doc_posts, target, mode='replace'):
     # Safety: a server running the OLD posts API ignores ?set=auto, so a PUT
     # would clobber the MANUAL drafts. If the two endpoints return the same
     # doc, this server does not know about the auto set -- refuse to push.
-    main_doc = call('GET', u=f'{base}/api/posts')
     current = call('GET')
-    if json.dumps(main_doc, sort_keys=True) == json.dumps(current, sort_keys=True):
-        sys.exit(f'✗ {base} does not support ?set=auto yet (old API deployed) - '
-                 'pushing would overwrite your manual drafts. Deploy the new '
-                 'functions/api/posts.ts first (python3 deploy.py --skip-images).')
+    if which == 'auto':
+        # Safety: a server running the OLD posts API ignores ?set=auto, so a
+        # PUT would clobber the MANUAL drafts. Identical docs mean it doesn't
+        # know about the auto set -- refuse to push.
+        main_doc = call('GET', u=f'{base}/api/posts')
+        if json.dumps(main_doc, sort_keys=True) == json.dumps(current, sort_keys=True):
+            sys.exit(f'✗ {base} does not support ?set=auto yet (old API deployed) - '
+                     'pushing would overwrite your manual drafts. Deploy the new '
+                     'functions/api/posts.ts first (python3 deploy.py --skip-images).')
     if mode == 'append':
         new_ids = {g['id'] for g in doc_posts}
         keep = [p for p in current.get('posts', []) if p.get('id') not in new_ids]
         doc_posts = (doc_posts + keep)[:200]
     body = json.dumps({'baseVersion': current.get('version', 0), 'posts': doc_posts})
     res = call('PUT', body)
-    print(f'Pushed {len(doc_posts)} auto posts -> {url} (version {res.get("version")})')
+    label = 'auto posts' if which == 'auto' else 'posts'
+    print(f'Pushed {len(doc_posts)} {label} -> {url} (version {res.get("version")})')
 
 
 # ---------------------------------------------------------------- main

@@ -14,7 +14,7 @@ Import in Lightroom Classic: right-click in the Collections panel >
 Usage:
   ./lr_smart_collection.py DIR [--name NAME] [--out FILE]
 
-  DIR      Folder of JPGs (e.g. a posts_pull.py output folder).
+  DIR      Folder of JPGs (e.g. a ./post.py pull output folder).
   --name   Collection title (default: the folder name).
   --out    Output path (default: DIR/<name>.lrsmcol).
 
@@ -36,7 +36,7 @@ PHOTO_EXTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.heic', '.webp')
 
 
 def photo_stem(path):
-    """Full edited stem with only the posts_pull order prefix stripped:
+    """Full edited stem with only the post-pull order prefix stripped:
     05_RM100321-Enhanced-NR.jpg -> RM100321-Enhanced-NR. Keeping the edit
     suffix pins the rule to the exact variant that was edited (the AI-denoise
     Enhanced DNG vs the original raw)."""

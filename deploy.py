@@ -250,7 +250,11 @@ def sync_config_backup(dry_run: bool = False):
         subprocess.run(['git', 'add', '.'], cwd=str(target_path), check=True, capture_output=True)
         subprocess.run(['git', 'commit', '-m', 'Sync config from geotag-photos'],
                        cwd=str(target_path), check=True, capture_output=True)
-        print("    ✓ Committed config changes (remember to push!)")
+        push = subprocess.run(['git', 'push'], cwd=str(target_path), capture_output=True)
+        if push.returncode == 0:
+            print("    ✓ Committed and pushed config backup")
+        else:
+            print("    ✓ Committed config changes (push failed — push manually)")
     except subprocess.CalledProcessError as e:
         print(f"    ✗ Config commit failed: {e.stderr.decode()}")
 

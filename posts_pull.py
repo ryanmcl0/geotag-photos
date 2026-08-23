@@ -180,12 +180,72 @@ def sync_post_dir(dest_dir, plan):
     return copied, renamed
 
 
+PHONE_MANIFESTS = Path('/Volumes/RYAN/phone_browse/manifests')
+_phone_cache = {}
+
+
+def phone_sources(slug):
+    """(name -> original src Path, Phone dir root) for one phone trip slug."""
+    if slug in _phone_cache:
+        return _phone_cache[slug]
+    mpath = PHONE_MANIFESTS / f'{slug}.jsonl'
+    names, phone_root = {}, None
+    if mpath.exists():
+        for line in mpath.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            names[row['name']] = Path(row['src'])
+            if phone_root is None:
+                d = Path(row['src']).parent
+                while d.name.lower() != 'phone' and d != d.parent:
+                    d = d.parent
+                phone_root = d
+    _phone_cache[slug] = (names, phone_root)
+    return _phone_cache[slug]
+
+
+def resolve_phone(ref):
+    """Original NAS file for a {trip, id} phone photo or {trip, file} video."""
+    slug = ref['trip'].removeprefix('phone-')
+    names, phone_root = phone_sources(slug)
+    if ref.get('id'):
+        src = names.get(ref['id'])
+        return (src, None) if src and src.exists() else (None, 'not in phone manifest')
+    if phone_root is None:
+        return None, 'phone trip manifest missing'
+    src = phone_root / ref['file']
+    return (src, None) if src.exists() else (None, f'missing: {src}')
+
+
+def sync_phone_dir(phone_dir, plan):
+    """Mirror the plan into <post>/Phone/: copy new, drop unselected copies."""
+    phone_dir.mkdir(parents=True, exist_ok=True)
+    wanted = {dst.name for _, _, _, dst in plan}
+    removed = 0
+    for f in sorted(phone_dir.iterdir()):
+        if f.is_file() and re.match(r'\d+_', f.name) and f.name not in wanted:
+            f.unlink()
+            removed += 1
+    copied = 0
+    for _, _, src, dst in plan:
+        if dst.exists() and dst.stat().st_size == src.stat().st_size:
+            continue
+        shutil.copy2(src, dst)
+        copied += 1
+    return copied, removed
+
+
 def main():
     ap = argparse.ArgumentParser(description='Pull post drafts and copy their source files.')
     ap.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
                     help='Destination root (default: /Volumes/RYAN/Edits/Posts)')
     ap.add_argument('--post', help='Only this post name')
     ap.add_argument('--url', help='Posts API URL')
+    ap.add_argument('--local', action='store_true',
+                    help='Pull from the local dev server (http://localhost:8788) — '
+                         'phone-library selections only exist in local state')
     ap.add_argument('--dry-run', action='store_true', help='Print the copy plan only')
     ap.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
     args = ap.parse_args()
@@ -204,6 +264,8 @@ def main():
     if not posts_password:
         sys.exit('❌ CF_POSTS_PASSWORD not set (environment or .env.deploy).')
     url = args.url
+    if not url and args.local:
+        url = 'http://localhost:8788/api/posts'
     if not url:
         project = env.get('CF_PAGES_PROJECT')
         if not project:
@@ -239,6 +301,9 @@ def main():
         if args.list or args.dry_run:
             for i, ref, src, dst in plan:
                 print(f"   {i:02d} {src}  →  {dst}")
+            for i, ref in enumerate(post.get('phone') or [], 1):
+                src, why = resolve_phone(ref)
+                print(f"   Phone {i:02d} {src or why}  →  {dest_dir / 'Phone'}")
             print()
             continue
 
@@ -257,6 +322,32 @@ def main():
             parts.append(f'{renamed} reordered')
         parts.append(f'{len(plan) - copied - renamed} already up to date')
         print(f"   ✓ {', '.join(parts)}")
+
+        # Behind-the-scenes phone selections -> <post>/Phone/ (originals,
+        # photos and videos alike, resolved via the phone_browse manifests).
+        phone_refs = post.get('phone') or []
+        if phone_refs:
+            phone_plan = []
+            for i, ref in enumerate(phone_refs, 1):
+                src, why = resolve_phone(ref)
+                label = ref.get('id') or ref.get('file')
+                if src is None:
+                    print(f"   ⚠️  Phone {i:02d} {ref['trip']}/{label}: {why}")
+                    unresolved += 1
+                    continue
+                phone_plan.append((i, ref, src, dest_dir / 'Phone' / f'{i:02d}_{src.name}'))
+            pcopied, premoved = sync_phone_dir(dest_dir / 'Phone', phone_plan)
+            manifest['phone'] = [
+                {'order': i, 'trip': ref['trip'],
+                 'id': ref.get('id'), 'file': ref.get('file'),
+                 'source': str(src), 'copied_to': str(dst)}
+                for i, ref, src, dst in phone_plan]
+            (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+            pparts = [f'{pcopied} copied']
+            if premoved:
+                pparts.append(f'{premoved} removed')
+            pparts.append(f'{len(phone_plan) - pcopied} already up to date')
+            print(f"   ✓ Phone/ ({len(phone_plan)} items): {', '.join(pparts)}")
 
         # Lightroom smart collection matching these photos (filename + capture
         # date), so the post is one import away in the LR Collections panel.

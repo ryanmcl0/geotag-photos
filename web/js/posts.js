@@ -144,7 +144,7 @@ window.Posts = (function () {
 
     const MAX_PHOTOS = 20;   // Instagram carousel limit
 
-    const keyOf = ref => `${ref.trip}::${ref.id}`;
+    const keyOf = ref => `${ref.trip}::${ref.id || ref.file}`;
     const plural = n => `${n} photo${n === 1 ? '' : 's'}`;
     const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -161,17 +161,37 @@ window.Posts = (function () {
         return out;
     }
 
+    // Phone items are {trip, id} photos or {trip, file} videos from the
+    // local-only phone library.
+    function cleanPhoneRef(ref) {
+        const out = { trip: ref.trip };
+        if (ref.id) out.id = ref.id; else out.file = ref.file;
+        if (typeof ref.ar === 'number') out.ar = ref.ar;
+        return out;
+    }
+
     function addRefsToPost(post, refs) {
         const have = new Set(post.photos.map(keyOf));
-        let added = 0, dupes = 0, hitCap = false;
+        const havePhone = new Set((post.phone || []).map(keyOf));
+        let added = 0, dupes = 0, hitCap = false, phoneAdded = 0;
         refs.forEach(ref => {
+            // Phone-library items live in their own bucket: behind-the-scenes
+            // companions to the carousel, exempt from the 20-photo cap.
+            if (ref.trip && ref.trip.startsWith('phone-')) {
+                if (havePhone.has(keyOf(ref))) { dupes++; return; }
+                if (!post.phone) post.phone = [];
+                post.phone.push(cleanPhoneRef(ref));
+                havePhone.add(keyOf(ref));
+                added++; phoneAdded++;
+                return;
+            }
             if (have.has(keyOf(ref))) { dupes++; return; }
             if (post.photos.length >= MAX_PHOTOS) { hitCap = true; return; }
             post.photos.push(cleanRef(ref));
             have.add(keyOf(ref));
             added++;
         });
-        return { added, dupes, hitCap, count: post.photos.length };
+        return { added, dupes, hitCap, phoneAdded, count: post.photos.length };
     }
 
     // The "current post": the last post photos were added to (or picked in the
@@ -220,7 +240,9 @@ window.Posts = (function () {
             setTarget(postId);
             updateSelectUi();
             restampSelections();
-            if (result.hitCap && result.added) {
+            if (result.phoneAdded && result.added === result.phoneAdded) {
+                toast(`Added ${result.phoneAdded > 1 ? result.phoneAdded + ' ' : ''}to ${result.name} (Phone section, no cap)`);
+            } else if (result.hitCap && result.added) {
                 toast(`Added ${result.added}, ${result.name} is now full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
             } else if (result.hitCap) {
                 toast(`${result.name} is full (${MAX_PHOTOS}/${MAX_PHOTOS})`);
@@ -562,6 +584,68 @@ window.Posts = (function () {
             strip.appendChild(hint);
         }
         card.appendChild(strip);
+
+        // Collapsible behind-the-scenes bucket from the local phone library
+        // (uncapped, pulled into a Phone/ subfolder by posts_pull.py).
+        if (post.phone && post.phone.length) {
+            const det = document.createElement('details');
+            det.style.cssText = 'margin-top:8px';
+            const sum = document.createElement('summary');
+            sum.textContent = `Phone (${post.phone.length})`;
+            sum.style.cssText = 'cursor:pointer;opacity:.75;font-size:13px';
+            const pstrip = document.createElement('div');
+            pstrip.className = 'posts-strip';
+            const photoRefs = post.phone.filter(r => r.id);
+            post.phone.forEach(ref => {
+                const cell = document.createElement('div');
+                cell.style.cssText = 'position:relative;flex:0 0 auto';
+                if (ref.id) {
+                    const img = document.createElement('img');
+                    img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
+                    img.loading = 'lazy';
+                    img.style.cssText = 'height:96px;border-radius:5px;display:block;cursor:pointer';
+                    img.addEventListener('click', () => {
+                        if (window.Gallery) Gallery.openLightbox(photoRefs, photoRefs.indexOf(ref));
+                    });
+                    cell.appendChild(img);
+                } else {
+                    const vid = document.createElement('a');
+                    vid.href = `/phone/trips/${ref.trip}/videos/` +
+                        ref.file.split('/').map(encodeURIComponent).join('/');
+                    vid.target = '_blank';
+                    vid.style.cssText = 'height:96px;width:128px;border-radius:5px;background:#26262c;' +
+                        'color:#ddd;display:flex;flex-direction:column;align-items:center;' +
+                        'justify-content:center;gap:3px;text-decoration:none';
+                    const play = document.createElement('span');
+                    play.textContent = '▶';
+                    play.style.cssText = 'font-size:22px';
+                    const lbl = document.createElement('span');
+                    lbl.textContent = ref.file.split('/').pop().slice(0, 16);
+                    lbl.style.cssText = 'font-size:9px;opacity:.7';
+                    vid.append(play, lbl);
+                    cell.appendChild(vid);
+                }
+                const rm = document.createElement('button');
+                rm.type = 'button';
+                rm.textContent = '✕';
+                rm.title = 'Remove from Phone section';
+                rm.style.cssText = 'position:absolute;top:3px;right:3px;background:rgba(0,0,0,.65);' +
+                    'color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px';
+                rm.addEventListener('click', () => {
+                    mutate(posts => {
+                        const pp = posts.find(x => x.id === post.id);
+                        if (!pp || !pp.phone) return;
+                        const i = pp.phone.findIndex(r => keyOf(r) === keyOf(ref));
+                        if (i !== -1) pp.phone.splice(i, 1);
+                        if (!pp.phone.length) delete pp.phone;
+                    }).then(() => renderManager(root));
+                });
+                cell.appendChild(rm);
+                pstrip.appendChild(cell);
+            });
+            det.append(sum, pstrip);
+            card.appendChild(det);
+        }
         return card;
     }
 
@@ -648,5 +732,5 @@ window.Posts = (function () {
         if (ok && document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
     });
 
-    return { enabled: true, attachLightbox, onGridRender, initPostsPage };
+    return { enabled: true, attachLightbox, onGridRender, initPostsPage, addToPost };
 })();

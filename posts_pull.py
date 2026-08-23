@@ -136,6 +136,96 @@ def resolve_source(trip, photo_id):
     return None, f'no file matching {photo_id} under {base}'
 
 
+MODELS_DIR = ROOT / 'tools' / 'models'
+
+
+def _face_boxes(img):
+    """Face bboxes [(x, y, w, h)] via insightface if available (best recall,
+    laptop venv) else OpenCV YuNet (tiny ONNX in tools/models — enough for the
+    NAS docker container with just opencv-python-headless + numpy)."""
+    try:
+        from insightface.app import FaceAnalysis
+        if not hasattr(_face_boxes, '_app'):
+            app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'],
+                               allowed_modules=['detection'])
+            app.prepare(ctx_id=-1, det_size=(1024, 1024), det_thresh=0.4)
+            _face_boxes._app = app
+        faces = _face_boxes._app.get(img)
+        return [tuple(int(v) for v in (f.bbox[0], f.bbox[1],
+                f.bbox[2] - f.bbox[0], f.bbox[3] - f.bbox[1])) for f in faces]
+    except ImportError:
+        pass
+    import cv2
+    model = MODELS_DIR / 'face_detection_yunet_2023mar.onnx'
+    h, w = img.shape[:2]
+    scale = min(1.0, 1600 / max(w, h))
+    small = cv2.resize(img, (int(w * scale), int(h * scale))) if scale < 1 else img
+    det = cv2.FaceDetectorYN.create(str(model), '', (small.shape[1], small.shape[0]),
+                                    score_threshold=0.5)
+    _, faces = det.detect(small)
+    out = []
+    for f in (faces if faces is not None else []):
+        x, y, fw, fh = [int(v / scale) for v in f[:4]]
+        out.append((x, y, fw, fh))
+    return out
+
+
+def _face_boxes_tiled(img, tile=1536, overlap=256):
+    """Native-resolution tiled sweep for tiny faces (distant figures in wide
+    shots). Only used when the whole-frame pass finds nothing."""
+    H, W = img.shape[:2]
+    boxes = []
+    step = tile - overlap
+    for y0 in range(0, max(1, H - overlap), step):
+        for x0 in range(0, max(1, W - overlap), step):
+            roi = img[y0:min(H, y0 + tile), x0:min(W, x0 + tile)]
+            if roi.shape[0] < 64 or roi.shape[1] < 64:
+                continue
+            for (x, y, w, h) in _face_boxes(roi):
+                boxes.append((x + x0, y + y0, w, h))
+    # de-dup overlapping tile hits
+    out = []
+    for b in boxes:
+        if not any(abs(b[0] - o[0]) < 20 and abs(b[1] - o[1]) < 20 for o in out):
+            out.append(b)
+    return out
+
+
+def blur_faces_file(src, dst):
+    """Write a copy of src to dst with every detected face pixelated.
+    Returns the face count (0 = wrote a plain copy; caller may warn)."""
+    import cv2
+    import numpy as np
+    data = np.fromfile(str(src), dtype=np.uint8)   # path-safe on SMB
+    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if img is None:
+        shutil.copy2(src, dst)
+        return -1
+    boxes = _face_boxes(img)
+    if not boxes:
+        boxes = _face_boxes_tiled(img)
+    H, W = img.shape[:2]
+    for (x, y, w, h) in boxes:
+        pad = int(0.35 * max(w, h))
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
+        roi = img[y0:y1, x0:x1]
+        if roi.size == 0:
+            continue
+        blocks = 9
+        small = cv2.resize(roi, (blocks, max(1, blocks * roi.shape[0] // max(1, roi.shape[1]))),
+                           interpolation=cv2.INTER_LINEAR)
+        img[y0:y1, x0:x1] = cv2.resize(small, (x1 - x0, y1 - y0),
+                                       interpolation=cv2.INTER_NEAREST)
+    ok, buf = cv2.imencode(src.suffix if src.suffix.lower() in ('.jpg', '.jpeg', '.png') else '.jpg',
+                           img, [cv2.IMWRITE_JPEG_QUALITY, 96])
+    if not ok:
+        shutil.copy2(src, dst)
+        return -1
+    buf.tofile(str(dst))
+    return len(boxes)
+
+
 def sanitize(name):
     return re.sub(r'[\\/:*?"<>|]', '_', name).strip() or 'untitled'
 
@@ -160,16 +250,42 @@ def sync_post_dir(dest_dir, plan):
         f.rename(tmp)
         parked.setdefault(m.group(1), []).append(tmp)
 
+    # Face-blur state: which copies were written blurred, keyed by source
+    # filename (stable across reorders). A blur toggle on the site regenerates
+    # the copy — the one case where an existing local file is replaced.
+    state_path = dest_dir / '.pull_state.json'
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    blurred = state.setdefault('blurred', {})
+
     copied = renamed = 0
     for i, ref, src, dst in plan:
-        if dst.exists():   # right place already; local edits are never clobbered
-            continue
+        want_blur = bool(ref.get('blur'))
+        have_blur = bool(blurred.get(src.name, False))
+        if dst.exists() and have_blur == want_blur:
+            continue   # right place, right content; local edits never clobbered
         if parked.get(src.name):
-            parked[src.name].pop(0).rename(dst)
-            renamed += 1
-            continue
-        shutil.copy2(src, dst)
+            tmp = parked[src.name].pop(0)
+            if have_blur == want_blur:
+                tmp.rename(dst)
+                renamed += 1
+                continue
+            tmp.unlink()   # blur state changed: regenerate below
+        if dst.exists():
+            dst.unlink()
+        if want_blur:
+            n = blur_faces_file(src, dst)
+            label = f'{n} face(s) pixelated' if n > 0 else (
+                'no faces found — copied unblurred, check manually' if n == 0
+                else 'decode failed — copied unblurred')
+            print(f'   🙂🚫 {dst.name}: {label}')
+        else:
+            shutil.copy2(src, dst)
+        blurred[src.name] = want_blur
         copied += 1
+    state_path.write_text(json.dumps(state, indent=1))
 
     # Whatever is still parked was removed from the post on the site.
     for tmps in parked.values():

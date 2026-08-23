@@ -472,7 +472,16 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
     overrides = load_overrides()
     private_blogs = _private_blogs()
     serve = {k: set(v) for k, v in (overrides.get('force_public') or {}).items()}
+    # Covers are only auto-served for PUBLIC trips. A private trip's cover
+    # stays gated: the pages that show those tiles ungated (urbex) already
+    # require all-access, and public surfaces fall back to the padlock
+    # placeholder — so a private photo can't be stumbled on just because it
+    # was picked as a cover. Manual force_public / public_from_private remain
+    # the explicit opt-ins.
+    private_slugs = {s for s, pub in trip_public.items() if not pub}
     for trip, ids in cover_serve_map().items():
+        if trip in private_slugs:
+            continue
         serve.setdefault(trip, set()).update(ids)
     index = {
         # publish-from-private trips are NOT wholesale-private: their gated photos are

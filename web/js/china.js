@@ -249,24 +249,24 @@
     }
     // Province tiles (Map/Gallery toggle) and/or tiles with write-up(s): the tile is
     // a <div> (nested <a> is invalid) holding a full-bleed primary link — the default
-    // action, which is the map for provinces — plus buttons layered on top.
+    // action, which is the GALLERY for provinces — plus buttons layered on top.
     const card = el('div', 'tile tile--haslink');
     const main = el('a', 'tile-mainlink');
-    main.href = href;
+    main.href = isProvince ? `#${tile.id}/${s.id}` : href;
     main.innerHTML = inner;
     card.appendChild(main);
     const links = el('div', 'tile-bloglinks');
 
     // Province tiles get a Map/Gallery view toggle controlling how the photos open:
-    // Map (the default, matching the full-tile link) sends to the filtered map;
-    // Gallery opens the in-hub photo grid. Grouped as a segmented pair so it reads
+    // Gallery (the default, matching the full-tile link) opens the in-hub photo
+    // grid; Map sends to the filtered map. Grouped as a segmented pair so it reads
     // as one control. On mobile .tile-bloglinks shifts to the top-right, clear of the
     // bottom-anchored title/meta.
     if (isProvince) {
       const toggle = el('div', 'tile-viewtoggle');
-      const mapBtn = el('a', 'tile-viewbtn is-active', 'Map');
+      const mapBtn = el('a', 'tile-viewbtn', 'Map');
       mapBtn.href = href;
-      const galBtn = el('a', 'tile-viewbtn', 'Gallery');
+      const galBtn = el('a', 'tile-viewbtn is-active', 'Gallery');
       galBtn.href = `#${tile.id}/${s.id}`;
       toggle.appendChild(mapBtn);
       toggle.appendChild(galBtn);

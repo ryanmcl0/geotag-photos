@@ -692,6 +692,18 @@ def cmd_serve(args):
             print(f'▶ Curation server on port {args.curate_port} '
                   '(the prompt box appears once it finishes loading)')
 
+    # Ctrl-C is not the only way this ends: closing the terminal (SIGHUP) or a
+    # plain `kill` (SIGTERM) would otherwise skip the final sync AND leave the
+    # child servers running, since they sit in their own sessions. Route both
+    # through the same shutdown path.
+    def _stop(signum, _frame):
+        raise KeyboardInterrupt
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, _stop)
+        except (ValueError, OSError, AttributeError):
+            pass
+
     ip = local_ip()
     print(f'\n🌐 {LOCAL_BASE}/posts' + (f'   📱 http://{ip}:{args.port}/posts' if ip else ''))
     print('   Phone photos work here (web/phone/ is local-only and never deployed).')
@@ -707,6 +719,8 @@ def cmd_serve(args):
                 break
     except KeyboardInterrupt:
         print('\n⇡ Final sync to the live site...')
+    except Exception as e:                              # noqa: BLE001
+        print(f'\n⚠️  Stopping after an unexpected error: {e}')
     finally:
         if mirror:
             try:

@@ -409,9 +409,17 @@ def assign_sessions(pool):
 
 # ---------------------------------------------------------------- selection
 
+def dominant_orientation(cands):
+    """Carousels must not mix orientations: keep the majority side."""
+    land = [p for p in cands if (p.get('ar') or 1.5) >= 1]
+    port = [p for p in cands if (p.get('ar') or 1.5) < 1]
+    return land if len(land) >= len(port) else port
+
+
 def pick(cands, n=CAROUSEL, per_session=PER_SESSION):
     """Top-n by score with session-diversity; cover first, rest chronological.
     per_session=None disables the diversity cap (single-place groups)."""
+    cands = dominant_orientation(cands)
     out, used = [], {}
     for p in sorted(cands, key=lambda r: -r['score']):
         if per_session is not None and used.get(p['session'], 0) >= per_session:
@@ -580,6 +588,7 @@ def build_story_posts(groups, pool):
                     sel.append(max(sess_me, key=lambda r: r['score']))
                 if sess_all:
                     sel.append(max(sess_all, key=lambda r: r['score']))
+            sel = dominant_orientation(sel)
             if len(sel) < 6:      # stories are the point; lower bar than MIN_POST
                 continue
             sel = sorted(sel, key=lambda r: -r['score'])[:CAROUSEL]

@@ -235,7 +235,7 @@ window.PhoneCompanion = (function () {
                     const addBtn = document.createElement('button');
                     addBtn.type = 'button';
                     addBtn.textContent = '+';
-                    addBtn.title = 'Add to this post (Phone section, no cap)';
+                    addBtn.title = 'Add to this post (Phone section; counts toward the 18 cap on XHS posts)';
                     addBtn.style.cssText = 'position:absolute;top:4px;left:4px;z-index:2;' +
                         'background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:4px;' +
                         'cursor:pointer;font-size:13px;line-height:1;padding:2px 7px';

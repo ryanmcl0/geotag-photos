@@ -9,6 +9,10 @@
  */
 
 const STATE_KEY = '_state/posts.json';
+// ?set=auto addresses a second, independent document holding machine-generated
+// suggestions (tools/auto_curate_posts.py); the generator replaces it wholesale
+// while manual drafts in the main document are never touched.
+const AUTO_STATE_KEY = '_state/auto_posts.json';
 const MAX_BODY_BYTES = 512 * 1024;
 const MAX_PHOTOS_PER_POST = 20;   // Instagram carousel limit
 
@@ -21,7 +25,13 @@ interface PhotoRef { trip: string; id: string; ar?: number; blur?: boolean }
 // Behind-the-scenes items from the local-only phone library: {trip, id}
 // photos or {trip, file} videos. Uncapped (not part of the IG carousel).
 interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
-interface Post { id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[] }
+// platform: 'ig' (default) or 'xhs'. On xhs the phone items are part of the
+// carousel, so photos+phone together are capped at 18; on ig the phone bucket
+// stays behind-the-scenes and uncapped. posted marks published drafts.
+interface Post {
+    id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
+    platform?: 'ig' | 'xhs'; posted?: boolean;
+}
 interface PostsDoc { version: number; updated: string | null; posts: Post[] }
 
 function validPosts(posts: unknown): posts is Post[] {
@@ -36,6 +46,10 @@ function validPosts(posts: unknown): posts is Post[] {
             ph && typeof ph === 'object' &&
             typeof ph.trip === 'string' && typeof ph.id === 'string' &&
             (ph.blur === undefined || typeof ph.blur === 'boolean')) &&
+        ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
+        ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
+        ((p as Post).platform !== 'xhs' ||
+            (p as Post).photos.length + ((p as Post).phone?.length || 0) <= 18) &&
         ((p as Post).phone === undefined || (
             Array.isArray((p as Post).phone) &&
             (p as Post).phone!.length <= 200 &&
@@ -54,8 +68,11 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         return new Response('Not found', { status: 404 });
     }
 
+    const stateKey = new URL(context.request.url).searchParams.get('set') === 'auto'
+        ? AUTO_STATE_KEY : STATE_KEY;
+
     const readDoc = async (): Promise<PostsDoc> => {
-        const obj = await context.env.PHOTOS_BUCKET.get(STATE_KEY);
+        const obj = await context.env.PHOTOS_BUCKET.get(stateKey);
         if (!obj) return { version: 0, updated: null, posts: [] };
         try {
             return await obj.json() as PostsDoc;
@@ -94,7 +111,7 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
             updated: new Date().toISOString(),
             posts: body.posts
         };
-        await context.env.PHOTOS_BUCKET.put(STATE_KEY, JSON.stringify(next), {
+        await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });
         return json({ version: next.version });

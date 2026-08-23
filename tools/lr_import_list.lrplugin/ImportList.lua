@@ -30,7 +30,7 @@ LrTasks.startAsyncTask(function()
     local catalog = LrApplication.activeCatalog()
     local collectionName = LrPathUtils.removeExtension(
         LrPathUtils.leafName(listPath))
-    local added, already, missing, failed = {}, 0, 0, 0
+    local added, already, missing, failed, errors = {}, 0, 0, 0, {}
 
     local progress = LrProgressScope { title = 'Importing from list…' }
     -- chunked write access: one giant block makes LR unresponsive
@@ -47,13 +47,14 @@ LrTasks.startAsyncTask(function()
                         already = already + 1
                         added[#added + 1] = existing
                     else
-                        local ok, photo = pcall(function()
+                        local ok, photoOrErr = pcall(function()
                             return catalog:addPhoto(p)
                         end)
-                        if ok and photo then
-                            added[#added + 1] = photo
+                        if ok and photoOrErr then
+                            added[#added + 1] = photoOrErr
                         else
                             failed = failed + 1
+                            errors[#errors + 1] = p .. ' :: ' .. tostring(photoOrErr)
                         end
                     end
                 end
@@ -68,6 +69,15 @@ LrTasks.startAsyncTask(function()
         if coll then coll:addPhotos(added) end
     end, { timeout = 60 })
     progress:done()
+
+    if #errors > 0 then
+        local errPath = LrPathUtils.replaceExtension(listPath, 'errors.txt')
+        local f = io.open(errPath, 'w')
+        if f then
+            f:write(table.concat(errors, '\n'))
+            f:close()
+        end
+    end
 
     LrDialogs.message('Import from list finished',
         string.format('%d added, %d were already in the catalog, %d missing, %d failed.\nAll grouped in collection "%s".',

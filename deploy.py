@@ -206,12 +206,40 @@ def sync_config_backup(dry_run: bool = False):
             '--exclude', '.classify_cache.json',
             '--exclude', '.dims_cache.json',
             '--exclude', '*.bak',
+            # local_browse/ + plan doc are synced separately below — protect
+            # them from this rsync's --delete
+            '--exclude', 'local_browse',
+            '--exclude', 'PHONE_PHOTOS_PLAN.md',
             str(src) + '/', str(target_path) + '/'
         ], check=True, capture_output=True)
         print(f"    ✓ Synced config/ → {target_path}")
     except subprocess.CalledProcessError as e:
         print(f"    ✗ Config sync failed: {e.stderr.decode()}")
         return
+
+    # Local-only phone/face tooling and curation (git-ignored in the main
+    # repo, but worth private tracking): scripts, people labels, cluster
+    # export, plan doc. The 70MB+ face_index.sqlite is excluded — it's
+    # regenerable and would bloat the backup repo's history.
+    local_browse = Path('local_browse')
+    if local_browse.is_dir():
+        try:
+            subprocess.run([
+                'rsync', '-av', '--delete',
+                '--exclude', '.DS_Store',
+                '--exclude', 'face_index.sqlite',
+                '--exclude', '__pycache__',
+                '--exclude', '*.log',
+                str(local_browse) + '/', str(target_path / 'local_browse') + '/'
+            ], check=True, capture_output=True)
+            for extra in (Path('PHONE_PHOTOS_PLAN.md'), Path('docs/phone_trip_sizes.tsv')):
+                if extra.exists():
+                    subprocess.run(['rsync', '-a', str(extra),
+                                    str(target_path / 'local_browse') + '/'],
+                                   check=True, capture_output=True)
+            print(f"    ✓ Synced local_browse/ (phone + face tooling) → {target_path}/local_browse")
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ local_browse sync failed: {e.stderr.decode()}")
 
     try:
         status = subprocess.run(['git', 'status', '--porcelain'],

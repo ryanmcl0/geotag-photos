@@ -687,6 +687,24 @@ window.Posts = (function () {
         right.type = 'button'; right.textContent = '▶'; right.title = 'Move later';
         right.disabled = idx === post.photos.length - 1;
         right.addEventListener('click', () => move(idx + 1));
+        // Face-blur mark: flags this photo so posts_pull.py copies a
+        // face-pixelated version instead of the straight original.
+        const blurBtn = document.createElement('button');
+        blurBtn.type = 'button';
+        blurBtn.textContent = '🙂';
+        blurBtn.title = ref.blur ? 'Face blur ON — pull copies a censored version'
+                                 : 'Blur faces when pulled';
+        if (ref.blur) blurBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
+        blurBtn.addEventListener('click', () => {
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const ph = p.photos.find(x => keyOf(x) === keyOf(ref));
+                if (!ph) return;
+                if (ph.blur) delete ph.blur; else ph.blur = true;
+            }).then(() => renderManager(root));
+        });
+
         const rm = document.createElement('button');
         rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove from post';
         rm.addEventListener('click', () => {
@@ -721,6 +739,15 @@ window.Posts = (function () {
             }).then(() => renderManager(root));
         });
 
+        controls.insertBefore(blurBtn, rm);
+        if (ref.blur) {
+            const mark = document.createElement('span');
+            mark.textContent = '🙂🚫';
+            mark.title = 'Faces will be blurred on pull';
+            mark.style.cssText = 'position:absolute;bottom:4px;left:4px;font-size:12px;' +
+                'background:rgba(0,0,0,.65);border-radius:4px;padding:1px 4px';
+            cell.appendChild(mark);
+        }
         cell.append(orderBadge, img, controls);
         return cell;
     }

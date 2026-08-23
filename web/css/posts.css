@@ -153,11 +153,12 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-card-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .posts-name {
   background: none; border: 1px solid transparent; border-radius: 6px;
-  color: #fff; font-size: 17px; font-weight: 600; padding: 4px 8px; min-width: 0; flex: 1;
+  color: #fff; font-size: 17px; font-weight: 600; padding: 4px 8px; min-width: 0;
+  flex: 0 1 auto; width: 16ch;
 }
 .posts-name:hover { border-color: #333; }
 .posts-name:focus { outline: none; border-color: #666; background: #202020; }
-.posts-count { color: #888; font-size: 12px; white-space: nowrap; }
+.posts-count { color: #888; font-size: 12px; white-space: nowrap; margin-right: auto; }
 .posts-delete {
   background: none; border: 1px solid #3a3a3a; color: #999; border-radius: 6px;
   padding: 6px 12px; font-size: 12px; cursor: pointer;

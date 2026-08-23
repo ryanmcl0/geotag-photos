@@ -47,7 +47,9 @@ LrTasks.startAsyncTask(function()
                         already = already + 1
                         added[#added + 1] = existing
                     else
-                        local ok, photoOrErr = pcall(function()
+                        -- LrTasks.pcall, not plain pcall: addPhoto yields to
+                        -- LR's scheduler, which plain pcall forbids
+                        local ok, photoOrErr = LrTasks.pcall(function()
                             return catalog:addPhoto(p)
                         end)
                         if ok and photoOrErr then

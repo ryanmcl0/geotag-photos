@@ -410,7 +410,10 @@ window.Posts = (function () {
             };
 
             const current = targetPost();
-            doc.posts.forEach(p => {
+            const ordered = doc.posts.map((p, i) => [p, i])
+                .sort((a, b) => (!!a[0].posted - !!b[0].posted) || (a[1] - b[1]))
+                .map(([p]) => p);
+            ordered.forEach(p => {
                 const row = document.createElement('button');
                 row.type = 'button';
                 row.className = 'posts-picker-row';
@@ -672,7 +675,12 @@ window.Posts = (function () {
             return;
         }
 
-        const list = doc.posts.filter(p => platformOf(p) === activeTab);
+        // Unposted first (what still needs work), posted ones collapsed below;
+        // the stored order is untouched, this is display order only.
+        const list = doc.posts.filter(p => platformOf(p) === activeTab)
+            .map((p, i) => [p, i])
+            .sort((a, b) => (!!a[0].posted - !!b[0].posted) || (a[1] - b[1]))
+            .map(([p]) => p);
         if (!list.length) {
             const empty = document.createElement('p');
             empty.className = 'posts-empty';
@@ -830,7 +838,7 @@ window.Posts = (function () {
         bar.append(name, count);
         if (set === 'auto') {
             // Promote a suggestion into the hand-made drafts (which is what
-            // posts_pull.py pulls); the suggestion itself stays until
+            // ./post.py pull pulls); the suggestion itself stays until
             // dismissed. XHS copies obey the combined 18 cap: carousel photos
             // first, phone items fill any remaining slots.
             [['ig', 'Copy → IG'], ['xhs', 'Copy → XHS']].forEach(([plat, label]) => {
@@ -928,7 +936,7 @@ window.Posts = (function () {
         card.appendChild(strip);
 
         // Collapsible behind-the-scenes bucket from the local phone library
-        // (uncapped, pulled into a Phone/ subfolder by posts_pull.py).
+        // (uncapped, pulled into a Phone/ subfolder by ./post.py pull).
         if (post.phone && post.phone.length) {
             const det = document.createElement('details');
             det.style.cssText = 'margin-top:8px';
@@ -1030,7 +1038,7 @@ window.Posts = (function () {
         right.type = 'button'; right.textContent = '▶'; right.title = 'Move later';
         right.disabled = idx === post.photos.length - 1;
         right.addEventListener('click', () => move(idx + 1));
-        // Face-blur mark: flags this photo so posts_pull.py copies a
+        // Face-blur mark: flags this photo so ./post.py pull copies a
         // face-pixelated version instead of the straight original.
         const blurBtn = document.createElement('button');
         blurBtn.type = 'button';

@@ -1,37 +1,53 @@
 #!/usr/bin/env python3
 """
-Pull Instagram post drafts (made on the website via the owner-only Posts
-feature) down to the laptop: fetch the draft list from /api/posts, resolve
-every {trip, id} to its full-size edited source file via the local trip
-manifests, and copy the files into per-post folders in carousel order.
+Everything for working with post drafts. Always takes a subcommand:
 
-Usage:
-  ./posts_pull.py [--dest DIR] [--post NAME] [--url URL] [--dry-run] [--list]
+  ./post.py serve     local site + phone photos, kept in sync with the remote
+  ./post.py pull      pull the drafts from the remote and copy their files
+  ./post.py sync      copy the remote state down to the local dev server
+  ./post.py push      copy the local dev state up to the remote
+  ./post.py status    show both sides' versions and post counts
 
-  --dest DIR   Destination root (default: /Volumes/RYAN/Edits/Posts). Each post
-               becomes <dest>/<post name>/NN_<filename>, NN = carousel order.
-               Warns and exits if the RYAN drive is not mounted.
-  --post NAME  Only pull the named post (default: all).
-  --url URL    Posts API URL (default: https://<CF_PAGES_PROJECT>.pages.dev/api/posts).
-  --list       Just print the drafts and their resolved paths, copy nothing.
-  --dry-run    Show what would be copied without copying.
+Why sync exists: post drafts live in R2 behind /api/posts, but `wrangler pages
+dev` serves its OWN local simulated R2 - a separate store. Editing posts
+locally therefore never reaches the live site, and deploy.py does not carry
+post state either (it only syncs web/, functions/ and the manifests). So the
+two sides are copied explicitly, here.
+
+`serve` handles that automatically: it seeds the local server from the remote
+on startup, then watches the local state and pushes every change up within a
+few seconds, plus a final push when you Ctrl-C. If the remote changes while
+you serve (an edit from your phone on the live site), the push is held back
+and reported rather than silently overwriting it.
+
+Local-only feature note: the phone-photo companion reads web/phone/, which is
+never deployed, so phone selections can only be made through `serve`.
 
 Environment (or parsed from .env.deploy): CF_POSTS_PASSWORD (required),
-CF_SITE_PASSWORD (if the site gate is on), CF_PAGES_PROJECT (for the URL).
+CF_SITE_PASSWORD (if the site gate is on), CF_PAGES_PROJECT (for the URL),
+CF_ALL_PASSWORD (passed to the dev server so "See All" works locally).
 """
 
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import signal
+import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 WEB_TRIPS = ROOT / 'web' / 'trips'
 SOURCE_EXTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.heic', '.webp')
+LOCAL_BASE = 'http://localhost:8788'
+DEV_PORT = 8788
+CURATE_PORT = 8799
 
 
 def load_env():
@@ -58,18 +74,32 @@ def token_for(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+def cookie_header(env):
+    cookies = [f"posts_auth={token_for(env['CF_POSTS_PASSWORD'])}"]
+    if env.get('CF_SITE_PASSWORD'):
+        cookies.insert(0, f"site_auth={token_for(env['CF_SITE_PASSWORD'])}")
+    if env.get('CF_ALL_PASSWORD'):
+        cookies.append(f"all_access={token_for(env['CF_ALL_PASSWORD'])}")
+    return '; '.join(cookies)
+
+
+def api_call(url, env, method='GET', body=None, timeout=30):
+    """One /api/posts request. Returns the parsed JSON, or raises."""
+    req = urllib.request.Request(
+        url, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        # Cloudflare's bot rules 403 the default Python-urllib user agent
+        headers={'Cookie': cookie_header(env), 'User-Agent': 'post-cli/1.0',
+                 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
 def fetch_posts(url, site_password, posts_password):
-    cookies = [f'posts_auth={token_for(posts_password)}']
-    if site_password:
-        cookies.insert(0, f'site_auth={token_for(site_password)}')
-    # Cloudflare's bot rules 403 the default Python-urllib user agent
-    req = urllib.request.Request(url, headers={
-        'Cookie': '; '.join(cookies),
-        'User-Agent': 'posts-pull/1.0',
-    })
+    """Back-compat wrapper used by the pull path."""
+    env = {'CF_POSTS_PASSWORD': posts_password, 'CF_SITE_PASSWORD': site_password}
     try:
-        with urllib.request.urlopen(req) as r:
-            return json.loads(r.read())
+        return api_call(url, env)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             sys.exit("❌ /api/posts returned 404 — wrong CF_POSTS_PASSWORD, "
@@ -77,6 +107,50 @@ def fetch_posts(url, site_password, posts_password):
         sys.exit(f"❌ Fetch failed: HTTP {e.code}")
     except urllib.error.URLError as e:
         sys.exit(f"❌ Fetch failed: {e.reason}")
+
+
+# ---------------------------------------------------------------- sync
+
+SETS = ('main', 'auto')      # the two independent documents
+
+
+def posts_url(base, which='main'):
+    return f"{base}/api/posts" + ('?set=auto' if which == 'auto' else '')
+
+
+def remote_base(env):
+    project = env.get('CF_PAGES_PROJECT')
+    if not project:
+        sys.exit('❌ CF_PAGES_PROJECT not set (needed to reach the live site).')
+    return f'https://{project}.pages.dev'
+
+
+def read_doc(base, env, which='main'):
+    return api_call(posts_url(base, which), env)
+
+
+def write_doc(base, env, which, posts, base_version):
+    return api_call(posts_url(base, which), env, method='PUT',
+                    body={'baseVersion': base_version, 'posts': posts})
+
+
+def same_posts(a, b):
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def copy_state(src_base, dst_base, env, label, quiet=False):
+    """Copy both documents src -> dst. Returns the number of sets changed."""
+    changed = 0
+    for which in SETS:
+        src = read_doc(src_base, env, which)
+        dst = read_doc(dst_base, env, which)
+        if same_posts(src.get('posts', []), dst.get('posts', [])):
+            continue
+        write_doc(dst_base, env, which, src.get('posts', []), dst.get('version', 0))
+        changed += 1
+        if not quiet:
+            print(f"   ↳ {which}: {len(src.get('posts', []))} posts {label}")
+    return changed
 
 
 _manifest_cache = {}
@@ -353,19 +427,7 @@ def sync_phone_dir(phone_dir, plan):
     return copied, removed
 
 
-def main():
-    ap = argparse.ArgumentParser(description='Pull post drafts and copy their source files.')
-    ap.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
-                    help='Destination root (default: /Volumes/RYAN/Edits/Posts)')
-    ap.add_argument('--post', help='Only this post name')
-    ap.add_argument('--url', help='Posts API URL')
-    ap.add_argument('--local', action='store_true',
-                    help='Pull from the local dev server (http://localhost:8788) — '
-                         'phone-library selections only exist in local state')
-    ap.add_argument('--dry-run', action='store_true', help='Print the copy plan only')
-    ap.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
-    args = ap.parse_args()
-
+def cmd_pull(args):
     # The dest (and the source files) live on the network drive: fail fast
     # with a clear message if it isn't mounted.
     dest_root = Path(args.dest)
@@ -381,12 +443,22 @@ def main():
         sys.exit('❌ CF_POSTS_PASSWORD not set (environment or .env.deploy).')
     url = args.url
     if not url and args.local:
-        url = 'http://localhost:8788/api/posts'
+        url = posts_url(LOCAL_BASE)
     if not url:
-        project = env.get('CF_PAGES_PROJECT')
-        if not project:
-            sys.exit('❌ Need --url or CF_PAGES_PROJECT to build the API URL.')
-        url = f'https://{project}.pages.dev/api/posts'
+        url = posts_url(remote_base(env))
+
+    # `pull` means "whatever the live site says": if the dev server is running
+    # with edits that never made it up, pulling the remote would quietly use
+    # stale drafts. Say so rather than copying the wrong photos.
+    if not args.local and server_up(LOCAL_BASE, env):
+        try:
+            if any(not same_posts(read_doc(LOCAL_BASE, env, w).get('posts', []),
+                                  read_doc(remote_base(env), env, w).get('posts', []))
+                   for w in SETS):
+                print('⚠️  The local dev server has drafts that differ from the live '
+                      'site. Run  ./post.py push  first, or pull with --local.\n')
+        except (urllib.error.URLError, urllib.error.HTTPError):
+            pass
 
     doc = fetch_posts(url, env.get('CF_SITE_PASSWORD'), posts_password)
     posts = doc.get('posts', [])
@@ -478,6 +550,293 @@ def main():
 
     if unresolved:
         sys.exit(f'⚠️  {unresolved} photo(s) could not be resolved (see above).')
+
+
+# ---------------------------------------------------------------- serve
+
+def server_up(base, env):
+    try:
+        api_call(posts_url(base), env, timeout=3)
+        return True
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        return False
+
+
+def wait_for_server(base, env, seconds=90):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if server_up(base, env):
+            return True
+        time.sleep(1)
+    return False
+
+
+def local_ip():
+    for iface in ('en0', 'en1'):
+        try:
+            out = subprocess.run(['ipconfig', 'getifaddr', iface],
+                                 capture_output=True, text=True).stdout.strip()
+            if out:
+                return out
+        except OSError:
+            pass
+    return None
+
+
+def start_dev_server(env, port):
+    cmd = ['npx', 'wrangler', 'pages', 'dev', 'web', '--ip', '0.0.0.0',
+           '--port', str(port), '--compatibility-date=2026-06-10', '--live-reload']
+    for name in ('CF_SITE_PASSWORD', 'CF_ALL_PASSWORD', 'CF_POSTS_PASSWORD'):
+        if env.get(name):
+            cmd += ['--binding', f'{name}={env[name]}']
+    # Own process group: Ctrl-C reaches this script first, so the final sync
+    # runs while the dev server (and its API) is still alive.
+    return subprocess.Popen(cmd, cwd=str(ROOT), start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def start_curate_server(port):
+    py = ROOT / 'venv' / 'bin' / 'python'
+    script = ROOT / 'tools' / 'curate_server.py'
+    if not py.exists() or not script.exists():
+        return None
+    return subprocess.Popen([str(py), str(script), str(port)], cwd=str(ROOT),
+                            start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class RemoteMirror:
+    """Keeps the remote in step with the local dev server.
+
+    Pushes local edits up, but never overwrites a remote change it did not
+    make: the version the remote had after our last write is remembered, and
+    if the remote has moved past it (an edit on the live site from a phone)
+    the push is held and reported instead.
+    """
+
+    def __init__(self, env, remote):
+        self.env = env
+        self.remote = remote
+        self.expect = {}        # set -> remote version we last observed/wrote
+        self.warned = set()
+
+    def seed_local(self):
+        print('⇣ Seeding the local dev server from the live site...')
+        for which in SETS:
+            src = read_doc(self.remote, self.env, which)
+            dst = read_doc(LOCAL_BASE, self.env, which)
+            if not same_posts(src.get('posts', []), dst.get('posts', [])):
+                write_doc(LOCAL_BASE, self.env, which,
+                          src.get('posts', []), dst.get('version', 0))
+            self.expect[which] = src.get('version', 0)
+            print(f"   ↳ {which}: {len(src.get('posts', []))} posts")
+
+    def push(self, quiet=False):
+        """Push any local change up. Returns the number of sets written."""
+        written = 0
+        for which in SETS:
+            try:
+                local = read_doc(LOCAL_BASE, self.env, which)
+                remote = read_doc(self.remote, self.env, which)
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+                continue
+            if same_posts(local.get('posts', []), remote.get('posts', [])):
+                self.expect[which] = remote.get('version', 0)
+                self.warned.discard(which)
+                continue
+            if which in self.expect and remote.get('version') != self.expect[which]:
+                if which not in self.warned:
+                    print(f"\n⚠️  The live site's {which} posts changed while serving "
+                          f"(v{self.expect[which]} → v{remote.get('version')}).\n"
+                          "    Not overwriting it. Finish here, then choose:\n"
+                          "      ./post.py push --force   keep what is on this laptop\n"
+                          "      ./post.py sync           take the live version instead")
+                    self.warned.add(which)
+                continue
+            res = write_doc(self.remote, self.env, which,
+                            local.get('posts', []), remote.get('version', 0))
+            self.expect[which] = res.get('version', remote.get('version', 0) + 1)
+            self.warned.discard(which)
+            written += 1
+            if not quiet:
+                print(f"   ⇡ synced {which} to the live site "
+                      f"({len(local.get('posts', []))} posts, v{self.expect[which]})")
+        return written
+
+
+def cmd_serve(args):
+    env = require_env()
+    remote = remote_base(env)
+    if not server_up(remote, env):
+        print('⚠️  The live site did not answer; serving without the initial sync.')
+        remote = None
+
+    already = server_up(LOCAL_BASE, env)
+    dev = curate = None
+    if already:
+        print(f'▶ Reusing the dev server already on {LOCAL_BASE}')
+    else:
+        print(f'▶ Starting the dev server on port {args.port}...')
+        dev = start_dev_server(env, args.port)
+        if not wait_for_server(LOCAL_BASE, env):
+            dev.terminate()
+            sys.exit('❌ The dev server did not come up. Run ./serve.sh to see why.')
+
+    mirror = RemoteMirror(env, remote) if remote else None
+    if mirror:
+        mirror.seed_local()
+
+    if not args.no_curate:
+        curate = start_curate_server(args.curate_port)
+        if curate:
+            print(f'▶ Curation server on port {args.curate_port} '
+                  '(the prompt box appears once it finishes loading)')
+
+    # Ctrl-C is not the only way this ends: closing the terminal (SIGHUP) or a
+    # plain `kill` (SIGTERM) would otherwise skip the final sync AND leave the
+    # child servers running, since they sit in their own sessions. Route both
+    # through the same shutdown path.
+    def _stop(signum, _frame):
+        raise KeyboardInterrupt
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, _stop)
+        except (ValueError, OSError, AttributeError):
+            pass
+
+    ip = local_ip()
+    print(f'\n🌐 {LOCAL_BASE}/posts' + (f'   📱 http://{ip}:{args.port}/posts' if ip else ''))
+    print('   Phone photos work here (web/phone/ is local-only and never deployed).')
+    print('   Edits sync to the live site automatically; Ctrl-C to stop.\n')
+
+    try:
+        while True:
+            time.sleep(args.interval)
+            if mirror:
+                mirror.push()
+            if dev and dev.poll() is not None:
+                print('⚠️  The dev server exited.')
+                break
+    except KeyboardInterrupt:
+        print('\n⇡ Final sync to the live site...')
+    except Exception as e:                              # noqa: BLE001
+        print(f'\n⚠️  Stopping after an unexpected error: {e}')
+    finally:
+        if mirror:
+            try:
+                if mirror.push(quiet=False) == 0:
+                    print('   ↳ already up to date')
+            except Exception as e:                      # noqa: BLE001
+                print(f'   ⚠️  Final sync failed: {e}\n'
+                      '      Your edits are safe locally; run ./post.py push to retry.')
+        for proc, name in ((curate, 'curation server'), (dev, 'dev server')):
+            if proc and proc.poll() is None:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                print(f'   ↳ stopped the {name}')
+        print('Done.')
+
+
+def cmd_sync(args):
+    env = require_env()
+    remote = remote_base(env)
+    if not server_up(LOCAL_BASE, env):
+        sys.exit(f'❌ No dev server on {LOCAL_BASE}. Start one with ./post.py serve.')
+    print('⇣ Live site → local dev server')
+    if copy_state(remote, LOCAL_BASE, env, 'copied down') == 0:
+        print('   ↳ already identical')
+
+
+def cmd_push(args):
+    env = require_env()
+    remote = remote_base(env)
+    if not server_up(LOCAL_BASE, env):
+        sys.exit(f'❌ No dev server on {LOCAL_BASE}. Start one with ./post.py serve.')
+    for which in SETS:
+        local = read_doc(LOCAL_BASE, env, which)
+        rem = read_doc(remote, env, which)
+        if same_posts(local.get('posts', []), rem.get('posts', [])):
+            continue
+        if not args.force:
+            print(f"   {which}: local {len(local.get('posts', []))} posts → "
+                  f"live {len(rem.get('posts', []))} posts")
+        write_doc(remote, env, which, local.get('posts', []), rem.get('version', 0))
+        print(f"   ⇡ pushed {which} to the live site")
+    print('Done.')
+
+
+def cmd_status(args):
+    env = require_env()
+    remote = remote_base(env)
+    rows = []
+    for label, base in (('live site', remote), ('local dev', LOCAL_BASE)):
+        if not server_up(base, env):
+            rows.append((label, base, None, None))
+            continue
+        for which in SETS:
+            d = read_doc(base, env, which)
+            rows.append((label, which, d.get('version'), len(d.get('posts', []))))
+    for label, which, ver, n in rows:
+        if ver is None:
+            print(f'{label:<10} {which}  not reachable')
+        else:
+            print(f'{label:<10} {which:<5} v{ver:<4} {n} posts')
+    if server_up(LOCAL_BASE, env) and server_up(remote, env):
+        diff = [w for w in SETS
+                if not same_posts(read_doc(LOCAL_BASE, env, w).get('posts', []),
+                                  read_doc(remote, env, w).get('posts', []))]
+        print('\n' + ('in sync' if not diff else
+                      f"out of sync: {', '.join(diff)} — ./post.py push or ./post.py sync"))
+
+
+def require_env():
+    env = load_env()
+    if not env.get('CF_POSTS_PASSWORD'):
+        sys.exit('❌ CF_POSTS_PASSWORD not set (environment or .env.deploy).')
+    return env
+
+
+def main():
+    # `serve` is long-running: keep progress visible instead of buffering it
+    # until exit (matters when the output is piped or run under a wrapper).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+    ap = argparse.ArgumentParser(
+        description='Post drafts: serve locally, pull to the drive, keep both sides in sync.')
+    sub = ap.add_subparsers(dest='cmd', required=True)
+
+    s = sub.add_parser('serve', help='local site + phone photos, synced with the live site')
+    s.add_argument('--port', type=int, default=DEV_PORT)
+    s.add_argument('--curate-port', type=int, default=CURATE_PORT)
+    s.add_argument('--no-curate', action='store_true', help='skip the curation server')
+    s.add_argument('--interval', type=int, default=10,
+                   help='seconds between sync checks (default 10)')
+    s.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser('pull', help='pull drafts from the live site and copy their files')
+    p.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
+                   help='Destination root (default: /Volumes/RYAN/Edits/Posts)')
+    p.add_argument('--post', help='Only this post name')
+    p.add_argument('--url', help='Posts API URL')
+    p.add_argument('--local', action='store_true',
+                   help='Pull from the local dev server instead of the live site')
+    p.add_argument('--dry-run', action='store_true', help='Print the copy plan only')
+    p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
+    p.set_defaults(func=cmd_pull)
+
+    y = sub.add_parser('sync', help='copy the live state down to the local dev server')
+    y.set_defaults(func=cmd_sync)
+
+    u = sub.add_parser('push', help='copy the local dev state up to the live site')
+    u.add_argument('--force', action='store_true', help='overwrite the live state')
+    u.set_defaults(func=cmd_push)
+
+    t = sub.add_parser('status', help='show both sides')
+    t.set_defaults(func=cmd_status)
+
+    args = ap.parse_args()
+    args.func(args)
 
 
 if __name__ == '__main__':

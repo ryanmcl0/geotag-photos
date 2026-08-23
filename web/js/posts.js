@@ -410,7 +410,10 @@ window.Posts = (function () {
             };
 
             const current = targetPost();
-            doc.posts.forEach(p => {
+            const ordered = doc.posts.map((p, i) => [p, i])
+                .sort((a, b) => (!!a[0].posted - !!b[0].posted) || (a[1] - b[1]))
+                .map(([p]) => p);
+            ordered.forEach(p => {
                 const row = document.createElement('button');
                 row.type = 'button';
                 row.className = 'posts-picker-row';
@@ -672,7 +675,12 @@ window.Posts = (function () {
             return;
         }
 
-        const list = doc.posts.filter(p => platformOf(p) === activeTab);
+        // Unposted first (what still needs work), posted ones collapsed below;
+        // the stored order is untouched, this is display order only.
+        const list = doc.posts.filter(p => platformOf(p) === activeTab)
+            .map((p, i) => [p, i])
+            .sort((a, b) => (!!a[0].posted - !!b[0].posted) || (a[1] - b[1]))
+            .map(([p]) => p);
         if (!list.length) {
             const empty = document.createElement('p');
             empty.className = 'posts-empty';

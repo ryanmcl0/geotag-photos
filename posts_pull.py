@@ -170,6 +170,27 @@ def _face_boxes(img):
     return out
 
 
+def _face_boxes_tiled(img, tile=1536, overlap=256):
+    """Native-resolution tiled sweep for tiny faces (distant figures in wide
+    shots). Only used when the whole-frame pass finds nothing."""
+    H, W = img.shape[:2]
+    boxes = []
+    step = tile - overlap
+    for y0 in range(0, max(1, H - overlap), step):
+        for x0 in range(0, max(1, W - overlap), step):
+            roi = img[y0:min(H, y0 + tile), x0:min(W, x0 + tile)]
+            if roi.shape[0] < 64 or roi.shape[1] < 64:
+                continue
+            for (x, y, w, h) in _face_boxes(roi):
+                boxes.append((x + x0, y + y0, w, h))
+    # de-dup overlapping tile hits
+    out = []
+    for b in boxes:
+        if not any(abs(b[0] - o[0]) < 20 and abs(b[1] - o[1]) < 20 for o in out):
+            out.append(b)
+    return out
+
+
 def blur_faces_file(src, dst):
     """Write a copy of src to dst with every detected face pixelated.
     Returns the face count (0 = wrote a plain copy; caller may warn)."""
@@ -181,6 +202,8 @@ def blur_faces_file(src, dst):
         shutil.copy2(src, dst)
         return -1
     boxes = _face_boxes(img)
+    if not boxes:
+        boxes = _face_boxes_tiled(img)
     H, W = img.shape[:2]
     for (x, y, w, h) in boxes:
         pad = int(0.35 * max(w, h))

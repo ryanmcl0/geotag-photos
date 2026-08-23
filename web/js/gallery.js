@@ -18,6 +18,48 @@ window.Gallery = (function () {
     /^172\.(1[6-9]|2\d|3[01])\./.test(HOST);
   const PHOTO_BASE = (window.CHINA_PHOTO_BASE || (LOCAL ? '/trips' : '/photos'));
 
+  // Drone vs camera, from the filename convention (DJI_* = drone).
+  function photoKind(ref) {
+    return /^dji/i.test(ref.id || '') ? 'drone' : 'camera';
+  }
+
+  /**
+   * Camera/Drone filter chips for any photo list where both kinds appear.
+   * Returns null when the list is single-kind (no bar needed). onPick gets
+   * 'all' | 'camera' | 'drone'.
+   */
+  function buildKindBar(photos, onPick) {
+    const counts = { camera: 0, drone: 0 };
+    photos.forEach(p => counts[photoKind(p)]++);
+    if (!counts.camera || !counts.drone) return null;
+    const bar = document.createElement('div');
+    bar.className = 'kindbar';
+    bar.style.cssText = 'display:flex;gap:8px;margin:10px 0;flex-wrap:wrap';
+    const defs = [['all', `All (${photos.length})`],
+                  ['camera', `📷 Camera (${counts.camera})`],
+                  ['drone', `🚁 Drone (${counts.drone})`]];
+    const style = on => 'border-radius:999px;padding:5px 14px;cursor:pointer;font-size:13px;' +
+      'font-family:inherit;' + (on
+        ? 'background:#fff;color:#111;border:1px solid #fff'
+        : 'background:none;color:#ddd;border:1px solid #555');
+    let current = 'all';
+    defs.forEach(([val, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.dataset.kind = val;
+      b.style.cssText = style(val === current);
+      b.addEventListener('click', () => {
+        current = val;
+        bar.querySelectorAll('button').forEach(x =>
+          x.style.cssText = style(x.dataset.kind === current));
+        onPick(val);
+      });
+      bar.appendChild(b);
+    });
+    return bar;
+  }
+
   function photoUrl(ref, kind /* 'thumbnails' | 'display' */) {
     // "phone-" trips live in the local-only phone library (web/phone/, never
     // deployed); route them there on any host so mixed posts render locally.
@@ -224,5 +266,5 @@ window.Gallery = (function () {
     if (window.Posts) Posts.attachLightbox(gallery, pswpEl);
   }
 
-  return { photoUrl, renderGrid, openLightbox, lockedCover };
+  return { photoUrl, renderGrid, openLightbox, lockedCover, photoKind, buildKindBar };
 })();

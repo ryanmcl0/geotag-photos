@@ -245,6 +245,12 @@
         await ensureAspectRatios(photos);
         grid.innerHTML = '';
         if (highlights.length) renderHighlights(grid, highlights);
+        const kindBar = Gallery.buildKindBar(photos, k => {
+            renderByDate(flow, k === 'all' ? photos
+                : photos.filter(p => Gallery.photoKind(p) === k),
+                { emptyText: 'No photos of this kind in this trip.' });
+        });
+        if (kindBar) grid.appendChild(kindBar);
         const flow = document.createElement('div');
         grid.appendChild(flow);
         renderByDate(flow, photos, { emptyText: 'No photos in this trip yet.' });

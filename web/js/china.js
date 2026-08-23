@@ -372,8 +372,15 @@
     app.innerHTML = '';
     app.appendChild(el('div', 'section-head',
       `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
-    const grid = el('div'); app.appendChild(grid);
-    Gallery.renderGrid(grid, tile.photos || []);
+    const grid = el('div');
+    let kind = 'all';
+    const photos = tile.photos || [];
+    const applyFilters = () => Gallery.renderGrid(grid, kind === 'all'
+      ? photos : photos.filter(p => Gallery.photoKind(p) === kind));
+    const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
+    if (kindBar) app.appendChild(kindBar);
+    app.appendChild(grid);
+    applyFilters();
   }
 
   // roofs: height-tier sections, one tile per building → its gallery
@@ -505,20 +512,23 @@
       .filter(Boolean).join(' · ');
     const photos = (s.photos || []).map(p => ({ ...p, title: caption }));
 
-    // Province galleries get a year filter over their own photos.
+    // Province galleries get a year filter; every gallery gets a camera/drone
+    // filter when both kinds are present. The two compose.
+    const grid = el('div');
+    let year = 'all', kind = 'all';
+    const applyFilters = () => Gallery.renderGrid(grid, photos.filter(p =>
+      (year === 'all' || p.year === year) &&
+      (kind === 'all' || Gallery.photoKind(p) === kind)));
     if (tile.id === 'provinces') {
       const years = [...new Set(photos.map(p => p.year).filter(Boolean))].sort((a, b) => b - a);
-      const grid = el('div');
       if (years.length > 1) {
-        app.appendChild(buildYearBar(years, y =>
-          Gallery.renderGrid(grid, y === 'all' ? photos : photos.filter(p => p.year === y))));
+        app.appendChild(buildYearBar(years, y => { year = y; applyFilters(); }));
       }
-      app.appendChild(grid);
-      Gallery.renderGrid(grid, photos);
-    } else {
-      const grid = el('div'); app.appendChild(grid);
-      Gallery.renderGrid(grid, photos);
     }
+    const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
+    if (kindBar) app.appendChild(kindBar);
+    app.appendChild(grid);
+    applyFilters();
   }
 
   function buildYearBar(years, onPick) {

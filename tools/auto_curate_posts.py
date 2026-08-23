@@ -293,6 +293,7 @@ def load_embeddings(pool):
         np.savez_compressed(EMB_CACHE, keys=np.array(keys),
                             embs=np.stack([cached[k] for k in keys]))
         print(f'  saved {len(keys)} embeddings -> {EMB_CACHE.name}')
+    globals()['_EMB_INDEX'] = cached      # near-duplicate checks read this
     return cached
 
 
@@ -409,6 +410,42 @@ def assign_sessions(pool):
 
 # ---------------------------------------------------------------- selection
 
+# Near-duplicate suppression. A carousel should not spend two slots on the
+# same frame. Calibrated on real pairs: identical frames score ~0.97-1.0
+# whatever the gap, while "same subject, seconds apart" (a bridge with and
+# without a person, two frames of one camel) sits ~0.92-0.96 and is always
+# within a few minutes. Genuinely different photos of the same subject taken
+# at different stops stay below that or are far apart in time, so they live.
+DUP_ALWAYS = 0.965     # visually the same image, drop regardless of time
+DUP_BURST = 0.92       # same moment: only a duplicate when shot close together
+DUP_BURST_MIN = 5      # minutes
+
+
+def _embs_for_dup():
+    return globals().get('_EMB_INDEX') or {}
+
+
+def is_near_dup(cand, chosen):
+    """Is cand a near-duplicate of anything already picked?"""
+    embs = _embs_for_dup()
+    e = embs.get(key_of(cand))
+    if e is None:
+        return False
+    ct = parse_ts(cand.get('ts') or '')
+    for p in chosen:
+        o = embs.get(key_of(p))
+        if o is None:
+            continue
+        sim = float(np.dot(e.astype(np.float32), o.astype(np.float32)))
+        if sim >= DUP_ALWAYS:
+            return True
+        if sim >= DUP_BURST and ct:
+            pt = parse_ts(p.get('ts') or '')
+            if pt and abs((ct - pt).total_seconds()) <= DUP_BURST_MIN * 60:
+                return True
+    return False
+
+
 def dominant_orientation(cands):
     """Carousels must not mix orientations: keep the majority side."""
     land = [p for p in cands if (p.get('ar') or 1.5) >= 1]
@@ -423,6 +460,8 @@ def pick(cands, n=CAROUSEL, per_session=PER_SESSION):
     out, used = [], {}
     for p in sorted(cands, key=lambda r: -r['score']):
         if per_session is not None and used.get(p['session'], 0) >= per_session:
+            continue
+        if is_near_dup(p, out):
             continue
         out.append(p)
         used[p['session']] = used.get(p['session'], 0) + 1
@@ -589,6 +628,11 @@ def build_story_posts(groups, pool):
                 if sess_all:
                     sel.append(max(sess_all, key=lambda r: r['score']))
             sel = dominant_orientation(sel)
+            deduped = []
+            for p in sorted(sel, key=lambda r: -r['score']):
+                if not is_near_dup(p, deduped):
+                    deduped.append(p)
+            sel = deduped
             if len(sel) < 6:      # stories are the point; lower bar than MIN_POST
                 continue
             sel = sorted(sel, key=lambda r: -r['score'])[:CAROUSEL]

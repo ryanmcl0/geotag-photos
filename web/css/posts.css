@@ -150,11 +150,14 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   background: #181818; border: 1px solid #262626; border-radius: 12px;
   padding: 14px 16px; margin-bottom: 18px;
 }
-.posts-card-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.posts-card-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .posts-name {
   background: none; border: 1px solid transparent; border-radius: 6px;
-  color: #fff; font-size: 17px; font-weight: 600; padding: 4px 8px; min-width: 0;
-  flex: 0 1 auto; width: 16ch;
+  color: #fff; font-size: 17px; font-weight: 600; padding: 4px 8px; min-width: 12ch;
+  flex: 1 1 auto;
+}
+@media (max-width: 640px) {
+  .posts-name { flex-basis: 100%; }
 }
 .posts-name:hover { border-color: #333; }
 .posts-name:focus { outline: none; border-color: #666; background: #202020; }
@@ -218,3 +221,11 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   font-size: 12px; font-weight: 600; padding: 6px 12px; cursor: pointer; white-space: nowrap;
 }
 .posts-copy-btn:hover { filter: brightness(1.15); }
+
+/* ---------- free-text curation bar (local curate server only) ---------- */
+.posts-curate-bar { display: flex; gap: 8px; margin: 0 0 16px; }
+.posts-curate-input {
+  flex: 1 1 auto; min-width: 0; background: #181818; border: 1px solid #333;
+  border-radius: 8px; color: #fff; font-size: 14px; padding: 9px 12px;
+}
+.posts-curate-input:focus { outline: none; border-color: #666; }

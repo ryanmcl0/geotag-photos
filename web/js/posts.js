@@ -615,11 +615,78 @@ window.Posts = (function () {
     }
 
     const THEME_LABELS = {
-        story: 'Behind the scenes', province: 'By province', place: 'Places',
-        industrial: 'Industry', nature: 'Nature', wildlife: 'Wildlife'
+        custom: 'Custom curated', story: 'Behind the scenes', province: 'By province',
+        place: 'Places', industrial: 'Industry', nature: 'Nature', wildlife: 'Wildlife'
     };
 
+    // Local-only curation server (tools/curate_server.py): free-text queries
+    // become curated posts. Probed once; the box only appears when it runs.
+    let curateBaseP = null;
+    function curateBase() {
+        if (!curateBaseP) {
+            const base = `http://${location.hostname}:8799`;
+            let signal;
+            try { signal = AbortSignal.timeout(1500); } catch (e) { signal = undefined; }
+            curateBaseP = fetch(base + '/health', { signal })
+                .then(r => (r.ok ? base : null))
+                .catch(() => null);
+        }
+        return curateBaseP;
+    }
+
+    function renderCurateBar(root, container) {
+        curateBase().then(base => {
+            if (!base) return;
+            const bar = document.createElement('div');
+            bar.className = 'posts-curate-bar';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'posts-curate-input';
+            input.placeholder = 'Curate by prompt, e.g. "truck stops in china" or "central asia landscapes"';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'posts-copy-btn';
+            btn.textContent = 'Curate';
+            async function run() {
+                const q = input.value.trim();
+                if (!q) return;
+                btn.disabled = true;
+                btn.textContent = 'Curating...';
+                try {
+                    const r = await fetch(base + '/curate?q=' + encodeURIComponent(q));
+                    const data = await r.json();
+                    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+                    if (!data.posts.length) {
+                        toast(`No good matches for "${q}"`);
+                        return;
+                    }
+                    await mutateSet('auto', posts => {
+                        const ids = new Set(data.posts.map(p => p.id));
+                        for (let i = posts.length - 1; i >= 0; i--) {
+                            if (ids.has(posts[i].id)) posts.splice(i, 1);
+                        }
+                        posts.unshift(...data.posts);
+                    });
+                    toast(`Curated ${data.posts.length} post${data.posts.length > 1 ? 's' : ''} for "${q}"`);
+                    renderManager(root);
+                } catch (e) {
+                    toast('Curate failed: ' + e.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Curate';
+                }
+            }
+            input.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+            btn.addEventListener('click', run);
+            bar.append(input, btn);
+            container.appendChild(bar);
+        });
+    }
+
     function renderAutoList(root) {
+        const curateSlot = document.createElement('div');
+        root.appendChild(curateSlot);
+        renderCurateBar(root, curateSlot);
         if (!autoDoc) {
             const p = document.createElement('p');
             p.className = 'posts-empty';

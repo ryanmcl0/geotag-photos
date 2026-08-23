@@ -138,6 +138,58 @@ CATEGORIES = {
 AES_POS = 'an award-winning stunning professional photograph, dramatic light, perfect composition'
 AES_NEG = 'a blurry dark poorly composed boring snapshot'
 
+# ------------------------------------------------- free-text query geography
+# Region / country / province words recognised inside a curation query
+# ("highways in china mongolia and kyrgyzstan") become HARD geo filters;
+# the full query text is still what CLIP ranks against.
+
+REGION_ALIASES = {
+    'central asia': {'KG', 'KZ', 'UZ', 'TJ', 'TM'},
+    'southeast asia': {'TH', 'MY', 'VN', 'PH', 'ID', 'KH', 'LA', 'MM', 'SG'},
+    'middle east': {'AE', 'IL', 'JO', 'OM', 'QA', 'SA', 'EG'},
+    'balkans': {'HR', 'BA', 'RS', 'ME', 'AL', 'MK', 'SI'},
+}
+COUNTRY_ALIASES = {
+    'china': 'CN', 'mongolia': 'MN', 'kyrgyzstan': 'KG', 'kazakhstan': 'KZ',
+    'uzbekistan': 'UZ', 'tajikistan': 'TJ', 'croatia': 'HR', 'bosnia': 'BA',
+    'slovenia': 'SI', 'italy': 'IT', 'sicily': 'IT', 'france': 'FR',
+    'germany': 'DE', 'austria': 'AT', 'switzerland': 'CH', 'netherlands': 'NL',
+    'belgium': 'BE', 'luxembourg': 'LU', 'uk': 'GB', 'scotland': 'GB',
+    'england': 'GB', 'wales': 'GB', 'ireland': 'IE', 'romania': 'RO',
+    'norway': 'NO', 'cyprus': 'CY', 'egypt': 'EG', 'mauritania': 'MR',
+    'morocco': 'MA', 'dubai': 'AE', 'uae': 'AE', 'emirates': 'AE',
+    'thailand': 'TH', 'malaysia': 'MY', 'korea': 'KR', 'south korea': 'KR',
+    'vietnam': 'VN', 'philippines': 'PH', 'indonesia': 'ID', 'india': 'IN',
+    'japan': 'JP', 'taiwan': 'TW', 'israel': 'IL', 'turkey': 'TR',
+    'greece': 'GR', 'spain': 'ES', 'portugal': 'PT', 'poland': 'PL',
+    'hungary': 'HU', 'usa': 'US', 'america': 'US', 'united states': 'US',
+    'canada': 'CA', 'mexico': 'MX', 'kosovo': 'XK', 'albania': 'AL',
+    'serbia': 'RS', 'montenegro': 'ME', 'georgia': 'GE', 'armenia': 'AM',
+}
+
+
+def parse_geo(query):
+    """(countries, provinces) mentioned in the query. Longest phrases match
+    first and are consumed, so 'inner mongolia' does not also match
+    'mongolia'."""
+    from build_collections import PROVINCE_ZH_EN
+    text = ' ' + re.sub(r'[^a-z ]+', ' ', query.lower()) + ' '
+    countries, provinces = set(), set()
+    phrases = ([(k, ('region', v)) for k, v in REGION_ALIASES.items()]
+               + [(p.lower(), ('province', p)) for p in PROVINCE_ZH_EN.values()]
+               + [(k, ('country', v)) for k, v in COUNTRY_ALIASES.items()])
+    for phrase, (kind, val) in sorted(phrases, key=lambda kv: -len(kv[0])):
+        pat = ' ' + phrase + ' '
+        if pat in text:
+            text = text.replace(pat, ' ')
+            if kind == 'region':
+                countries |= val
+            elif kind == 'country':
+                countries.add(val)
+            else:
+                provinces.add(val)
+    return countries, provinces
+
 THEME_CATS = {
     'industrial': {'industrial'},
     'nature': {'nature'},
@@ -158,6 +210,7 @@ def load_pool():
     idx = json.loads((WEB_TRIPS / 'index.json').read_text())
     public_trip = {t['id']: t.get('public', False) for t in idx.get('trips', [])}
     trip_name = {t['id']: t.get('name') or t['id'] for t in idx.get('trips', [])}
+    trip_countries = {t['id']: t.get('countries') or [] for t in idx.get('trips', [])}
 
     pool = []
     for mf in sorted(WEB_TRIPS.glob('*/manifest.json')):
@@ -165,14 +218,18 @@ def load_pool():
         m = photo_privacy.load_full_manifest(mf.parent)
         if not m:
             continue
-        # cluster reverse-geo names: photo id -> location string
-        loc_of = {}
+        # cluster reverse-geo names: photo id -> location string / country code
+        loc_of, country_of = {}, {}
         for c in m.get('clusters') or []:
             loc = (c.get('location') or '').strip()
-            if not loc:
-                continue
+            ctry = (c.get('country') or '').strip()
             for pid in c.get('photo_ids') or []:
-                loc_of[pid] = loc
+                if loc:
+                    loc_of[pid] = loc
+                if ctry:
+                    country_of[pid] = ctry
+        tc = trip_countries.get(slug, [])
+        fallback_country = tc[0] if len(tc) == 1 else None
         for ph in m.get('photos', []):
             ts = ph.get('timestamp') or ''
             if not ts or int(ts[:4]) < MIN_YEAR:
@@ -184,6 +241,7 @@ def load_pool():
                 'lat': ph.get('lat'), 'lon': ph.get('lon'),
                 'ts': ts, 'ar': ph.get('ar'),
                 'loc': loc_of.get(ph['id'], ''),
+                'country': country_of.get(ph['id'], fallback_country),
                 'public': is_pub,
                 'trip_name': trip_name.get(slug, slug),
             })
@@ -238,12 +296,19 @@ def load_embeddings(pool):
     return cached
 
 
+_text_model = None
+
+
 def text_embed(prompts):
+    global _text_model
     import torch
-    from transformers import CLIPModel, CLIPProcessor
-    dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
-    model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32').to(dev).eval()
-    proc = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
+    if _text_model is None:
+        from transformers import CLIPModel, CLIPProcessor
+        dev = 'mps' if torch.backends.mps.is_available() else 'cpu'
+        model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32').to(dev).eval()
+        proc = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
+        _text_model = (model, proc, dev)
+    model, proc, dev = _text_model
     with torch.no_grad():
         ti = proc(text=prompts, return_tensors='pt', padding=True).to(dev)
         tf = model.get_text_features(**ti)
@@ -543,6 +608,89 @@ def build_story_posts(groups, pool):
             groups.append(post)
 
 
+# ---------------------------------------------------------------- free-text query
+
+_prov_index_singleton = None
+
+
+def _prov_index():
+    global _prov_index_singleton
+    if _prov_index_singleton is None:
+        _prov_index_singleton = ProvinceIndex(PROVINCES_GEOJSON)
+    return _prov_index_singleton
+
+
+def prep_query_pool(pool, embs):
+    """Light prep for query mode (no taxonomy pass): aesthetic score for
+    tie-breaking + visit sessions for pick() diversity."""
+    T = text_embed([AES_POS, AES_NEG])
+    favs = load_favourites()
+    kept = [p for p in pool if key_of(p) in embs]
+    M = np.stack([embs[key_of(p)] for p in kept]).astype(np.float32)
+    A = M @ T.T
+    for p, row in zip(kept, A):
+        p['aes'] = float(row[0] - row[1])
+        p['score'] = p['aes'] + (0.06 if (p['trip'], p['id']) in favs else 0.0)
+    assign_sessions(kept)
+    return kept
+
+
+def build_query_posts(pool, embs, query, n=CAROUSEL):
+    """Curate post(s) for a free-text query like 'truck stops in china'.
+    Recognised place names become hard geo filters; CLIP similarity to the
+    full query ranks the rest. Returns ([posts], meta) - up to one public and
+    one private post (never mixed)."""
+    countries, provinces = parse_geo(query)
+    cands = []
+    for p in pool:
+        if countries or provinces:
+            ok = bool(countries) and p.get('country') in countries
+            if not ok and provinces and p['lat'] is not None:
+                if 'province' not in p:
+                    p['province'] = _prov_index().lookup(p['lat'], p['lon'])
+                ok = p.get('province') in provinces
+            if not ok:
+                continue
+        cands.append(p)
+    meta = {'countries': sorted(countries), 'provinces': sorted(provinces),
+            'geo_pool': len(cands), 'matches': 0}
+    if not cands:
+        return [], meta
+    T = text_embed([query])[0]
+    M = np.stack([embs[key_of(p)] for p in cands]).astype(np.float32)
+    sims = M @ T
+    best = float(sims.max())
+    floor = max(0.18, best - 0.10)
+    scored = []
+    for p, s in zip(cands, sims):
+        if s < floor:
+            continue
+        q = dict(p)          # copy: don't clobber the shared pool's 'score'
+        q['score'] = float(s) + 0.05 * p.get('aes', 0.0)
+        scored.append(q)
+    meta['matches'] = len(scored)
+    meta['best_sim'] = round(best, 3)
+    label = query.strip()
+    label = (label[0].upper() + label[1:]) if label else 'Custom'
+    posts = []
+    for pub, suffix in ((True, ''), (False, ' (private)')):
+        subset = [p for p in scored if p['public'] == pub]
+        if len(subset) < 4:
+            continue
+        photos = pick(subset, n=n)
+        posts.append({
+            'id': post_id('query', query.lower(), 'pub' if pub else 'priv'),
+            'name': label + suffix,
+            'theme': 'custom',
+            'note': f'query "{query}": {len(subset)} matches'
+                    + (f", geo {'/'.join(sorted(countries) + sorted(provinces))}"
+                       if countries or provinces else '')
+                    + f", {'public' if pub else 'private'} pool",
+            'photos': [ref(p) for p in photos],
+        })
+    return posts, meta
+
+
 # ---------------------------------------------------------------- push
 
 def load_env():
@@ -558,7 +706,7 @@ def load_env():
     return env
 
 
-def push(doc_posts, target):
+def push(doc_posts, target, mode='replace'):
     env = load_env()
     pw = env.get('CF_POSTS_PASSWORD')
     if not pw:
@@ -596,6 +744,10 @@ def push(doc_posts, target):
         sys.exit(f'✗ {base} does not support ?set=auto yet (old API deployed) - '
                  'pushing would overwrite your manual drafts. Deploy the new '
                  'functions/api/posts.ts first (python3 deploy.py --skip-images).')
+    if mode == 'append':
+        new_ids = {g['id'] for g in doc_posts}
+        keep = [p for p in current.get('posts', []) if p.get('id') not in new_ids]
+        doc_posts = (doc_posts + keep)[:200]
     body = json.dumps({'baseVersion': current.get('version', 0), 'posts': doc_posts})
     res = call('PUT', body)
     print(f'Pushed {len(doc_posts)} auto posts -> {url} (version {res.get("version")})')
@@ -608,6 +760,9 @@ def main():
     ap.add_argument('--list', action='store_true', help='print the plan, save nothing')
     ap.add_argument('--push', metavar='TARGET',
                     help="upload to the site: 'local' (wrangler dev), 'prod', or a base URL")
+    ap.add_argument('--query', metavar='TEXT',
+                    help="curate ONE post from a free-text prompt (e.g. 'truck "
+                         "stops in china') and append it to the auto set")
     ap.add_argument('--themes', help='comma list to keep (story,province,place,industrial,nature,wildlife)')
     ap.add_argument('--max-posts', type=int, default=120)
     ap.add_argument('--max-places', type=int, default=30,
@@ -616,6 +771,21 @@ def main():
 
     pool = load_pool()
     embs = load_embeddings(pool)
+
+    if args.query:
+        kept = prep_query_pool(pool, embs)
+        posts, meta = build_query_posts(kept, embs, args.query)
+        print(f"Query '{args.query}': {meta['matches']} matches "
+              f"(geo pool {meta['geo_pool']}, "
+              f"countries {meta['countries'] or '-'}, provinces {meta['provinces'] or '-'})")
+        for g in posts:
+            print(f"  {g['name']:<50} {len(g['photos'])} photos")
+        if not posts:
+            sys.exit('No post emitted (too few matches).')
+        if args.push:
+            push(posts, args.push, mode='append')
+        return
+
     pool = classify(pool, embs)
     assign_sessions(pool)
 

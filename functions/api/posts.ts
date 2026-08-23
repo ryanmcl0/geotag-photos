@@ -9,6 +9,10 @@
  */
 
 const STATE_KEY = '_state/posts.json';
+// ?set=auto addresses a second, independent document holding machine-generated
+// suggestions (tools/auto_curate_posts.py); the generator replaces it wholesale
+// while manual drafts in the main document are never touched.
+const AUTO_STATE_KEY = '_state/auto_posts.json';
 const MAX_BODY_BYTES = 512 * 1024;
 const MAX_PHOTOS_PER_POST = 20;   // Instagram carousel limit
 
@@ -54,8 +58,11 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         return new Response('Not found', { status: 404 });
     }
 
+    const stateKey = new URL(context.request.url).searchParams.get('set') === 'auto'
+        ? AUTO_STATE_KEY : STATE_KEY;
+
     const readDoc = async (): Promise<PostsDoc> => {
-        const obj = await context.env.PHOTOS_BUCKET.get(STATE_KEY);
+        const obj = await context.env.PHOTOS_BUCKET.get(stateKey);
         if (!obj) return { version: 0, updated: null, posts: [] };
         try {
             return await obj.json() as PostsDoc;
@@ -94,7 +101,7 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
             updated: new Date().toISOString(),
             posts: body.posts
         };
-        await context.env.PHOTOS_BUCKET.put(STATE_KEY, JSON.stringify(next), {
+        await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });
         return json({ version: next.version });

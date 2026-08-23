@@ -198,3 +198,23 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   .posts-thumb { width: calc((100% - 16px) / 3); height: auto; aspect-ratio: 1; }
   .posts-head h1 { font-size: 28px; }
 }
+
+/* ---------- manager tabs (My posts / Auto curated) ---------- */
+.posts-tabs { display: flex; gap: 8px; margin: 0 0 18px; }
+.posts-tab {
+  background: #1d1d1d; border: 1px solid #3a3a3a; border-radius: 999px;
+  color: #aaa; font-size: 13px; font-weight: 600; padding: 7px 16px; cursor: pointer;
+}
+.posts-tab:hover { color: #fff; }
+.posts-tab.active { background: #2c3a55; border-color: #4667a8; color: #fff; }
+
+.posts-theme-head {
+  font-size: 15px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: #9ab; margin: 26px 0 10px; border-bottom: 1px solid #2a2a2a; padding-bottom: 6px;
+}
+.posts-note { font-size: 12px; color: #888; margin: 6px 2px 2px; }
+.posts-copy-btn {
+  background: #1d4ed8; border: none; border-radius: 6px; color: #fff;
+  font-size: 12px; font-weight: 600; padding: 6px 12px; cursor: pointer; white-space: nowrap;
+}
+.posts-copy-btn:hover { filter: brightness(1.15); }

@@ -5,6 +5,13 @@ return {
     LrSdkVersion = 6.0,
     LrToolkitIdentifier = 'com.ryanmcl.importlist',
     LrPluginName = 'Import from List File',
+    -- both menus so it's findable from File > Plug-in Extras too
+    LrExportMenuItems = {
+        {
+            title = 'Import photos from list file…',
+            file = 'ImportList.lua',
+        },
+    },
     LrLibraryMenuItems = {
         {
             title = 'Import photos from list file…',

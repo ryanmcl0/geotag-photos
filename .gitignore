@@ -9,6 +9,9 @@ locations.json.bak
 # Compressed images — hosted on R2, never in git
 hosted-photos/
 
+# Map tiles cached by tools/map_card.py while rendering post map cards
+.tilecache/
+
 # Pulled Instagram post drafts (full-size photos, posts_pull.py output)
 /Posts/
 

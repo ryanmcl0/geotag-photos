@@ -4,6 +4,8 @@ Everything for working with post drafts. Always takes a subcommand:
 
   ./post.py serve     local site + phone photos, kept in sync with the remote
   ./post.py pull      pull the drafts from the remote and copy their files
+                      (plus a location card in <post>/maps/ for every photo
+                      marked with the map button — see tools/map_card.py)
   ./post.py sync      copy the remote state down to the local dev server
   ./post.py push      copy the local dev state up to the remote
   ./post.py status    show both sides' versions and post counts
@@ -370,6 +372,103 @@ def sync_post_dir(dest_dir, plan):
     return copied, renamed
 
 
+# ---------------------------------------------------------------- map cards
+
+MAP_LONG_EDGE = 1350
+# Shapes each platform allows, as width/height: Instagram caps portrait at 4:5,
+# Xiaohongshu at 3:4.
+PLATFORM_SHAPE = {'ig': (0.8, 1.91), 'xhs': (0.75, 4 / 3)}
+
+
+def post_card_size(post, plan):
+    """The one shape every map card in this post is rendered at.
+
+    A carousel locks every slide to the shape of the first, so the cards follow
+    the post's first photo, clamped to what the platform allows. A 9:16 frame
+    therefore becomes a 4:5 card on Instagram, never a 9:16 one.
+    """
+    ar = 1.5
+    for _, ref, _, _ in plan:
+        photos, _ = trip_manifest_photos(ref['trip'])
+        cand = (photos.get(ref['id']) or {}).get('ar')
+        if cand:
+            ar = float(cand)
+            break
+    lo, hi = PLATFORM_SHAPE['xhs' if post.get('platform') == 'xhs' else 'ig']
+    r = min(hi, max(lo, ar))
+    if r >= 1:
+        return MAP_LONG_EDGE, round(MAP_LONG_EDGE / r)
+    return round(MAP_LONG_EDGE * r), MAP_LONG_EDGE
+
+
+def sync_map_dir(dest_dir, plan, size):
+    """Render a location card for every photo carrying a map mark.
+
+    Cards go in <post>/maps/, named after the photo they belong to so the pair
+    is obvious in Lightroom. Which card was rendered is remembered next to the
+    blur state, so an unchanged one is neither re-rendered nor re-downloaded and
+    a reorder on the site is just a rename. Returns (rendered, renamed, failed).
+    """
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import map_card
+
+    maps_dir = dest_dir / 'maps'
+    jobs = [(i, ref, src, ref.get('map')) for i, ref, src, _ in plan if ref.get('map')]
+    ours = re.compile(r'^\d{2,3}_.+_map\.jpg$')
+    if not jobs:
+        if maps_dir.exists():
+            for f in sorted(maps_dir.iterdir()):
+                if f.is_file() and ours.match(f.name):
+                    f.unlink()
+        return 0, 0, 0
+
+    maps_dir.mkdir(parents=True, exist_ok=True)
+    state_path = dest_dir / '.pull_state.json'
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    cards = state.setdefault('maps', {})
+
+    rendered = renamed = failed = 0
+    keep = set()
+    for i, ref, src, style in jobs:
+        target = maps_dir / f'{i:02d}_{src.stem}_map.jpg'
+        keep.add(target.name)
+        if style not in map_card.STYLES:
+            print(f"   ⚠️  {src.name}: unknown map style {style!r}")
+            failed += 1
+            continue
+        was = cards.get(src.name) or {}
+        old = maps_dir / was['file'] if was.get('file') else None
+        if was.get('style') == style and was.get('size') == list(size) and old and old.exists():
+            if old != target:
+                old.replace(target)
+                cards[src.name] = {**was, 'file': target.name}
+                renamed += 1
+            continue
+        card, why = map_card.card_for_photo(style, ref['trip'], ref['id'], size)
+        if card is None:
+            print(f"   ⚠️  no {style} card for {src.name}: {why}")
+            failed += 1
+            continue
+        if old and old.exists() and old != target:
+            old.unlink()
+        card.save(target, quality=93)
+        cards[src.name] = {'file': target.name, 'style': style, 'size': list(size)}
+        rendered += 1
+        print(f"   🗺  {target.name}: {style}")
+    for name in [n for n in cards if n not in {s.name for _, _, s, _ in jobs}]:
+        del cards[name]
+    state_path.write_text(json.dumps(state, indent=1))
+
+    # Cards for photos that lost their mark, or left the post entirely.
+    for f in sorted(maps_dir.iterdir()):
+        if f.is_file() and ours.match(f.name) and f.name not in keep:
+            f.unlink()
+    return rendered, renamed, failed
+
+
 PHONE_MANIFESTS = Path('/Volumes/RYAN/phone_browse/manifests')
 _phone_cache = {}
 
@@ -487,8 +586,12 @@ def cmd_pull(args):
             plan.append((i, ref, src, dest_dir / f'{i:02d}_{src.name}'))
 
         if args.list or args.dry_run:
+            size = post_card_size(post, plan)
             for i, ref, src, dst in plan:
                 print(f"   {i:02d} {src}  →  {dst}")
+                if ref.get('map'):
+                    print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
+                          f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
             for i, ref in enumerate(post.get('phone') or [], 1):
                 src, why = resolve_phone(ref)
                 print(f"   Phone {i:02d} {src or why}  →  {dest_dir / 'Phone'}")
@@ -510,6 +613,28 @@ def cmd_pull(args):
             parts.append(f'{renamed} reordered')
         parts.append(f'{len(plan) - copied - renamed} already up to date')
         print(f"   ✓ {', '.join(parts)}")
+
+        # Location cards for the photos marked with the map button -> <post>/maps/
+        marked = [ref for _, ref, _, _ in plan if ref.get('map')]
+        try:
+            size = post_card_size(post, plan)
+            mrendered, mrenamed, mfailed = sync_map_dir(dest_dir, plan, size)
+            if marked:
+                mparts = [f'{mrendered} rendered']
+                if mrenamed:
+                    mparts.append(f'{mrenamed} reordered')
+                if mfailed:
+                    mparts.append(f'{mfailed} failed')
+                mparts.append(f'{len(marked) - mrendered - mrenamed - mfailed} already up to date')
+                print(f"   ✓ maps/ ({size[0]}x{size[1]}): {', '.join(mparts)}")
+                manifest['maps'] = [
+                    {'order': i, 'style': ref['map'],
+                     'file': str(dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg')}
+                    for i, ref, src, _ in plan if ref.get('map')]
+                (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        except Exception as e:
+            if marked:
+                print(f"   ⚠️  map cards not rendered: {e}")
 
         # Behind-the-scenes phone selections -> <post>/Phone/ (originals,
         # photos and videos alike, resolved via the phone_browse manifests).

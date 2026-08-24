@@ -16,7 +16,9 @@
         document.querySelectorAll('.nav-more-menu').forEach(menu => {
             if (menu.querySelector('a[data-phone-lib]')) return;
             const a = document.createElement('a');
-            a.href = '/map.html?library=phone';
+            // Galleries is the browsing view (year tabs + trip tiles); the map
+            // is one click away from the pill once phone mode is on.
+            a.href = '/galleries.html?library=phone';
             a.textContent = 'Phone';
             a.dataset.phoneLib = '1';
             menu.appendChild(a);
@@ -30,8 +32,6 @@
     const FACE_PAGES = [
         { href: '/phone/people/index.html', label: 'People', key: 'people',
           marker: '<title>People</title>' },
-        { href: '/phone/friend-review.html', label: 'Photos of me', key: 'friendReview',
-          marker: '<title>Photos of me' },
     ];
 
     function injectPage(page) {
@@ -76,12 +76,22 @@
             'align-items:center;opacity:.92';
         const label = document.createElement('span');
         label.textContent = 'Phone library';
+
+        // Switch between the two phone-library views without leaving the mode.
+        const onMap = /\/map(\.html)?$/.test(location.pathname);
+        const swap = document.createElement('a');
+        swap.textContent = onMap ? 'Galleries' : 'Map';
+        swap.href = (onMap ? '/galleries.html' : '/map.html') + '?library=phone';
+        swap.title = onMap ? 'Browse phone trips by year' : 'See phone photos on the map';
+        swap.style.cssText = 'color:#fff;text-decoration:none;font-weight:600;' +
+            'border:1px solid rgba(255,255,255,.5);border-radius:99px;padding:2px 9px';
+
         const exit = document.createElement('a');
         exit.textContent = '✕';
         exit.href = '/map.html';
         exit.title = 'Back to camera library';
         exit.style.cssText = 'color:#fff;text-decoration:none;font-weight:700';
-        pill.append(label, exit);
+        pill.append(label, swap, exit);
         document.body.appendChild(pill);
     }
 

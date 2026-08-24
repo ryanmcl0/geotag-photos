@@ -1,11 +1,13 @@
 /**
- * Local-only "Phone" library tab.
+ * Local-only nav entries: the "Phone" library tab and the face-recognition
+ * pages.
  *
- * The phone mirror dataset (web/phone/, built by tools/build_phone_site.py
- * from the NAS phone_browse library) is git-ignored and excluded from deploy,
- * so it only exists on machines where it has been built. This script probes
- * for it and only then injects the nav entry, which keeps the committed code
- * inert everywhere else (prod probes 404 and nothing renders).
+ * Everything under web/phone/ (the phone mirror from tools/build_phone_site.py,
+ * the People cluster browser from local_browse/build_people_ui.py, the
+ * photos-of-me review from local_browse/build_friend_review.py) is git-ignored
+ * AND excluded from deploy, so it only exists on machines where it has been
+ * built. Each entry is probed before its nav link is injected, which keeps the
+ * committed code inert everywhere else (prod probes 404 and nothing renders).
  */
 (function () {
     const active = new URLSearchParams(location.search).get('library') === 'phone';
@@ -14,10 +16,51 @@
         document.querySelectorAll('.nav-more-menu').forEach(menu => {
             if (menu.querySelector('a[data-phone-lib]')) return;
             const a = document.createElement('a');
-            a.href = '/map.html?library=phone';
+            // Galleries is the browsing view (year tabs + trip tiles); the map
+            // is one click away from the pill once phone mode is on.
+            a.href = '/galleries.html?library=phone';
             a.textContent = 'Phone';
             a.dataset.phoneLib = '1';
             menu.appendChild(a);
+        });
+    }
+
+    // Face pages, built by the local_browse tooling rather than the phone
+    // mirror, so each may or may not exist. A missing page under /phone/ does
+    // NOT 404: the host serves the site index with 200, so presence has to be
+    // confirmed from the page's own <title>, not the status or content type.
+    const FACE_PAGES = [
+        { href: '/phone/people/index.html', label: 'People', key: 'people',
+          marker: '<title>People</title>' },
+    ];
+
+    function injectPage(page) {
+        document.querySelectorAll('.nav-more-menu').forEach(menu => {
+            if (menu.querySelector(`a[data-local-page="${page.key}"]`)) return;
+            const a = document.createElement('a');
+            a.href = page.href;
+            a.textContent = page.label;
+            a.dataset.localPage = page.key;
+            menu.appendChild(a);
+        });
+    }
+
+    function probeFacePages() {
+        FACE_PAGES.forEach(page => {
+            // Range-limited GET: enough bytes for the <title>, not the whole
+            // page (the People browser is ~90KB).
+            fetch(page.href, { headers: { Range: 'bytes=0-2047' } })
+                .then(r => (r.ok ? r.text() : ''))
+                .then(html => {
+                    if (!html.includes(page.marker)) return;
+                    const run = () => injectPage(page);
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', run);
+                    } else {
+                        run();
+                    }
+                })
+                .catch(() => {});
         });
     }
 
@@ -33,20 +76,34 @@
             'align-items:center;opacity:.92';
         const label = document.createElement('span');
         label.textContent = 'Phone library';
+
+        // Switch between the two phone-library views without leaving the mode.
+        const onMap = /\/map(\.html)?$/.test(location.pathname);
+        const swap = document.createElement('a');
+        swap.textContent = onMap ? 'Galleries' : 'Map';
+        swap.href = (onMap ? '/galleries.html' : '/map.html') + '?library=phone';
+        swap.title = onMap ? 'Browse phone trips by year' : 'See phone photos on the map';
+        swap.style.cssText = 'color:#fff;text-decoration:none;font-weight:600;' +
+            'border:1px solid rgba(255,255,255,.5);border-radius:99px;padding:2px 9px';
+
         const exit = document.createElement('a');
         exit.textContent = '✕';
         exit.href = '/map.html';
         exit.title = 'Back to camera library';
         exit.style.cssText = 'color:#fff;text-decoration:none;font-weight:700';
-        pill.append(label, exit);
+        pill.append(label, swap, exit);
         document.body.appendChild(pill);
     }
 
+    // One reliable probe for "this machine has a local build": the trips index
+    // is JSON, so the HTML fallback is filtered by content type. Only then are
+    // the face pages checked, which keeps production at zero extra requests.
     fetch('/phone/trips/index.json', { method: 'HEAD' }).then(r => {
         // content-type guard: a SPA-style HTML fallback must not count as present
         if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return;
         const run = () => { injectNav(); addPill(); };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
         else run();
+        probeFacePages();
     }).catch(() => {});
 })();

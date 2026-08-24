@@ -1,11 +1,13 @@
 /**
- * Local-only "Phone" library tab.
+ * Local-only nav entries: the "Phone" library tab and the face-recognition
+ * pages.
  *
- * The phone mirror dataset (web/phone/, built by tools/build_phone_site.py
- * from the NAS phone_browse library) is git-ignored and excluded from deploy,
- * so it only exists on machines where it has been built. This script probes
- * for it and only then injects the nav entry, which keeps the committed code
- * inert everywhere else (prod probes 404 and nothing renders).
+ * Everything under web/phone/ (the phone mirror from tools/build_phone_site.py,
+ * the People cluster browser from local_browse/build_people_ui.py, the
+ * photos-of-me review from local_browse/build_friend_review.py) is git-ignored
+ * AND excluded from deploy, so it only exists on machines where it has been
+ * built. Each entry is probed before its nav link is injected, which keeps the
+ * committed code inert everywhere else (prod probes 404 and nothing renders).
  */
 (function () {
     const active = new URLSearchParams(location.search).get('library') === 'phone';
@@ -18,6 +20,47 @@
             a.textContent = 'Phone';
             a.dataset.phoneLib = '1';
             menu.appendChild(a);
+        });
+    }
+
+    // Face pages, built by the local_browse tooling rather than the phone
+    // mirror, so each may or may not exist. A missing page under /phone/ does
+    // NOT 404: the host serves the site index with 200, so presence has to be
+    // confirmed from the page's own <title>, not the status or content type.
+    const FACE_PAGES = [
+        { href: '/phone/people/index.html', label: 'People', key: 'people',
+          marker: '<title>People</title>' },
+        { href: '/phone/friend-review.html', label: 'Photos of me', key: 'friendReview',
+          marker: '<title>Photos of me' },
+    ];
+
+    function injectPage(page) {
+        document.querySelectorAll('.nav-more-menu').forEach(menu => {
+            if (menu.querySelector(`a[data-local-page="${page.key}"]`)) return;
+            const a = document.createElement('a');
+            a.href = page.href;
+            a.textContent = page.label;
+            a.dataset.localPage = page.key;
+            menu.appendChild(a);
+        });
+    }
+
+    function probeFacePages() {
+        FACE_PAGES.forEach(page => {
+            // Range-limited GET: enough bytes for the <title>, not the whole
+            // page (the People browser is ~90KB).
+            fetch(page.href, { headers: { Range: 'bytes=0-2047' } })
+                .then(r => (r.ok ? r.text() : ''))
+                .then(html => {
+                    if (!html.includes(page.marker)) return;
+                    const run = () => injectPage(page);
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', run);
+                    } else {
+                        run();
+                    }
+                })
+                .catch(() => {});
         });
     }
 
@@ -42,11 +85,15 @@
         document.body.appendChild(pill);
     }
 
+    // One reliable probe for "this machine has a local build": the trips index
+    // is JSON, so the HTML fallback is filtered by content type. Only then are
+    // the face pages checked, which keeps production at zero extra requests.
     fetch('/phone/trips/index.json', { method: 'HEAD' }).then(r => {
         // content-type guard: a SPA-style HTML fallback must not count as present
         if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return;
         const run = () => { injectNav(); addPill(); };
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
         else run();
+        probeFacePages();
     }).catch(() => {});
 })();

@@ -36,6 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from prune import prune_removed_trips
+import blocklist
 
 try:
     import boto3
@@ -299,6 +300,8 @@ class R2Uploader:
             aws_secret_access_key=config.r2_secret_key,
             region_name='auto'
         )
+        # Photos that must never be uploaded; see blocklist.py
+        self.blocklist = blocklist.load()
 
     def upload_trip(self, trip_slug: str, dry_run: bool = False) -> dict:
         hosted_dir = Path('hosted-photos') / trip_slug
@@ -306,7 +309,8 @@ class R2Uploader:
             print(f"  ⚠️  hosted-photos/{trip_slug} not found, skipping")
             return {'skipped': True}
 
-        stats = {'uploaded': 0, 'skipped_existing': 0, 'deleted': 0, 'errors': 0, 'bytes': 0}
+        stats = {'uploaded': 0, 'skipped_existing': 0, 'deleted': 0, 'errors': 0,
+                 'bytes': 0, 'blocked': 0}
 
         # Map existing R2 objects to their size, so we re-upload files whose CONTENT
         # changed (e.g. a quality re-encode keeps the same key but a different size) and
@@ -324,6 +328,14 @@ class R2Uploader:
         to_upload = []  # (img_file, s3_key, local_size) for files whose content changed
         for img_file in sorted(hosted_dir.rglob('*.webp')):
             s3_key = str(img_file.relative_to('hosted-photos'))
+            # Hard block (blocklist.py): never upload these, and leave them OUT
+            # of local_keys so the stale sweep below deletes any copy a previous
+            # deploy already put in R2.
+            if self.blocklist.is_blocked(trip_slug, img_file.stem):
+                stats['blocked'] += 1
+                print(f"    ⛔ blocked, not uploading: {s3_key} "
+                      f"[{self.blocklist.why(trip_slug, img_file.stem)}]")
+                continue
             local_keys.add(s3_key)
             local_size = img_file.stat().st_size
             unchanged = existing.get(s3_key) == local_size
@@ -380,6 +392,8 @@ class R2Uploader:
         if not dry_run:
             msg = (f"    ✓ {trip_slug}: {stats['uploaded']} uploaded, "
                    f"{stats['skipped_existing']} unchanged, {stats['deleted']} deleted")
+            if stats['blocked']:
+                msg += f", {stats['blocked']} BLOCKED"
             if stats['errors']:
                 msg += f", {stats['errors']} errors"
             print(msg)
@@ -692,6 +706,20 @@ def main():
     import photo_privacy
     photo_privacy.sync(dry_run=args.dry_run)
     print()
+
+    # Step 1a-ii: Hard blocklist. Unlike force_private (gated but still
+    # uploaded), these are never sent to R2 at all — and are stripped from the
+    # manifests here so a blocked photo can't leave a broken tile in a gallery.
+    _blocked = blocklist.load()
+    if _blocked:
+        print(f"⛔ Blocklist active: {len(_blocked)} photo(s) "
+              f"[{', '.join(_blocked.sources)}]")
+        n = blocklist.strip_manifests(_blocked, dry_run=args.dry_run)
+        hits = blocklist.local_hits(_blocked)
+        print(f"    {n} manifest entr(ies) stripped, "
+              f"{len(hits)} blocked file(s) present in hosted-photos/ "
+              f"(not uploaded; any R2 copy is deleted)")
+        print()
 
     # Step 1b: Prune trips removed from config/trips.json (index, web/trips,
     # hosted-photos, R2). On by default; config is the source of truth.

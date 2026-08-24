@@ -193,7 +193,10 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 @media (hover: none) { .posts-thumb-controls { opacity: 1; } }
 .posts-thumb-controls button {
   background: rgba(0,0,0,.55); color: #fff; border: none; border-radius: 5px;
-  width: 26px; height: 26px; font-size: 12px; cursor: pointer;
+  /* Five controls on a 132px tile (and narrower on phones): let them shrink
+     to fit rather than pushing each other out of the row. */
+  flex: 0 1 26px; min-width: 0; padding: 0;
+  height: 26px; font-size: 12px; cursor: pointer;
 }
 .posts-thumb-controls button:disabled { opacity: .3; cursor: default; }
 

@@ -161,6 +161,15 @@ window.Posts = (function () {
     }
     function mutate(fn) { return mutateSet('main', fn); }
 
+    // Location cards, rendered on pull by tools/map_card.py. null = no card.
+    const MAP_STYLES = [null, 'route', 'pin', 'china'];
+    const MAP_LABELS = {
+        route: 'the drive through the frame',
+        pin: 'photo pinned to the spot',
+        china: 'photo pinned, plus a China locator',
+    };
+    const MAP_SHORT = { route: 'route', pin: 'pin', china: 'China' };
+
     // Per-platform carousel caps. On Xiaohongshu the phone items are part of
     // the carousel so they count toward the cap; on Instagram the phone
     // bucket is behind-the-scenes material and exempt.
@@ -1056,6 +1065,26 @@ window.Posts = (function () {
             }).then(() => renderManager(root));
         });
 
+        // Map-card mark: flags this photo so ./post.py pull renders a location
+        // card into <post>/maps/, at the post's own shape. Clicking cycles the
+        // styles, since which one carries the story changes with the photo.
+        const mapBtn = document.createElement('button');
+        mapBtn.type = 'button';
+        mapBtn.textContent = '🗺';
+        mapBtn.title = ref.map ? `Map card: ${MAP_LABELS[ref.map]} — click for the next style`
+                               : `Add a map card (${MAP_LABELS[MAP_STYLES[1]]})`;
+        if (ref.map) mapBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
+        mapBtn.addEventListener('click', () => {
+            M(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const ph = p.photos.find(x => keyOf(x) === keyOf(ref));
+                if (!ph) return;
+                const next = MAP_STYLES[(MAP_STYLES.indexOf(ph.map || null) + 1) % MAP_STYLES.length];
+                if (next) ph.map = next; else delete ph.map;
+            }).then(() => renderManager(root));
+        });
+
         const rm = document.createElement('button');
         rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove from post';
         rm.addEventListener('click', () => {
@@ -1091,6 +1120,15 @@ window.Posts = (function () {
         });
 
         controls.insertBefore(blurBtn, rm);
+        controls.insertBefore(mapBtn, rm);
+        if (ref.map) {
+            const mark = document.createElement('span');
+            mark.textContent = '🗺 ' + MAP_SHORT[ref.map];
+            mark.title = `Map card on pull: ${MAP_LABELS[ref.map]}`;
+            mark.style.cssText = 'position:absolute;top:4px;right:4px;font-size:11px;' +
+                'background:rgba(0,0,0,.65);border-radius:4px;padding:1px 4px';
+            cell.appendChild(mark);
+        }
         if (ref.blur) {
             const mark = document.createElement('span');
             mark.textContent = '🙂🚫';

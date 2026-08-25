@@ -284,17 +284,26 @@ def blur_faces_file(src, dst):
         boxes = _face_boxes_tiled(img)
     H, W = img.shape[:2]
     for (x, y, w, h) in boxes:
-        pad = int(0.35 * max(w, h))
+        # Small pad so the ellipse inscribed below still covers chin/forehead;
+        # the pixelation itself is confined to a feathered face-shaped oval
+        # instead of stamping the whole padded rectangle.
+        pad = int(0.15 * max(w, h))
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
         roi = img[y0:y1, x0:x1]
         if roi.size == 0:
             continue
+        rh, rw = roi.shape[:2]
         blocks = 9
-        small = cv2.resize(roi, (blocks, max(1, blocks * roi.shape[0] // max(1, roi.shape[1]))),
+        small = cv2.resize(roi, (blocks, max(1, round(blocks * rh / rw))),
                            interpolation=cv2.INTER_LINEAR)
-        img[y0:y1, x0:x1] = cv2.resize(small, (x1 - x0, y1 - y0),
-                                       interpolation=cv2.INTER_NEAREST)
+        pix = cv2.resize(small, (rw, rh), interpolation=cv2.INTER_NEAREST)
+        mask = np.zeros((rh, rw), np.float32)
+        cv2.ellipse(mask, (rw // 2, rh // 2), (max(1, rw // 2), max(1, rh // 2)),
+                    0, 0, 360, 1.0, -1)
+        k = max(3, (min(rh, rw) // 8) | 1)   # odd Gaussian kernel = soft edge
+        mask = cv2.GaussianBlur(mask, (k, k), 0)[..., None]
+        img[y0:y1, x0:x1] = (pix * mask + roi * (1.0 - mask)).astype(img.dtype)
     ok, buf = cv2.imencode(src.suffix if src.suffix.lower() in ('.jpg', '.jpeg', '.png') else '.jpg',
                            img, [cv2.IMWRITE_JPEG_QUALITY, 96])
     if not ok:

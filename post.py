@@ -201,6 +201,8 @@ def resolve_source(trip, photo_id):
     if exact.exists():
         return exact, None
     # Fall back to a recursive stem search (re-edits can change the suffix)
+    print(f"   🔍 {photo_id}: not at its manifest filename, scanning {base} "
+          "(slow over the network)...")
     norm = normalize_stem(photo_id)
     candidates = [f for f in base.rglob('*')
                   if f.suffix.lower() in SOURCE_EXTS
@@ -347,17 +349,25 @@ def sync_post_dir(dest_dir, plan):
             if have_blur == want_blur:
                 tmp.rename(dst)
                 renamed += 1
+                print(f'   ↷ {dst.name}: reordered')
                 continue
             tmp.unlink()   # blur state changed: regenerate below
         if dst.exists():
             dst.unlink()
+        try:
+            mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
+        except OSError:
+            mb = ''
         if want_blur:
+            print(f'   ⇣ {dst.name}: copying + blurring faces{mb} — '
+                  'the first blur loads the face model, give it ~30s...')
             n = blur_faces_file(src, dst)
             label = f'{n} face(s) pixelated' if n > 0 else (
                 'no faces found — copied unblurred, check manually' if n == 0
                 else 'decode failed — copied unblurred')
             print(f'   🙂🚫 {dst.name}: {label}')
         else:
+            print(f'   ⇣ {dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
         blurred[src.name] = want_blur
         copied += 1
@@ -447,6 +457,7 @@ def sync_map_dir(dest_dir, plan, size):
                 cards[src.name] = {**was, 'file': target.name}
                 renamed += 1
             continue
+        print(f"   🗺  {target.name}: rendering {style} card...")
         card, why = map_card.card_for_photo(style, ref['trip'], ref['id'], size)
         if card is None:
             print(f"   ⚠️  no {style} card for {src.name}: {why}")
@@ -457,7 +468,6 @@ def sync_map_dir(dest_dir, plan, size):
         card.save(target, quality=93)
         cards[src.name] = {'file': target.name, 'style': style, 'size': list(size)}
         rendered += 1
-        print(f"   🗺  {target.name}: {style}")
     for name in [n for n in cards if n not in {s.name for _, _, s, _ in jobs}]:
         del cards[name]
     state_path.write_text(json.dumps(state, indent=1))
@@ -521,6 +531,11 @@ def sync_phone_dir(phone_dir, plan):
     for _, _, src, dst in plan:
         if dst.exists() and dst.stat().st_size == src.stat().st_size:
             continue
+        try:
+            mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
+        except OSError:
+            mb = ''
+        print(f'   ⇣ Phone/{dst.name}: copying{mb}...')
         shutil.copy2(src, dst)
         copied += 1
     return copied, removed
@@ -559,6 +574,7 @@ def cmd_pull(args):
         except (urllib.error.URLError, urllib.error.HTTPError):
             pass
 
+    print(f'⇣ Fetching drafts from {url} ...')
     doc = fetch_posts(url, env.get('CF_SITE_PASSWORD'), posts_password)
     posts = doc.get('posts', [])
     if args.num is not None:

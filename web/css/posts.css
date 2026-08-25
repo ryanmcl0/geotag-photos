@@ -40,6 +40,15 @@
   border-radius: 50%; cursor: pointer; font-size: 12px; line-height: 1;
 }
 #posts-pill button:hover { color: #fff; background: #333; }
+/* current-post chip: name + count of the post "+ Post"/"Add" go to */
+#posts-pill .posts-pill-target {
+  width: auto; height: auto; border-radius: 999px; margin-left: 8px;
+  padding: 4px 10px; background: #2c2c2c; color: #ddd; font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw;
+}
+#posts-pill .posts-pill-target:hover { background: #3d3d3d; color: #fff; }
+/* stays empty until the posts doc has loaded (or failed) */
+#posts-pill .posts-pill-target:empty { display: none; }
 /* while selecting, the action bar is the mode UI - keep the corner clear */
 body.posts-selecting #posts-pill { display: none; }
 
@@ -239,11 +248,25 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   cursor: pointer; white-space: nowrap; user-select: none;
 }
 .posts-posted-toggle input { accent-color: #22c55e; width: 15px; height: 15px; cursor: pointer; }
-.posts-card-collapsed { padding: 10px 16px; opacity: .72; }
+.posts-card-collapsed { padding: 10px 16px; }
+.posts-card-collapsed.posts-card-posted { opacity: .72; }
 .posts-card-collapsed .posts-card-bar { margin-bottom: 0; }
 .posts-expand {
   background: none; border: 1px solid #3a3a3a; border-radius: 6px; color: #aaa;
   width: 28px; height: 26px; cursor: pointer; font-size: 12px;
 }
 .posts-expand:hover { color: #fff; border-color: #666; }
+.posts-expand:disabled { opacity: .35; cursor: default; }
+.posts-expand:disabled:hover { color: #aaa; border-color: #3a3a3a; }
+.posts-move { font-size: 9px; }
 .posts-picker-posted { opacity: .5; }
+
+/* ---------- caption + song (pulled into caption.txt) ---------- */
+.posts-meta { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.posts-song, .posts-caption {
+  background: #141414; border: 1px solid #333; border-radius: 6px; color: #ddd;
+  font: inherit; font-size: 13px; padding: 8px 10px; width: 100%; box-sizing: border-box;
+}
+.posts-song::placeholder, .posts-caption::placeholder { color: #666; }
+.posts-caption { min-height: 60px; resize: vertical; }
+.posts-song:focus, .posts-caption:focus { outline: none; border-color: #666; }

@@ -81,6 +81,11 @@ window.Posts = (function () {
         location.reload();
     }
 
+    // Current-post chip inside the pill: shows which post "+ Post" / "Add"
+    // target, with name and count; clicking it opens the post switcher.
+    // Empty (hidden by CSS) until the posts doc has loaded.
+    let pillTarget = null;
+
     (function addModePill() {
         const pill = document.createElement('div');
         pill.id = 'posts-pill';
@@ -88,12 +93,16 @@ window.Posts = (function () {
         link.href = '/posts';
         link.textContent = 'Posts mode';
         link.title = 'Open the posts manager';
+        pillTarget = document.createElement('button');
+        pillTarget.type = 'button';
+        pillTarget.className = 'posts-pill-target';
+        pillTarget.addEventListener('click', () => openPicker([], null, { selectOnly: true }));
         const exit = document.createElement('button');
         exit.type = 'button';
         exit.title = 'Exit posts mode';
         exit.textContent = '✕';
         exit.addEventListener('click', exitPostsMode);
-        pill.append(link, exit);
+        pill.append(link, pillTarget, exit);
         document.body.appendChild(pill);
     })();
 
@@ -341,7 +350,7 @@ window.Posts = (function () {
             if (!post) {
                 post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
                 if (platform === 'xhs') post.platform = 'xhs';
-                posts.push(post);
+                posts.unshift(post);   // new drafts go to the top of the list
             }
             result.name = post.name;
             Object.assign(result, addRefsToPost(post, refs));
@@ -405,7 +414,7 @@ window.Posts = (function () {
                     if (!posts.find(p => p.id === postId)) {
                         const post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
                         if (platform === 'xhs') post.platform = 'xhs';
-                        posts.push(post);
+                        posts.unshift(post);   // new drafts go to the top of the list
                         result.name = post.name;
                     }
                 }).then(okSave => {
@@ -553,7 +562,19 @@ window.Posts = (function () {
         restampSelections();
     }
 
+    function updatePill() {
+        if (!pillTarget || !doc) return;
+        const t = targetPost();
+        pillTarget.textContent = t
+            ? `${t.name} · ${countOf(t)}/${capOf(t)}`
+            : 'Choose post';
+        pillTarget.title = t
+            ? `Adding to "${t.name}" (${platLabel(t)}, ${plural(countOf(t))}). Click to change post`
+            : 'Choose which post photos are added to';
+    }
+
     function updateSelectUi() {
+        updatePill();
         if (!fab) return;
         fab.classList.toggle('active', selectMode);
         fab.textContent = selectMode ? 'Selecting...' : 'Select';
@@ -635,6 +656,7 @@ window.Posts = (function () {
     } catch (e) { /* private mode */ }
 
     function renderManager(root) {
+        updatePill();
         root.innerHTML = '';
         const head = document.createElement('div');
         head.className = 'posts-head';
@@ -648,11 +670,18 @@ window.Posts = (function () {
             newBtn.className = 'posts-new-btn';
             newBtn.textContent = plat === 'xhs' ? '+ New XHS post' : '+ New IG post';
             newBtn.addEventListener('click', () => {
+                // A freshly created post becomes the current one, so "+ Post"
+                // anywhere on the site adds straight to it.
+                const id = newId();
                 mutate(posts => {
-                    const post = { id: newId(), name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                    if (posts.find(p => p.id === id)) return;
+                    const post = { id, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
                     if (plat === 'xhs') post.platform = 'xhs';
-                    posts.push(post);
-                }).then(() => renderManager(root));
+                    posts.unshift(post);   // new drafts go to the top of the list
+                }).then(okSave => {
+                    if (okSave) setTarget(id);
+                    renderManager(root);
+                });
             });
             head.appendChild(newBtn);
         }
@@ -804,8 +833,27 @@ window.Posts = (function () {
         });
     }
 
-    // Posted drafts the user has temporarily expanded this session.
+    // Per-session expand/collapse overrides: posted drafts default collapsed,
+    // unposted ones default expanded; these hold the ids the user has flipped.
     const expandedPosted = new Set();
+    const collapsedUnposted = new Set();
+    const cardOpen = post => (post.posted ? expandedPosted.has(post.id) : !collapsedUnposted.has(post.id));
+
+    /** Move a draft one slot up/down among the cards around it. Display order
+     *  within a same-platform, same posted-state group IS stored order, so the
+     *  move swaps with the neighbouring card the user actually sees. */
+    function movePost(root, post, dir) {
+        mutate(posts => {
+            const group = posts.filter(p => platformOf(p) === platformOf(post) && !!p.posted === !!post.posted);
+            const gi = group.findIndex(p => p.id === post.id);
+            const neighbor = gi === -1 ? null : group[gi + dir];
+            if (!neighbor) return;
+            const from = posts.findIndex(p => p.id === post.id);
+            const [moved] = posts.splice(from, 1);
+            const to = posts.findIndex(p => p.id === neighbor.id) + (dir > 0 ? 1 : 0);
+            posts.splice(to, 0, moved);
+        }).then(() => renderManager(root));
+    }
 
     function renderCard(root, post, set) {
         set = set || 'main';
@@ -824,7 +872,7 @@ window.Posts = (function () {
             M(posts => {
                 const p = posts.find(x => x.id === post.id);
                 if (p) p.name = v;
-            });
+            }).then(() => updatePill());
         });
         const count = document.createElement('span');
         count.className = 'posts-count';
@@ -891,28 +939,83 @@ window.Posts = (function () {
             tick.checked = !!post.posted;
             tick.addEventListener('change', () => {
                 const on = tick.checked;
-                if (!on) expandedPosted.delete(post.id);
+                // reset to the new default state (posted closed, unposted open)
+                expandedPosted.delete(post.id);
+                collapsedUnposted.delete(post.id);
                 M(posts => {
                     const p = posts.find(x => x.id === post.id);
                     if (!p) return;
                     if (on) p.posted = true; else delete p.posted;
                 }).then(() => renderManager(root));
             });
-            postedLbl.append(tick, document.createTextNode(' Posted'));
-            bar.appendChild(postedLbl);
-            if (post.posted) {
-                const expand = document.createElement('button');
-                expand.type = 'button';
-                expand.className = 'posts-expand';
-                const isOpen = expandedPosted.has(post.id);
-                expand.textContent = isOpen ? '▾' : '▸';
-                expand.title = isOpen ? 'Collapse' : 'Show photos';
-                expand.addEventListener('click', () => {
-                    if (isOpen) expandedPosted.delete(post.id); else expandedPosted.add(post.id);
+            // Duplicate this draft onto the other platform, keeping order,
+            // blur/map marks, caption and song. XHS copies obey the combined
+            // 18 cap: carousel photos first, phone items fill what remains.
+            const otherPlat = platformOf(post) === 'xhs' ? 'ig' : 'xhs';
+            const dupBtn = document.createElement('button');
+            dupBtn.type = 'button';
+            dupBtn.className = 'posts-copy-btn';
+            dupBtn.textContent = otherPlat === 'xhs' ? 'Copy → XHS' : 'Copy → IG';
+            dupBtn.title = otherPlat === 'xhs'
+                ? 'Duplicate this draft as a Xiaohongshu post'
+                : 'Duplicate this draft as an Instagram post';
+            dupBtn.addEventListener('click', () => {
+                const dup = {
+                    id: newId(), name: post.name, created: new Date().toISOString(),
+                    photos: post.photos.map(ph => ({ ...ph }))
+                };
+                if (post.caption) dup.caption = post.caption;
+                if (post.song) dup.song = post.song;
+                let phone = (post.phone || []).map(ph => ({ ...ph }));
+                if (otherPlat === 'xhs') {
+                    dup.platform = 'xhs';
+                    dup.photos = dup.photos.slice(0, CAPS.xhs);
+                    phone = phone.slice(0, Math.max(0, CAPS.xhs - dup.photos.length));
+                }
+                if (phone.length) dup.phone = phone;
+                const trimmed = post.photos.length + (post.phone || []).length
+                    - dup.photos.length - (dup.phone || []).length;
+                mutate(posts => {
+                    if (!posts.some(p => p.id === dup.id)) posts.unshift(dup);
+                }).then(okSave => {
+                    if (okSave) {
+                        toast(`Copied "${post.name}" to ${otherPlat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
+                            + (trimmed > 0 ? ` (${trimmed} trimmed for the 18 cap)` : ''));
+                    }
                     renderManager(root);
                 });
-                bar.appendChild(expand);
-            }
+            });
+            bar.appendChild(dupBtn);
+            postedLbl.append(tick, document.createTextNode(' Posted'));
+            bar.appendChild(postedLbl);
+            // Reorder arrows: move the card among its visible neighbours.
+            const group = doc.posts.filter(p => platformOf(p) === platformOf(post) && !!p.posted === !!post.posted);
+            const gi = group.findIndex(p => p.id === post.id);
+            [['▲', -1, 'Move up'], ['▼', 1, 'Move down']].forEach(([sym, dir, label]) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'posts-expand posts-move';
+                b.textContent = sym;
+                b.title = label;
+                b.disabled = gi === -1 || (dir === -1 ? gi === 0 : gi === group.length - 1);
+                b.addEventListener('click', () => movePost(root, post, dir));
+                bar.appendChild(b);
+            });
+            const expand = document.createElement('button');
+            expand.type = 'button';
+            expand.className = 'posts-expand';
+            const isOpen = cardOpen(post);
+            expand.textContent = isOpen ? '▾' : '▸';
+            expand.title = isOpen ? 'Collapse' : 'Show photos';
+            expand.addEventListener('click', () => {
+                if (post.posted) {
+                    if (isOpen) expandedPosted.delete(post.id); else expandedPosted.add(post.id);
+                } else {
+                    if (isOpen) collapsedUnposted.add(post.id); else collapsedUnposted.delete(post.id);
+                }
+                renderManager(root);
+            });
+            bar.appendChild(expand);
         }
         bar.appendChild(del);
         // Local-only phone-library companion: shows phone photos taken around
@@ -927,9 +1030,10 @@ window.Posts = (function () {
             card.appendChild(note);
         }
 
-        // Posted drafts collapse to just their bar until expanded.
-        if (set === 'main' && post.posted && !expandedPosted.has(post.id)) {
+        // Collapsed drafts show just their bar (posted ones start collapsed).
+        if (set === 'main' && !cardOpen(post)) {
             card.classList.add('posts-card-collapsed');
+            if (post.posted) card.classList.add('posts-card-posted');
             return card;
         }
 
@@ -943,6 +1047,31 @@ window.Posts = (function () {
             strip.appendChild(hint);
         }
         card.appendChild(strip);
+
+        // Caption + song for the post; ./post.py pull writes both into the
+        // post folder as caption.txt. Saved on blur, empty clears the field.
+        if (set === 'main') {
+            const meta = document.createElement('div');
+            meta.className = 'posts-meta';
+            [['song', 'input', 'Song'], ['caption', 'textarea', 'Caption']].forEach(([field, tag, ph]) => {
+                const el = document.createElement(tag);
+                if (tag === 'input') el.type = 'text';
+                el.className = 'posts-' + field;
+                el.placeholder = ph;
+                el.value = post[field] || '';
+                el.addEventListener('change', () => {
+                    const v = el.value.trim();
+                    el.value = v;
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p) return;
+                        if (v) p[field] = v; else delete p[field];
+                    });
+                });
+                meta.appendChild(el);
+            });
+            card.appendChild(meta);
+        }
 
         // Collapsible behind-the-scenes bucket from the local phone library
         // (uncapped, pulled into a Phone/ subfolder by ./post.py pull).
@@ -1145,7 +1274,9 @@ window.Posts = (function () {
     // script loads, so their onGridRender call never happens — pick up any
     // already-rendered grid once the state is in.
     ready.then(ok => {
-        if (ok && document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
+        if (!ok) return;
+        updatePill();
+        if (document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
     });
 
     return { enabled: true, attachLightbox, onGridRender, initPostsPage, addToPost };

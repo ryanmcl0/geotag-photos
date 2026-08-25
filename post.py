@@ -585,8 +585,14 @@ def cmd_pull(args):
                 continue
             plan.append((i, ref, src, dest_dir / f'{i:02d}_{src.name}'))
 
+        caption = (post.get('caption') or '').strip()
+        song = (post.get('song') or '').strip()
+
         if args.list or args.dry_run:
             size = post_card_size(post, plan)
+            if caption or song:
+                what = 'song + caption' if song and caption else ('song' if song else 'caption')
+                print(f"   📝 {what}  →  {dest_dir / 'caption.txt'}")
             for i, ref, src, dst in plan:
                 print(f"   {i:02d} {src}  →  {dst}")
                 if ref.get('map'):
@@ -613,6 +619,23 @@ def cmd_pull(args):
             parts.append(f'{renamed} reordered')
         parts.append(f'{len(plan) - copied - renamed} already up to date')
         print(f"   ✓ {', '.join(parts)}")
+
+        # Caption and song noted on the site -> one caption.txt in the post
+        # folder. Rewritten only when the content actually changed.
+        if caption or song:
+            lines = []
+            if song:
+                lines.append(f'Song: {song}')
+            if caption:
+                if song:
+                    lines.append('')
+                lines.append(caption)
+            txt = '\n'.join(lines) + '\n'
+            cap_path = dest_dir / 'caption.txt'
+            if not cap_path.exists() or cap_path.read_text() != txt:
+                cap_path.write_text(txt)
+                what = 'song + caption' if song and caption else ('song' if song else 'caption')
+                print(f"   ✓ caption.txt ({what})")
 
         # Location cards for the photos marked with the map button -> <post>/maps/
         marked = [ref for _, ref, _, _ in plan if ref.get('map')]

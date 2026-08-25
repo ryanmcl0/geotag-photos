@@ -299,6 +299,9 @@
     app.appendChild(el('div', 'section-head',
       `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
 
+    const withCoords = tile.subtiles.filter(s => s.lat != null && s.lon != null);
+    if (withCoords.length && window.L) app.appendChild(buildBridgeMap(tile, withCoords));
+
     const list = el('div', 'bridge-list');
     const ranked = tile.subtiles.filter(s => s.rank);
     const extras = tile.subtiles.filter(s => !s.rank);
@@ -323,6 +326,49 @@
     list.querySelectorAll('.bridge-row').forEach(r => io.observe(r));
   }
 
+  // Overview pin map: every roster bridge with coords, green = visited, red = not
+  // yet. The container is rebuilt on every hash route (app.innerHTML = ''), so the
+  // previous Leaflet instance must be torn down or its listeners leak.
+  let bridgeMap = null;
+  function buildBridgeMap(tile, subs) {
+    if (bridgeMap) { try { bridgeMap.remove(); } catch (e) { /* already gone */ } bridgeMap = null; }
+    const wrap = el('div', 'bridge-map-wrap');
+    const mapEl = el('div', 'bridge-map');
+    wrap.appendChild(mapEl);
+    wrap.appendChild(el('div', 'bridge-map-legend',
+      `<span><i class="pin-dot pin-dot--done"></i>Visited</span>
+       <span><i class="pin-dot pin-dot--todo"></i>Not yet</span>`));
+
+    const map = L.map(mapEl, { scrollWheelZoom: false, attributionControl: false });
+    bridgeMap = map;
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+      { maxZoom: 18 }).addTo(map);
+
+    const pin = colour => L.divIcon({
+      html: `<svg viewBox="0 0 24 34" width="22" height="31" aria-hidden="true">
+               <path fill="${colour}" stroke="#fff" stroke-width="1.2"
+                     d="M12 1C6.5 1 2 5.4 2 10.9 2 18.3 12 33 12 33s10-14.7 10-22.1C22 5.4 17.5 1 12 1z"/>
+               <circle cx="12" cy="10.9" r="3.4" fill="#fff" fill-opacity=".85"/>
+             </svg>`,
+      className: 'bridge-pin-icon', iconSize: L.point(22, 31),
+      iconAnchor: L.point(11, 30), popupAnchor: L.point(0, -28)
+    });
+    const done = pin('#2e8b46'), todo = pin('#c8392e');
+
+    const bounds = [];
+    subs.forEach(s => {
+      const meta = [s.height_m ? `${s.height_m} m` : null, s.province || null,
+                    s.done ? null : (s.pending || 'Not visited')].filter(Boolean).join(' · ');
+      const m = L.marker([s.lat, s.lon], { icon: s.done ? done : todo }).addTo(map);
+      m.bindPopup(`<strong>${esc(s.title)}</strong><br>${esc(meta)}`);
+      bounds.push([s.lat, s.lon]);
+    });
+    map.fitBounds(bounds, { padding: [28, 28] });
+    // the container isn't sized until it's actually in the document
+    requestAnimationFrame(() => { map.invalidateSize(); map.fitBounds(bounds, { padding: [28, 28] }); });
+    return wrap;
+  }
+
   function buildBridgeRow(tile, s, flip) {
     const rank = s.rank != null ? s.rank : '·';
     const metaBits = [];
@@ -344,8 +390,19 @@
           <span class="bridge-name">${esc(s.title)}</span>
           ${s.name_zh ? `<span class="bridge-zh">${esc(s.name_zh)}</span>` : ''}
           <div class="bridge-meta">${esc(metaBits.join(' · '))}</div>
+          ${s.highlight ? `<div class="bridge-highlight">★ ${esc(s.highlight)}</div>` : ''}
           ${n ? `<div class="bridge-count">${n} photos →</div>` : ''}
         </div>`;
+      const text = row.querySelector('.bridge-text');
+      if ((s.renders || []).length) {
+        // The row itself can be an <a> (linked gallery), so the renders link swallows
+        // the click and routes by hand — same trick as the status toggle below.
+        const rl = el('a', 'bridge-renders-link', `Renders + mockups (${s.renders.length}) →`);
+        rl.href = `#${tile.id}/${s.id}/renders`;
+        rl.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); location.hash = `${tile.id}/${s.id}/renders`; });
+        text.appendChild(rl);
+      }
+      if (s.status_info) text.appendChild(buildBridgeStatus(s.status_info));
       return row;
     }
 
@@ -364,6 +421,76 @@
     const img = row.querySelector('img');
     if (img) img.classList.remove('tile-img');
     return row;
+  }
+
+  // Collapsible construction-status panel for pending rows. A pending row can be
+  // an <a> (linked gallery), so the summary toggle is done by hand with the click
+  // swallowed — otherwise opening the panel would navigate into the gallery.
+  function buildBridgeStatus(info) {
+    const det = el('details', 'bridge-status');
+    const srcs = (info.sources || []).map(x =>
+      `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` +
+      (x.date ? ` <span class="bridge-status-date">${esc(x.date)}</span>` : '') + '</li>').join('');
+    det.innerHTML = `
+      <summary>Status${info.state ? ` · ${esc(info.state)}` : ''}</summary>
+      <div class="bridge-status-body">
+        <p>${esc(info.summary || '')}</p>
+        ${srcs ? `<ul class="bridge-status-sources">${srcs}</ul>` : ''}
+        ${info.as_of ? `<div class="bridge-status-asof">Checked ${esc(info.as_of)}</div>` : ''}
+      </div>`;
+    det.addEventListener('click', e => {
+      e.stopPropagation();
+      if (e.target.closest('a')) return;                 // source links navigate normally
+      e.preventDefault();
+      if (e.target.closest('summary')) det.open = !det.open;
+    });
+    return det;
+  }
+
+  // Reference imagery for a not-yet-visited bridge: renders, mockups, maps and
+  // construction shots pulled from HighestBridges. These live outside the photo
+  // pipeline (no thumbnails/display variants), so this is its own simple grid +
+  // overlay rather than Gallery.renderGrid.
+  function renderBridgeRenders(tile, s) {
+    setCrumbs([{ label: DATA.title, href: '#' }, { label: tile.title, href: `#${tile.id}` },
+               { label: s.title }]);
+    app.innerHTML = '';
+    const zh = s.name_zh ? ` <span class="count">${esc(s.name_zh)}</span>` : '';
+    app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}
+      <span class="count">Renders + reference · HighestBridges</span>`));
+    const grid = el('div', 'render-grid');
+    s.renders.forEach((src, i) => {
+      const cell = el('button', 'render-cell');
+      cell.innerHTML = `<img src="${esc(src)}" loading="lazy" alt="">`;
+      cell.addEventListener('click', () => openRenderOverlay(s, i));
+      grid.appendChild(cell);
+    });
+    app.appendChild(grid);
+  }
+
+  function openRenderOverlay(s, start) {
+    let i = start;
+    const ov = el('div', 'render-overlay');
+    ov.innerHTML = `<img src="${esc(s.renders[i])}" alt="">
+      <div class="render-overlay-cap">${esc(s.title)} · <span>${i + 1}/${s.renders.length}</span></div>
+      <button class="render-nav render-nav--prev" aria-label="Previous">‹</button>
+      <button class="render-nav render-nav--next" aria-label="Next">›</button>
+      <button class="render-close" aria-label="Close">×</button>`;
+    const img = ov.querySelector('img'), cap = ov.querySelector('.render-overlay-cap span');
+    const show = d => { i = (i + d + s.renders.length) % s.renders.length;
+                        img.src = s.renders[i]; cap.textContent = `${i + 1}/${s.renders.length}`; };
+    ov.querySelector('.render-nav--prev').addEventListener('click', e => { e.stopPropagation(); show(-1); });
+    ov.querySelector('.render-nav--next').addEventListener('click', e => { e.stopPropagation(); show(1); });
+    const close = () => { document.removeEventListener('keydown', onKey); ov.remove(); };
+    ov.querySelector('.render-close').addEventListener('click', close);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const onKey = e => {
+      if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowLeft') show(-1);
+      else if (e.key === 'ArrowRight') show(1);
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(ov);
   }
 
   /* ---------------- gallery views ---------------- */
@@ -549,6 +676,8 @@
   /* ---------------- router ---------------- */
   function route() {
     if (!DATA) return;
+    // every view starts with app.innerHTML = '' — drop the Leaflet instance with it
+    if (bridgeMap) { try { bridgeMap.remove(); } catch (e) { /* already gone */ } bridgeMap = null; }
     const hash = location.hash.replace(/^#/, '');
     window.scrollTo(0, 0);
     if (!hash) return DATA.tiles.length === 1 ? renderFacet(DATA.tiles[0]) : renderHub();
@@ -562,6 +691,9 @@
     }
     if (!subId) return renderFacet(tile);
     const s = subById(tile, subId);
+    const extra = hash.split('/')[2];
+    // reference imagery (renders/mockups) hangs off pending bridge rows
+    if (s && extra === 'renders' && (s.renders || []).length) return renderBridgeRenders(tile, s);
     // not-done subtiles can still carry a linked gallery (bridge visited under construction)
     if (!s || !(s.done || (s.photos || []).length)) return renderFacet(tile);
     renderSubGallery(tile, s);

@@ -463,6 +463,22 @@ def facet_bridges(facet, records, echo):
                'province': b.get('province'), 'status': b.get('status')}
         if b.get('name_zh'):
             sub['name_zh'] = b['name_zh']
+        # Coords feed the facet's overview pin map (gated with the rest of .all)
+        if b.get('lat') is not None and b.get('lon') is not None:
+            sub['lat'], sub['lon'] = b['lat'], b['lon']
+        if b.get('status_info'):
+            sub['status_info'] = b['status_info']
+        if b.get('highlight'):
+            sub['highlight'] = b['highlight']
+        # Reference imagery (renders/mockups saved from HighestBridges) for bridges
+        # not yet visited — dropped into web/collections/bridge_renders/<slug>/ and
+        # picked up by filename order. Lives under /collections/ so the middleware
+        # gates it with the rest of the unlocked data.
+        rdir = ROOT / 'web' / 'collections' / 'bridge_renders' / sub['id']
+        if rdir.is_dir():
+            sub['renders'] = [f"collections/bridge_renders/{sub['id']}/{p.name}"
+                              for p in sorted(rdir.iterdir())
+                              if p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp', '.gif')]
         picked = [rec_by_key[k] for k in picks_ids.get(b['name'], []) if k in rec_by_key]
         missing = [k for k in picks_ids.get(b['name'], []) if k not in rec_by_key]
         if missing:

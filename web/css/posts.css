@@ -107,7 +107,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 }
 .posts-picker {
   background: #181818; border: 1px solid #2c2c2c; border-radius: 14px 14px 0 0;
-  width: 100%; max-width: 480px; max-height: 70vh; overflow-y: auto;
+  width: 100%; max-width: 480px; max-height: 70vh; overflow-y: auto; overscroll-behavior: contain;
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
 }
 .posts-picker h3 { margin: 0 0 12px; color: #fff; font-size: 16px; font-weight: 600; }

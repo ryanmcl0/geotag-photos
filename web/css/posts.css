@@ -172,6 +172,14 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-name:focus { outline: none; border-color: #666; background: #202020; }
 .posts-count { color: #888; font-size: 12px; white-space: nowrap; margin-right: auto; }
 .posts-num { color: #777; font-size: 13px; font-weight: 700; white-space: nowrap; }
+/* IG account chip: dim until an account is picked */
+.posts-account {
+  background: none; border: 1px solid #3a3a3a; border-radius: 999px; color: #666;
+  font-size: 12px; padding: 3px 10px; cursor: pointer; white-space: nowrap;
+}
+.posts-account:hover { color: #fff; border-color: #666; }
+.posts-account-0 { color: #7fb2f0; border-color: #2c5382; }
+.posts-account-1 { color: #e2a336; border-color: #7a5a1e; }
 .posts-delete {
   background: none; border: 1px solid #3a3a3a; color: #999; border-radius: 6px;
   padding: 6px 12px; font-size: 12px; cursor: pointer;

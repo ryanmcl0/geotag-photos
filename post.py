@@ -608,7 +608,8 @@ def cmd_pull(args):
         name = sanitize(post['name'])
         dest_dir = Path(args.dest) / name
         tag = f"#{post['num']} " if post.get('num') else ''
-        print(f"── {tag}{post['name']} ({len(post['photos'])} photos) → {dest_dir}")
+        acct = f" @{post['account']}" if post.get('account') else ''
+        print(f"── {tag}{post['name']}{acct} ({len(post['photos'])} photos) → {dest_dir}")
         plan = []
         for i, ref in enumerate(post['photos'], 1):
             src, why = resolve_source(ref['trip'], ref['id'])
@@ -620,12 +621,14 @@ def cmd_pull(args):
 
         caption = (post.get('caption') or '').strip()
         song = (post.get('song') or '').strip()
+        account = (post.get('account') or '').strip()
+        cap_what = ' + '.join(w for w, v in (('account', account), ('song', song),
+                                             ('caption', caption)) if v)
 
         if args.list or args.dry_run:
             size = post_card_size(post, plan)
-            if caption or song:
-                what = 'song + caption' if song and caption else ('song' if song else 'caption')
-                print(f"   📝 {what}  →  {dest_dir / 'caption.txt'}")
+            if cap_what:
+                print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
             for i, ref, src, dst in plan:
                 print(f"   {i:02d} {src}  →  {dst}")
                 if ref.get('map'):
@@ -653,22 +656,23 @@ def cmd_pull(args):
         parts.append(f'{len(plan) - copied - renamed} already up to date')
         print(f"   ✓ {', '.join(parts)}")
 
-        # Caption and song noted on the site -> one caption.txt in the post
-        # folder. Rewritten only when the content actually changed.
-        if caption or song:
+        # Account, caption and song noted on the site -> one caption.txt in
+        # the post folder. Rewritten only when the content actually changed.
+        if cap_what:
             lines = []
+            if account:
+                lines.append(f'Account: @{account}')
             if song:
                 lines.append(f'Song: {song}')
             if caption:
-                if song:
+                if lines:
                     lines.append('')
                 lines.append(caption)
             txt = '\n'.join(lines) + '\n'
             cap_path = dest_dir / 'caption.txt'
             if not cap_path.exists() or cap_path.read_text() != txt:
                 cap_path.write_text(txt)
-                what = 'song + caption' if song and caption else ('song' if song else 'caption')
-                print(f"   ✓ caption.txt ({what})")
+                print(f"   ✓ caption.txt ({cap_what})")
 
         # Location cards for the photos marked with the map button -> <post>/maps/
         marked = [ref for _, ref, _, _ in plan if ref.get('map')]

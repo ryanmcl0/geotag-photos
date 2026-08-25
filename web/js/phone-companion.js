@@ -273,7 +273,8 @@ window.PhoneCompanion = (function () {
                         cell.addEventListener('click', ev => {
                             if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
                             ev.preventDefault();
-                            Gallery.openLightbox(visiblePhotos, myIndex);
+                            Gallery.openLightbox(visiblePhotos, myIndex,
+                                { defaultPostId: post.id });
                         });
                         const img = document.createElement('img');
                         img.src = Gallery.photoUrl({ trip: p.trip, id: p.id }, 'thumbnails');

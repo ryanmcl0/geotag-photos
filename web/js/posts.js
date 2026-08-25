@@ -487,10 +487,16 @@ window.Posts = (function () {
     // ---------- Lightbox button ----------
 
     let currentGallery = null;
+    let lightboxPostId = null;   // per-lightbox override of the current post (phone companion)
 
-    function attachLightbox(gallery, pswpEl) {
+    function attachLightbox(gallery, pswpEl, opts) {
         currentGallery = gallery;
-        gallery.listen('destroy', () => { if (currentGallery === gallery) currentGallery = null; });
+        // A lightbox opened from a post's phone-companion overlay adds to THAT
+        // post by default, not the global current post.
+        lightboxPostId = (opts && opts.defaultPostId) || null;
+        gallery.listen('destroy', () => {
+            if (currentGallery === gallery) { currentGallery = null; lightboxPostId = null; }
+        });
         const bar = pswpEl && pswpEl.querySelector('.pswp__top-bar');
         if (!bar || bar.querySelector('.posts-add-btn')) return;
         const btn = document.createElement('button');
@@ -504,7 +510,8 @@ window.Posts = (function () {
             if (!item || !item.ref) { toast('This photo cannot be added'); return; }
             ready.then(ok => {
                 if (!ok) { toast('Posts unavailable, try re-entering the password at /posts'); return; }
-                const t = targetPost();
+                const override = lightboxPostId && doc.posts.find(p => p.id === lightboxPostId);
+                const t = override || targetPost();
                 if (t) addToPost(t.id, [item.ref]);   // straight into the current post
                 else openPicker([item.ref]);          // no current post yet: ask once
             });
@@ -516,7 +523,8 @@ window.Posts = (function () {
         pick.textContent = '▾';
         pick.addEventListener('click', e => {
             e.stopPropagation();
-            openPicker([], null, { selectOnly: true });
+            // An explicit pick beats the phone-companion default from then on.
+            openPicker([], () => { lightboxPostId = null; }, { selectOnly: true });
         });
         const closeBtn = bar.querySelector('.pswp__button--close');
         bar.insertBefore(btn, closeBtn || null);

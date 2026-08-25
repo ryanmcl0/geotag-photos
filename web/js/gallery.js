@@ -214,6 +214,9 @@ window.Gallery = (function () {
 
     function onWheel(e) {
       if (!pswpEl.classList.contains('pswp--open')) return;
+      // Overlays (e.g. the posts picker) stack above the lightbox in <body>;
+      // wheel events on them must scroll the overlay, not zoom the photo.
+      if (e.target instanceof Element && !pswpEl.contains(e.target)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       if (targetZoom === null) targetZoom = gallery.getZoomLevel();
@@ -230,7 +233,7 @@ window.Gallery = (function () {
     });
   }
 
-  function openLightbox(photos, index) {
+  function openLightbox(photos, index, opts) {
     const pswpEl = document.querySelector('.pswp');
     if (!pswpEl || typeof PhotoSwipe === 'undefined') return;
     const items = photos.map(p => {
@@ -263,7 +266,7 @@ window.Gallery = (function () {
     });
     addWheelZoom(gallery, pswpEl);
     gallery.init();
-    if (window.Posts) Posts.attachLightbox(gallery, pswpEl);
+    if (window.Posts) Posts.attachLightbox(gallery, pswpEl, opts);
   }
 
   return { photoUrl, renderGrid, openLightbox, lockedCover, photoKind, buildKindBar };

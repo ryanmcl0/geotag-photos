@@ -258,7 +258,16 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-expand:hover { color: #fff; border-color: #666; }
 .posts-expand:disabled { opacity: .35; cursor: default; }
 .posts-expand:disabled:hover { color: #aaa; border-color: #3a3a3a; }
-.posts-move { font-size: 9px; }
+/* card reorder: drag handle on pointer devices, ▲▼ buttons on touch */
+.posts-move { font-size: 9px; display: none; }
+.posts-drag-handle { cursor: grab; color: #555; font-size: 15px; user-select: none; }
+.posts-drag-handle:hover { color: #aaa; }
+.posts-drag-handle:active { cursor: grabbing; }
+.posts-card.drag-over { outline: 2px dashed #666; outline-offset: -2px; }
+@media (hover: none) {
+  .posts-move { display: inline-block; }
+  .posts-drag-handle { display: none; }
+}
 .posts-picker-posted { opacity: .5; }
 
 /* ---------- caption + song (pulled into caption.txt) ---------- */

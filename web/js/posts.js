@@ -855,6 +855,23 @@ window.Posts = (function () {
         }).then(() => renderManager(root));
     }
 
+    /** Drop a dragged card onto another: the moved draft takes the target's
+     *  place (before it when dragging up, after it when dragging down). Only
+     *  within the same platform + posted-state group, where display order is
+     *  stored order — a cross-group drop would not visibly change anything. */
+    function movePostTo(root, fromId, target) {
+        mutate(posts => {
+            const moved = posts.find(p => p.id === fromId);
+            const tp = posts.find(p => p.id === target.id);
+            if (!moved || !tp || moved === tp) return;
+            if (platformOf(moved) !== platformOf(tp) || !!moved.posted !== !!tp.posted) return;
+            const from = posts.indexOf(moved);
+            const wasBefore = from < posts.indexOf(tp);
+            posts.splice(from, 1);
+            posts.splice(posts.indexOf(tp) + (wasBefore ? 1 : 0), 0, moved);
+        }).then(() => renderManager(root));
+    }
+
     function renderCard(root, post, set) {
         set = set || 'main';
         const M = fn => mutateSet(set, fn);
@@ -931,6 +948,35 @@ window.Posts = (function () {
             });
         }
         if (set === 'main') {
+            // Drag the card by its handle to reorder. The card only becomes
+            // draggable while the handle is pressed, so text in the name and
+            // caption fields stays selectable; a distinct data type keeps
+            // card drops apart from the thumbs' own drag-to-reorder.
+            const handle = document.createElement('span');
+            handle.className = 'posts-drag-handle';
+            handle.textContent = '⠿';
+            handle.title = 'Drag to reorder';
+            handle.addEventListener('mousedown', () => { card.draggable = true; });
+            bar.insertBefore(handle, bar.firstChild);
+            card.addEventListener('dragstart', e => {
+                if (!card.draggable) return;   // a thumb drag bubbling up
+                e.dataTransfer.setData('text/posts-card', post.id);
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            card.addEventListener('dragend', () => { card.draggable = false; });
+            card.addEventListener('dragover', e => {
+                if (!e.dataTransfer.types.includes('text/posts-card')) return;
+                e.preventDefault();
+                card.classList.add('drag-over');
+            });
+            card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+            card.addEventListener('drop', e => {
+                if (!e.dataTransfer.types.includes('text/posts-card')) return;
+                e.preventDefault();
+                card.classList.remove('drag-over');
+                movePostTo(root, e.dataTransfer.getData('text/posts-card'), post);
+            });
+
             // published tick: posted drafts collapse to just their bar
             const postedLbl = document.createElement('label');
             postedLbl.className = 'posts-posted-toggle';

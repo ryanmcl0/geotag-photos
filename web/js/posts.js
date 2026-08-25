@@ -209,6 +209,11 @@ window.Posts = (function () {
         return null;
     }
 
+    // How a post is named in warnings/toasts: account (or platform) included,
+    // so "already in ..." tells you WHICH account's post has the photo.
+    const postLabel = p => `"${p.name}"`
+        + (p.account ? ` (@${p.account})` : platformOf(p) === 'xhs' ? ' (XHS)' : '');
+
     const keyOf = ref => `${ref.trip}::${ref.id || ref.file}`;
     const plural = n => `${n} photo${n === 1 ? '' : 's'}`;
     const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -343,10 +348,10 @@ window.Posts = (function () {
         if (!orientationOk(postId, refs, platform)) return;
         const conflicts = conflictsFor(refs, postId);
         if (conflicts.length) {
-            const names = [...new Set(conflicts.map(c => c.post.name))];
+            const names = [...new Set(conflicts.map(c => postLabel(c.post)))];
             const nDup = new Set(conflicts.map(c => keyOf(c.ref))).size;
             const msg = refs.length === 1
-                ? `This photo is already in "${names[0]}". Add anyway?`
+                ? `This photo is already in ${names[0]}. Add anyway?`
                 : `${nDup} of these photos are already in other posts (${names.join(', ')}). Add anyway?`;
             if (!confirm(msg)) return;
         }
@@ -360,6 +365,7 @@ window.Posts = (function () {
                 posts.unshift(post);   // new drafts go to the top of the list
             }
             result.name = post.name;
+            result.label = post.name + (post.account ? ` (@${post.account})` : '');
             Object.assign(result, addRefsToPost(post, refs));
         }).then(okSave => {
             if (!okSave) return;
@@ -368,21 +374,21 @@ window.Posts = (function () {
             restampSelections();
             const capTxt = `${result.count}/${result.cap}`;
             if (result.phoneAdded && result.added === result.phoneAdded && result.count !== undefined && result.cap === 20) {
-                toast(`Added ${result.phoneAdded > 1 ? result.phoneAdded + ' ' : ''}to ${result.name} (Phone section, no cap)`);
+                toast(`Added ${result.phoneAdded > 1 ? result.phoneAdded + ' ' : ''}to ${result.label} (Phone section, no cap)`);
             } else if (result.hitCap && result.added) {
-                toast(`Added ${result.added}, ${result.name} is now full (${capTxt})`);
+                toast(`Added ${result.added}, ${result.label} is now full (${capTxt})`);
             } else if (result.hitCap) {
-                toast(`${result.name} is full (${capTxt})`);
+                toast(`${result.label} is full (${capTxt})`);
                 return;   // nothing was added, keep the selection
             } else if (!result.added) {
                 toast(refs.length === 1
-                    ? `Already in ${result.name} (${capTxt})`
-                    : `All ${refs.length} already in ${result.name} (${capTxt})`);
+                    ? `Already in ${result.label} (${capTxt})`
+                    : `All ${refs.length} already in ${result.label} (${capTxt})`);
                 return;   // nothing was added, keep the selection
             } else if (result.dupes) {
-                toast(`Added ${result.added} to ${result.name} (${capTxt}), ${result.dupes} already in it`);
+                toast(`Added ${result.added} to ${result.label} (${capTxt}), ${result.dupes} already in it`);
             } else {
-                toast(`Added to ${result.name} (${capTxt})`);
+                toast(`Added to ${result.label} (${capTxt})`);
             }
             if (onDone) onDone();
         });
@@ -575,10 +581,10 @@ window.Posts = (function () {
         if (!pillTarget || !doc) return;
         const t = targetPost();
         pillTarget.textContent = t
-            ? `${t.name} · ${countOf(t)}/${capOf(t)}`
+            ? `${t.name}${t.account ? ' @' + t.account : ''} · ${countOf(t)}/${capOf(t)}`
             : 'Choose post';
         pillTarget.title = t
-            ? `Adding to "${t.name}" (${platLabel(t)}, ${plural(countOf(t))}). Click to change post`
+            ? `Adding to "${t.name}" (${t.account ? '@' + t.account + ', ' : ''}${platLabel(t)}, ${plural(countOf(t))}). Click to change post`
             : 'Choose which post photos are added to';
     }
 
@@ -593,7 +599,9 @@ window.Posts = (function () {
         actionCount.textContent = selected.size > cap
             ? `${selected.size} selected (max ${cap} per post)`
             : `${selected.size} selected`;
-        actionTarget.textContent = t ? `${platLabel(t)} · ${t.name} · ${countOf(t)}/${cap}` : 'Choose post';
+        actionTarget.textContent = t
+            ? `${t.account ? '@' + t.account : platLabel(t)} · ${t.name} · ${countOf(t)}/${cap}`
+            : 'Choose post';
         actionAdd.textContent = t ? 'Add' : 'Add to post';
     }
 
@@ -621,7 +629,7 @@ window.Posts = (function () {
         } else {
             const t = targetPost();
             if (t && t.photos.some(ph => keyOf(ph) === key)) {
-                toast(`Already in ${t.name}`);
+                toast(`Already in ${t.name}${t.account ? ` (@${t.account})` : ''}`);
                 return;
             }
             const ref = refByKey.get(key) || { trip: cell.dataset.trip, id: cell.dataset.id };

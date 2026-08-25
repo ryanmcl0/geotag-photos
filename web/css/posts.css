@@ -279,3 +279,19 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-song::placeholder, .posts-caption::placeholder { color: #666; }
 .posts-caption { min-height: 60px; resize: vertical; }
 .posts-song:focus, .posts-caption:focus { outline: none; border-color: #666; }
+/* "already used" suggestions under the song field */
+.posts-song-wrap { position: relative; }
+.posts-song-suggest {
+  display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+  background: #1d1d1d; border: 1px solid #3a3a3a; border-radius: 0 0 8px 8px;
+  overflow: hidden; box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
+}
+.posts-song-suggest-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  width: 100%; background: none; border: none; color: #ddd; font-size: 13px;
+  text-align: left; padding: 8px 10px; cursor: pointer;
+}
+.posts-song-suggest-row:hover { background: #2a2a2a; }
+.posts-song-suggest-song { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.posts-song-suggest-used { color: #e2a336; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
+.posts-song-warn { display: none; color: #e2a336; font-size: 12px; margin: -2px 0 0; }

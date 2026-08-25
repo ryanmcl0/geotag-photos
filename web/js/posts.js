@@ -833,6 +833,53 @@ window.Posts = (function () {
         });
     }
 
+    // ---------- fuzzy song matching ----------
+    // "Already used this song?" check: case, punctuation and word order are
+    // ignored (artist/title can be swapped), small typos tolerated (edit
+    // distance scales with token length), and while typing the last token
+    // matches as a prefix so suggestions appear early.
+
+    const normSong = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]+/g, ' ').trim();
+
+    function editDist(a, b) {
+        if (a === b) return 0;
+        let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+        for (let i = 1; i <= a.length; i++) {
+            const cur = [i];
+            for (let j = 1; j <= b.length; j++) {
+                cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1,
+                    prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+            }
+            prev = cur;
+        }
+        return prev[b.length];
+    }
+
+    /** 0..1: how much of `typed` is found in `existing`, token-wise. */
+    function songSimilarity(typed, existing, allowPrefix) {
+        const a = normSong(typed).split(' ').filter(Boolean);
+        const b = normSong(existing).split(' ').filter(Boolean);
+        if (!a.length || !b.length) return 0;
+        const taken = new Set();
+        let hit = 0;
+        a.forEach((t, i) => {
+            const last = allowPrefix && i === a.length - 1;
+            const maxD = t.length >= 6 ? 2 : t.length >= 4 ? 1 : 0;
+            for (let j = 0; j < b.length; j++) {
+                if (taken.has(j)) continue;
+                const c = b[j];
+                if (c === t || (last && t.length >= 2 && c.startsWith(t)) ||
+                    (maxD && Math.abs(c.length - t.length) <= maxD && editDist(t, c) <= maxD)) {
+                    taken.add(j);
+                    hit++;
+                    break;
+                }
+            }
+        });
+        return hit / a.length;
+    }
+
     // Per-session expand/collapse overrides: posted drafts default collapsed,
     // unposted ones default expanded; these hold the ids the user has flipped.
     const expandedPosted = new Set();
@@ -1096,26 +1143,100 @@ window.Posts = (function () {
 
         // Caption + song for the post; ./post.py pull writes both into the
         // post folder as caption.txt. Saved on blur, empty clears the field.
+        // The song input fuzzy-matches against every other draft's song and
+        // warns when it looks already used; a cross-platform twin (a post
+        // with the same name, i.e. a Copy → IG/XHS of this one) is expected
+        // to share the song and is not flagged.
         if (set === 'main') {
             const meta = document.createElement('div');
             meta.className = 'posts-meta';
-            [['song', 'input', 'Song'], ['caption', 'textarea', 'Caption']].forEach(([field, tag, ph]) => {
-                const el = document.createElement(tag);
-                if (tag === 'input') el.type = 'text';
-                el.className = 'posts-' + field;
-                el.placeholder = ph;
-                el.value = post[field] || '';
-                el.addEventListener('change', () => {
-                    const v = el.value.trim();
-                    el.value = v;
-                    M(posts => {
-                        const p = posts.find(x => x.id === post.id);
-                        if (!p) return;
-                        if (v) p[field] = v; else delete p[field];
+
+            const songWrap = document.createElement('div');
+            songWrap.className = 'posts-song-wrap';
+            const song = document.createElement('input');
+            song.type = 'text';
+            song.className = 'posts-song';
+            song.placeholder = 'Song';
+            song.value = post.song || '';
+            const drop = document.createElement('div');
+            drop.className = 'posts-song-suggest';
+            const warn = document.createElement('p');
+            warn.className = 'posts-song-warn';
+
+            const matchesFor = (v, allowPrefix) => (v.trim().length < 3 ? [] :
+                doc.posts
+                    .filter(p => p.id !== post.id && p.song &&
+                        p.name.trim().toLowerCase() !== post.name.trim().toLowerCase())
+                    .map(p => ({ song: p.song, name: p.name,
+                                 score: songSimilarity(v, p.song, allowPrefix) }))
+                    .filter(m => m.score >= 0.6)
+                    .sort((x, y) => y.score - x.score)
+                    .slice(0, 3));
+
+            function refreshWarn() {
+                const top = matchesFor(song.value, false)[0];
+                warn.textContent = !top ? ''
+                    : normSong(top.song) === normSong(song.value)
+                        ? `⚠ Already used in "${top.name}"`
+                        : `⚠ Looks already used in "${top.name}": ${top.song}`;
+                warn.style.display = top ? 'block' : 'none';
+            }
+            function refreshDrop() {
+                drop.innerHTML = '';
+                const matches = matchesFor(song.value, true);
+                matches.forEach(m => {
+                    const row = document.createElement('button');
+                    row.type = 'button';
+                    row.className = 'posts-song-suggest-row';
+                    const s = document.createElement('span');
+                    s.className = 'posts-song-suggest-song';
+                    s.textContent = m.song;
+                    const n = document.createElement('span');
+                    n.className = 'posts-song-suggest-used';
+                    n.textContent = `already used in ${m.name}`;
+                    row.append(s, n);
+                    // mousedown (not click) so it wins over the input's blur
+                    row.addEventListener('mousedown', e => {
+                        e.preventDefault();
+                        song.value = m.song;
+                        drop.style.display = 'none';
+                        song.dispatchEvent(new Event('change'));
                     });
+                    drop.appendChild(row);
                 });
-                meta.appendChild(el);
+                drop.style.display = matches.length ? 'block' : 'none';
+            }
+            song.addEventListener('input', () => { refreshDrop(); warn.style.display = 'none'; });
+            song.addEventListener('focus', refreshDrop);
+            song.addEventListener('blur', () => { drop.style.display = 'none'; refreshWarn(); });
+            song.addEventListener('change', () => {
+                const v = song.value.trim();
+                song.value = v;
+                M(posts => {
+                    const p = posts.find(x => x.id === post.id);
+                    if (!p) return;
+                    if (v) p.song = v; else delete p.song;
+                });
+                refreshWarn();
             });
+            songWrap.append(song, drop);
+            meta.append(songWrap, warn);
+            refreshWarn();   // flag a duplicate song as soon as the card renders
+
+            const caption = document.createElement('textarea');
+            caption.className = 'posts-caption';
+            caption.placeholder = 'Caption';
+            caption.value = post.caption || '';
+            caption.addEventListener('change', () => {
+                const v = caption.value.trim();
+                caption.value = v;
+                M(posts => {
+                    const p = posts.find(x => x.id === post.id);
+                    if (!p) return;
+                    if (v) p.caption = v; else delete p.caption;
+                });
+            });
+            meta.appendChild(caption);
             card.appendChild(meta);
         }
 

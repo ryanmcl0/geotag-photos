@@ -2133,6 +2133,9 @@ function addDoubleTapDragZoom(gallery, pswpEl) {
 
     function onStart(e) {
         if (!pswpEl.classList.contains('pswp--open')) return;
+        // Overlays (e.g. the posts picker) stack above the lightbox in <body>;
+        // touches on them must keep their native behaviour (scrolling).
+        if (e.target instanceof Element && !pswpEl.contains(e.target)) return;
         if (e.touches.length !== 1) { dragActive = false; lastTapTime = 0; return; }
         const now = Date.now();
         if (lastTapTime > 0 && now - lastTapTime < TAP_GAP) {
@@ -2195,6 +2198,9 @@ function addWheelZoom(gallery, pswpEl) {
 
     function onWheel(e) {
         if (!pswpEl.classList.contains('pswp--open')) return;
+        // Overlays (e.g. the posts picker) stack above the lightbox in <body>;
+        // wheel events on them must scroll the overlay, not zoom the photo.
+        if (e.target instanceof Element && !pswpEl.contains(e.target)) return;
         // Always stop the browser page zoom and PhotoSwipe's close-on-scroll.
         e.preventDefault();
         e.stopImmediatePropagation();

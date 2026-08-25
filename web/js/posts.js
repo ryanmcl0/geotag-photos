@@ -179,6 +179,9 @@ window.Posts = (function () {
     };
     const MAP_SHORT = { route: 'route', pin: 'pin', china: 'China' };
 
+    // The IG accounts a post can be marked for (the card chip cycles these).
+    const IG_ACCOUNTS = ['ryanmcl0', 'urbex'];
+
     // Per-platform carousel caps. On Xiaohongshu the phone items are part of
     // the carousel so they count toward the cap; on Instagram the phone
     // bucket is behind-the-scenes material and exempt.
@@ -447,6 +450,7 @@ window.Posts = (function () {
                 row.querySelector('.posts-picker-name').textContent = (p.num ? `#${p.num} ` : '') + p.name;
                 row.querySelector('.posts-picker-count').textContent = (current && current.id === p.id ? 'current · ' : '')
                     + (p.posted ? 'posted · ' : '')
+                    + (p.account ? `@${p.account} · ` : '')
                     + `${platLabel(p)} ${countOf(p)}/${capOf(p)}`;
                 row.addEventListener('click', () => choose(p.id));
                 sheet.appendChild(row);
@@ -1064,6 +1068,27 @@ window.Posts = (function () {
                     if (on) p.posted = true; else delete p.posted;
                 }).then(() => renderManager(root));
             });
+            // Which IG account this post is for: a chip cycling through
+            // unset → @ryanmcl0 → @urbex → unset. IG drafts only.
+            if (platformOf(post) === 'ig') {
+                const idx = IG_ACCOUNTS.indexOf(post.account);
+                const acct = document.createElement('button');
+                acct.type = 'button';
+                acct.className = 'posts-account' + (idx !== -1 ? ` posts-account-${idx}` : '');
+                acct.textContent = post.account ? '@' + post.account : '@ account?';
+                acct.title = 'Which IG account this post is for — click to change';
+                acct.addEventListener('click', () => {
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p) return;
+                        const next = IG_ACCOUNTS[IG_ACCOUNTS.indexOf(p.account) + 1];
+                        if (next) p.account = next;
+                        else delete p.account;   // past the last handle: back to unset
+                    }).then(() => renderManager(root));
+                });
+                bar.appendChild(acct);
+            }
+
             // Duplicate this draft onto the other platform, keeping order,
             // blur/map marks, caption and song. XHS copies obey the combined
             // 18 cap: carousel photos first, phone items fill what remains.

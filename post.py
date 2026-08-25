@@ -201,6 +201,8 @@ def resolve_source(trip, photo_id):
     if exact.exists():
         return exact, None
     # Fall back to a recursive stem search (re-edits can change the suffix)
+    print(f"   🔍 {photo_id}: not at its manifest filename, scanning {base} "
+          "(slow over the network)...")
     norm = normalize_stem(photo_id)
     candidates = [f for f in base.rglob('*')
                   if f.suffix.lower() in SOURCE_EXTS
@@ -282,17 +284,26 @@ def blur_faces_file(src, dst):
         boxes = _face_boxes_tiled(img)
     H, W = img.shape[:2]
     for (x, y, w, h) in boxes:
-        pad = int(0.35 * max(w, h))
+        # Small pad so the ellipse inscribed below still covers chin/forehead;
+        # the pixelation itself is confined to a feathered face-shaped oval
+        # instead of stamping the whole padded rectangle.
+        pad = int(0.15 * max(w, h))
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
         roi = img[y0:y1, x0:x1]
         if roi.size == 0:
             continue
+        rh, rw = roi.shape[:2]
         blocks = 9
-        small = cv2.resize(roi, (blocks, max(1, blocks * roi.shape[0] // max(1, roi.shape[1]))),
+        small = cv2.resize(roi, (blocks, max(1, round(blocks * rh / rw))),
                            interpolation=cv2.INTER_LINEAR)
-        img[y0:y1, x0:x1] = cv2.resize(small, (x1 - x0, y1 - y0),
-                                       interpolation=cv2.INTER_NEAREST)
+        pix = cv2.resize(small, (rw, rh), interpolation=cv2.INTER_NEAREST)
+        mask = np.zeros((rh, rw), np.float32)
+        cv2.ellipse(mask, (rw // 2, rh // 2), (max(1, rw // 2), max(1, rh // 2)),
+                    0, 0, 360, 1.0, -1)
+        k = max(3, (min(rh, rw) // 8) | 1)   # odd Gaussian kernel = soft edge
+        mask = cv2.GaussianBlur(mask, (k, k), 0)[..., None]
+        img[y0:y1, x0:x1] = (pix * mask + roi * (1.0 - mask)).astype(img.dtype)
     ok, buf = cv2.imencode(src.suffix if src.suffix.lower() in ('.jpg', '.jpeg', '.png') else '.jpg',
                            img, [cv2.IMWRITE_JPEG_QUALITY, 96])
     if not ok:
@@ -347,17 +358,25 @@ def sync_post_dir(dest_dir, plan):
             if have_blur == want_blur:
                 tmp.rename(dst)
                 renamed += 1
+                print(f'   ↷ {dst.name}: reordered')
                 continue
             tmp.unlink()   # blur state changed: regenerate below
         if dst.exists():
             dst.unlink()
+        try:
+            mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
+        except OSError:
+            mb = ''
         if want_blur:
+            print(f'   ⇣ {dst.name}: copying + blurring faces{mb} — '
+                  'the first blur loads the face model, give it ~30s...')
             n = blur_faces_file(src, dst)
             label = f'{n} face(s) pixelated' if n > 0 else (
                 'no faces found — copied unblurred, check manually' if n == 0
                 else 'decode failed — copied unblurred')
             print(f'   🙂🚫 {dst.name}: {label}')
         else:
+            print(f'   ⇣ {dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
         blurred[src.name] = want_blur
         copied += 1
@@ -447,6 +466,7 @@ def sync_map_dir(dest_dir, plan, size):
                 cards[src.name] = {**was, 'file': target.name}
                 renamed += 1
             continue
+        print(f"   🗺  {target.name}: rendering {style} card...")
         card, why = map_card.card_for_photo(style, ref['trip'], ref['id'], size)
         if card is None:
             print(f"   ⚠️  no {style} card for {src.name}: {why}")
@@ -457,7 +477,6 @@ def sync_map_dir(dest_dir, plan, size):
         card.save(target, quality=93)
         cards[src.name] = {'file': target.name, 'style': style, 'size': list(size)}
         rendered += 1
-        print(f"   🗺  {target.name}: {style}")
     for name in [n for n in cards if n not in {s.name for _, _, s, _ in jobs}]:
         del cards[name]
     state_path.write_text(json.dumps(state, indent=1))
@@ -521,6 +540,11 @@ def sync_phone_dir(phone_dir, plan):
     for _, _, src, dst in plan:
         if dst.exists() and dst.stat().st_size == src.stat().st_size:
             continue
+        try:
+            mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
+        except OSError:
+            mb = ''
+        print(f'   ⇣ Phone/{dst.name}: copying{mb}...')
         shutil.copy2(src, dst)
         copied += 1
     return copied, removed
@@ -559,8 +583,16 @@ def cmd_pull(args):
         except (urllib.error.URLError, urllib.error.HTTPError):
             pass
 
+    print(f'⇣ Fetching drafts from {url} ...')
     doc = fetch_posts(url, env.get('CF_SITE_PASSWORD'), posts_password)
     posts = doc.get('posts', [])
+    if args.num is not None:
+        posts = [p for p in posts if p.get('num') == args.num]
+        if not posts:
+            avail = ', '.join(f"#{p['num']}" if p.get('num') else f'"{p["name"]}" (no number)'
+                              for p in doc.get('posts', []))
+            sys.exit(f'❌ No post numbered #{args.num}. Available: {avail or "none"}\n'
+                     '   (Numbers are assigned when the /posts page is opened.)')
     if args.post:
         posts = [p for p in posts if p['name'] == args.post]
         if not posts:
@@ -575,7 +607,9 @@ def cmd_pull(args):
     for post in posts:
         name = sanitize(post['name'])
         dest_dir = Path(args.dest) / name
-        print(f"── {post['name']} ({len(post['photos'])} photos) → {dest_dir}")
+        tag = f"#{post['num']} " if post.get('num') else ''
+        acct = f" @{post['account']}" if post.get('account') else ''
+        print(f"── {tag}{post['name']}{acct} ({len(post['photos'])} photos) → {dest_dir}")
         plan = []
         for i, ref in enumerate(post['photos'], 1):
             src, why = resolve_source(ref['trip'], ref['id'])
@@ -585,8 +619,16 @@ def cmd_pull(args):
                 continue
             plan.append((i, ref, src, dest_dir / f'{i:02d}_{src.name}'))
 
+        caption = (post.get('caption') or '').strip()
+        song = (post.get('song') or '').strip()
+        account = (post.get('account') or '').strip()
+        cap_what = ' + '.join(w for w, v in (('account', account), ('song', song),
+                                             ('caption', caption)) if v)
+
         if args.list or args.dry_run:
             size = post_card_size(post, plan)
+            if cap_what:
+                print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
             for i, ref, src, dst in plan:
                 print(f"   {i:02d} {src}  →  {dst}")
                 if ref.get('map'):
@@ -613,6 +655,24 @@ def cmd_pull(args):
             parts.append(f'{renamed} reordered')
         parts.append(f'{len(plan) - copied - renamed} already up to date')
         print(f"   ✓ {', '.join(parts)}")
+
+        # Account, caption and song noted on the site -> one caption.txt in
+        # the post folder. Rewritten only when the content actually changed.
+        if cap_what:
+            lines = []
+            if account:
+                lines.append(f'Account: @{account}')
+            if song:
+                lines.append(f'Song: {song}')
+            if caption:
+                if lines:
+                    lines.append('')
+                lines.append(caption)
+            txt = '\n'.join(lines) + '\n'
+            cap_path = dest_dir / 'caption.txt'
+            if not cap_path.exists() or cap_path.read_text() != txt:
+                cap_path.write_text(txt)
+                print(f"   ✓ caption.txt ({cap_what})")
 
         # Location cards for the photos marked with the map button -> <post>/maps/
         marked = [ref for _, ref, _, _ in plan if ref.get('map')]
@@ -940,6 +1000,8 @@ def main():
     s.set_defaults(func=cmd_serve)
 
     p = sub.add_parser('pull', help='pull drafts from the live site and copy their files')
+    p.add_argument('num', nargs='?', type=int,
+                   help='Only the post with this number (the #N on its card)')
     p.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
                    help='Destination root (default: /Volumes/RYAN/Edits/Posts)')
     p.add_argument('--post', help='Only this post name')

@@ -33,9 +33,15 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 // platform: 'ig' (default) or 'xhs'. On xhs the phone items are part of the
 // carousel, so photos+phone together are capped at 18; on ig the phone bucket
 // stays behind-the-scenes and uncapped. posted marks published drafts.
+// caption/song are free text pulled into <post>/caption.txt by ./post.py pull.
+// num is a small stable human-facing number (#N on the card, ./post.py pull N);
+// assigned once on creation and never reused, so it survives reorders.
+// account marks which IG account the post is for (free string, client cycles
+// through its known handles).
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
-    platform?: 'ig' | 'xhs'; posted?: boolean;
+    platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
+    num?: number; account?: string;
 }
 interface PostsDoc { version: number; updated: string | null; posts: Post[] }
 
@@ -54,6 +60,14 @@ function validPosts(posts: unknown): posts is Post[] {
             (ph.map === undefined || MAP_STYLES.includes(ph.map))) &&
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
+        ((p as Post).caption === undefined ||
+            (typeof (p as Post).caption === 'string' && (p as Post).caption!.length <= 4000)) &&
+        ((p as Post).song === undefined ||
+            (typeof (p as Post).song === 'string' && (p as Post).song!.length <= 300)) &&
+        ((p as Post).num === undefined ||
+            (Number.isInteger((p as Post).num) && (p as Post).num! >= 1 && (p as Post).num! <= 1000000)) &&
+        ((p as Post).account === undefined ||
+            (typeof (p as Post).account === 'string' && (p as Post).account!.length <= 40)) &&
         ((p as Post).platform !== 'xhs' ||
             (p as Post).photos.length + ((p as Post).phone?.length || 0) <= 18) &&
         ((p as Post).phone === undefined || (

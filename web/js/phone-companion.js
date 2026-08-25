@@ -250,6 +250,12 @@ window.PhoneCompanion = (function () {
                     if (p.kind === 'video') {
                         cell.href = `/phone/${p.path}/videos/` +
                             p.file.split('/').map(encodeURIComponent).join('/');
+                        // in-page player; plain href still works for cmd/middle-click new-tab
+                        cell.addEventListener('click', ev => {
+                            if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+                            ev.preventDefault();
+                            Gallery.openVideo(cell.href, p.file.split('/').pop());
+                        });
                         cell.style.cssText += ';height:110px;width:150px;border-radius:5px;' +
                             'background:#26262c;color:#ddd;display:flex;flex-direction:column;' +
                             'align-items:center;justify-content:center;gap:4px;text-decoration:none';

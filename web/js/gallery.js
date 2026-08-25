@@ -269,5 +269,50 @@ window.Gallery = (function () {
     if (window.Posts) Posts.attachLightbox(gallery, pswpEl, opts);
   }
 
-  return { photoUrl, renderGrid, openLightbox, lockedCover, photoKind, buildKindBar };
+  // In-page player for phone videos (uncompressed NAS originals; the <video>
+  // element range-streams them just like a tab would). Esc / ✕ / backdrop
+  // click closes; Esc is captured so an overlay underneath doesn't also close.
+  function openVideo(url, label) {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.92);' +
+      'display:flex;align-items:center;justify-content:center';
+    const vid = document.createElement('video');
+    vid.src = url;
+    vid.controls = true;
+    vid.autoplay = true;
+    vid.playsInline = true;
+    vid.style.cssText = 'max-width:96vw;max-height:92vh;outline:none';
+    const onKey = e => {
+      if (e.key !== 'Escape') return;
+      e.stopImmediatePropagation();
+      close();
+    };
+    const close = () => {
+      vid.pause();
+      vid.removeAttribute('src');
+      vid.load();   // actually release the stream
+      document.removeEventListener('keydown', onKey, true);
+      ov.remove();
+    };
+    document.addEventListener('keydown', onKey, true);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '✕';
+    x.style.cssText = 'position:absolute;top:14px;right:16px;background:rgba(0,0,0,.6);' +
+      'color:#fff;border:1px solid #555;border-radius:6px;padding:4px 10px;' +
+      'cursor:pointer;font-size:15px';
+    x.addEventListener('click', close);
+    ov.append(vid, x);
+    if (label) {
+      const cap = document.createElement('div');
+      cap.textContent = label;
+      cap.style.cssText = 'position:absolute;bottom:12px;left:16px;color:#ccc;' +
+        'font:12px -apple-system,sans-serif;opacity:.8';
+      ov.appendChild(cap);
+    }
+    document.body.appendChild(ov);
+  }
+
+  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar };
 })();

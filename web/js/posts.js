@@ -1340,6 +1340,12 @@ window.Posts = (function () {
                     vid.href = `/phone/trips/${ref.trip}/videos/` +
                         ref.file.split('/').map(encodeURIComponent).join('/');
                     vid.target = '_blank';
+                    // in-page player; plain href still works for cmd/middle-click new-tab
+                    vid.addEventListener('click', ev => {
+                        if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+                        ev.preventDefault();
+                        if (window.Gallery) Gallery.openVideo(vid.href, ref.file.split('/').pop());
+                    });
                     vid.style.cssText = 'height:96px;width:128px;border-radius:5px;background:#26262c;' +
                         'color:#ddd;display:flex;flex-direction:column;align-items:center;' +
                         'justify-content:center;gap:3px;text-decoration:none';

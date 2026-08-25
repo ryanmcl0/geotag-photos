@@ -40,6 +40,15 @@
   border-radius: 50%; cursor: pointer; font-size: 12px; line-height: 1;
 }
 #posts-pill button:hover { color: #fff; background: #333; }
+/* current-post chip: name + count of the post "+ Post"/"Add" go to */
+#posts-pill .posts-pill-target {
+  width: auto; height: auto; border-radius: 999px; margin-left: 8px;
+  padding: 4px 10px; background: #2c2c2c; color: #ddd; font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw;
+}
+#posts-pill .posts-pill-target:hover { background: #3d3d3d; color: #fff; }
+/* stays empty until the posts doc has loaded (or failed) */
+#posts-pill .posts-pill-target:empty { display: none; }
 /* while selecting, the action bar is the mode UI - keep the corner clear */
 body.posts-selecting #posts-pill { display: none; }
 
@@ -162,6 +171,15 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-name:hover { border-color: #333; }
 .posts-name:focus { outline: none; border-color: #666; background: #202020; }
 .posts-count { color: #888; font-size: 12px; white-space: nowrap; margin-right: auto; }
+.posts-num { color: #777; font-size: 13px; font-weight: 700; white-space: nowrap; }
+/* IG account chip: dim until an account is picked */
+.posts-account {
+  background: none; border: 1px solid #3a3a3a; border-radius: 999px; color: #666;
+  font-size: 12px; padding: 3px 10px; cursor: pointer; white-space: nowrap;
+}
+.posts-account:hover { color: #fff; border-color: #666; }
+.posts-account-0 { color: #7fb2f0; border-color: #2c5382; }
+.posts-account-1 { color: #e2a336; border-color: #7a5a1e; }
 .posts-delete {
   background: none; border: 1px solid #3a3a3a; color: #999; border-radius: 6px;
   padding: 6px 12px; font-size: 12px; cursor: pointer;
@@ -239,11 +257,50 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   cursor: pointer; white-space: nowrap; user-select: none;
 }
 .posts-posted-toggle input { accent-color: #22c55e; width: 15px; height: 15px; cursor: pointer; }
-.posts-card-collapsed { padding: 10px 16px; opacity: .72; }
+.posts-card-collapsed { padding: 10px 16px; }
+.posts-card-collapsed.posts-card-posted { opacity: .72; }
 .posts-card-collapsed .posts-card-bar { margin-bottom: 0; }
 .posts-expand {
   background: none; border: 1px solid #3a3a3a; border-radius: 6px; color: #aaa;
   width: 28px; height: 26px; cursor: pointer; font-size: 12px;
 }
 .posts-expand:hover { color: #fff; border-color: #666; }
+.posts-expand:disabled { opacity: .35; cursor: default; }
+.posts-expand:disabled:hover { color: #aaa; border-color: #3a3a3a; }
+/* card reorder: drag handle on pointer devices, ▲▼ buttons on touch */
+.posts-move { font-size: 9px; display: none; }
+.posts-drag-handle { cursor: grab; color: #555; font-size: 15px; user-select: none; }
+.posts-drag-handle:hover { color: #aaa; }
+.posts-drag-handle:active { cursor: grabbing; }
+.posts-card.drag-over { outline: 2px dashed #666; outline-offset: -2px; }
+@media (hover: none) {
+  .posts-move { display: inline-block; }
+  .posts-drag-handle { display: none; }
+}
 .posts-picker-posted { opacity: .5; }
+
+/* ---------- caption + song (pulled into caption.txt) ---------- */
+.posts-meta { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.posts-song, .posts-caption {
+  background: #141414; border: 1px solid #333; border-radius: 6px; color: #ddd;
+  font: inherit; font-size: 13px; padding: 8px 10px; width: 100%; box-sizing: border-box;
+}
+.posts-song::placeholder, .posts-caption::placeholder { color: #666; }
+.posts-caption { min-height: 60px; resize: vertical; }
+.posts-song:focus, .posts-caption:focus { outline: none; border-color: #666; }
+/* "already used" suggestions under the song field */
+.posts-song-wrap { position: relative; }
+.posts-song-suggest {
+  display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+  background: #1d1d1d; border: 1px solid #3a3a3a; border-radius: 0 0 8px 8px;
+  overflow: hidden; box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
+}
+.posts-song-suggest-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  width: 100%; background: none; border: none; color: #ddd; font-size: 13px;
+  text-align: left; padding: 8px 10px; cursor: pointer;
+}
+.posts-song-suggest-row:hover { background: #2a2a2a; }
+.posts-song-suggest-song { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.posts-song-suggest-used { color: #e2a336; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
+.posts-song-warn { display: none; color: #e2a336; font-size: 12px; margin: -2px 0 0; }

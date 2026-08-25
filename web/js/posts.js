@@ -81,6 +81,11 @@ window.Posts = (function () {
         location.reload();
     }
 
+    // Current-post chip inside the pill: shows which post "+ Post" / "Add"
+    // target, with name and count; clicking it opens the post switcher.
+    // Empty (hidden by CSS) until the posts doc has loaded.
+    let pillTarget = null;
+
     (function addModePill() {
         const pill = document.createElement('div');
         pill.id = 'posts-pill';
@@ -88,12 +93,16 @@ window.Posts = (function () {
         link.href = '/posts';
         link.textContent = 'Posts mode';
         link.title = 'Open the posts manager';
+        pillTarget = document.createElement('button');
+        pillTarget.type = 'button';
+        pillTarget.className = 'posts-pill-target';
+        pillTarget.addEventListener('click', () => openPicker([], null, { selectOnly: true }));
         const exit = document.createElement('button');
         exit.type = 'button';
         exit.title = 'Exit posts mode';
         exit.textContent = '✕';
         exit.addEventListener('click', exitPostsMode);
-        pill.append(link, exit);
+        pill.append(link, pillTarget, exit);
         document.body.appendChild(pill);
     })();
 
@@ -170,6 +179,9 @@ window.Posts = (function () {
     };
     const MAP_SHORT = { route: 'route', pin: 'pin', china: 'China' };
 
+    // The IG accounts a post can be marked for (the card chip cycles these).
+    const IG_ACCOUNTS = ['ryanmcl0', 'urbex'];
+
     // Per-platform carousel caps. On Xiaohongshu the phone items are part of
     // the carousel so they count toward the cap; on Instagram the phone
     // bucket is behind-the-scenes material and exempt.
@@ -197,9 +209,17 @@ window.Posts = (function () {
         return null;
     }
 
+    // How a post is named in warnings/toasts: account (or platform) included,
+    // so "already in ..." tells you WHICH account's post has the photo.
+    const postLabel = p => `"${p.name}"`
+        + (p.account ? ` (@${p.account})` : platformOf(p) === 'xhs' ? ' (XHS)' : '');
+
     const keyOf = ref => `${ref.trip}::${ref.id || ref.file}`;
     const plural = n => `${n} photo${n === 1 ? '' : 's'}`;
     const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    // Human-facing post number (#N on the card, ./post.py pull N): next above
+    // the highest ever used, so deleting a post never re-issues its number.
+    const nextNum = posts => posts.reduce((m, p) => Math.max(m, p.num || 0), 0) + 1;
 
     function defaultName(posts) {
         let n = posts.length + 1;
@@ -328,10 +348,10 @@ window.Posts = (function () {
         if (!orientationOk(postId, refs, platform)) return;
         const conflicts = conflictsFor(refs, postId);
         if (conflicts.length) {
-            const names = [...new Set(conflicts.map(c => c.post.name))];
+            const names = [...new Set(conflicts.map(c => postLabel(c.post)))];
             const nDup = new Set(conflicts.map(c => keyOf(c.ref))).size;
             const msg = refs.length === 1
-                ? `This photo is already in "${names[0]}". Add anyway?`
+                ? `This photo is already in ${names[0]}. Add anyway?`
                 : `${nDup} of these photos are already in other posts (${names.join(', ')}). Add anyway?`;
             if (!confirm(msg)) return;
         }
@@ -339,11 +359,13 @@ window.Posts = (function () {
         mutate(posts => {
             let post = posts.find(p => p.id === postId);
             if (!post) {
-                post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                post = { id: postId, num: nextNum(posts), name: defaultName(posts),
+                         created: new Date().toISOString(), photos: [] };
                 if (platform === 'xhs') post.platform = 'xhs';
-                posts.push(post);
+                posts.unshift(post);   // new drafts go to the top of the list
             }
             result.name = post.name;
+            result.label = post.name + (post.account ? ` (@${post.account})` : '');
             Object.assign(result, addRefsToPost(post, refs));
         }).then(okSave => {
             if (!okSave) return;
@@ -352,21 +374,21 @@ window.Posts = (function () {
             restampSelections();
             const capTxt = `${result.count}/${result.cap}`;
             if (result.phoneAdded && result.added === result.phoneAdded && result.count !== undefined && result.cap === 20) {
-                toast(`Added ${result.phoneAdded > 1 ? result.phoneAdded + ' ' : ''}to ${result.name} (Phone section, no cap)`);
+                toast(`Added ${result.phoneAdded > 1 ? result.phoneAdded + ' ' : ''}to ${result.label} (Phone section, no cap)`);
             } else if (result.hitCap && result.added) {
-                toast(`Added ${result.added}, ${result.name} is now full (${capTxt})`);
+                toast(`Added ${result.added}, ${result.label} is now full (${capTxt})`);
             } else if (result.hitCap) {
-                toast(`${result.name} is full (${capTxt})`);
+                toast(`${result.label} is full (${capTxt})`);
                 return;   // nothing was added, keep the selection
             } else if (!result.added) {
                 toast(refs.length === 1
-                    ? `Already in ${result.name} (${capTxt})`
-                    : `All ${refs.length} already in ${result.name} (${capTxt})`);
+                    ? `Already in ${result.label} (${capTxt})`
+                    : `All ${refs.length} already in ${result.label} (${capTxt})`);
                 return;   // nothing was added, keep the selection
             } else if (result.dupes) {
-                toast(`Added ${result.added} to ${result.name} (${capTxt}), ${result.dupes} already in it`);
+                toast(`Added ${result.added} to ${result.label} (${capTxt}), ${result.dupes} already in it`);
             } else {
-                toast(`Added to ${result.name} (${capTxt})`);
+                toast(`Added to ${result.label} (${capTxt})`);
             }
             if (onDone) onDone();
         });
@@ -403,9 +425,10 @@ window.Posts = (function () {
                 const result = {};
                 mutate(posts => {
                     if (!posts.find(p => p.id === postId)) {
-                        const post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                        const post = { id: postId, num: nextNum(posts), name: defaultName(posts),
+                                       created: new Date().toISOString(), photos: [] };
                         if (platform === 'xhs') post.platform = 'xhs';
-                        posts.push(post);
+                        posts.unshift(post);   // new drafts go to the top of the list
                         result.name = post.name;
                     }
                 }).then(okSave => {
@@ -430,9 +453,10 @@ window.Posts = (function () {
                 if (p.posted) row.classList.add('posts-picker-posted');
                 if (current && current.id === p.id) row.classList.add('posts-picker-current');
                 row.innerHTML = `<span class="posts-picker-name"></span><span class="posts-picker-count"></span>`;
-                row.querySelector('.posts-picker-name').textContent = p.name;
+                row.querySelector('.posts-picker-name').textContent = (p.num ? `#${p.num} ` : '') + p.name;
                 row.querySelector('.posts-picker-count').textContent = (current && current.id === p.id ? 'current · ' : '')
                     + (p.posted ? 'posted · ' : '')
+                    + (p.account ? `@${p.account} · ` : '')
                     + `${platLabel(p)} ${countOf(p)}/${capOf(p)}`;
                 row.addEventListener('click', () => choose(p.id));
                 sheet.appendChild(row);
@@ -553,7 +577,19 @@ window.Posts = (function () {
         restampSelections();
     }
 
+    function updatePill() {
+        if (!pillTarget || !doc) return;
+        const t = targetPost();
+        pillTarget.textContent = t
+            ? `${t.name}${t.account ? ' @' + t.account : ''} · ${countOf(t)}/${capOf(t)}`
+            : 'Choose post';
+        pillTarget.title = t
+            ? `Adding to "${t.name}" (${t.account ? '@' + t.account + ', ' : ''}${platLabel(t)}, ${plural(countOf(t))}). Click to change post`
+            : 'Choose which post photos are added to';
+    }
+
     function updateSelectUi() {
+        updatePill();
         if (!fab) return;
         fab.classList.toggle('active', selectMode);
         fab.textContent = selectMode ? 'Selecting...' : 'Select';
@@ -563,7 +599,9 @@ window.Posts = (function () {
         actionCount.textContent = selected.size > cap
             ? `${selected.size} selected (max ${cap} per post)`
             : `${selected.size} selected`;
-        actionTarget.textContent = t ? `${platLabel(t)} · ${t.name} · ${countOf(t)}/${cap}` : 'Choose post';
+        actionTarget.textContent = t
+            ? `${t.account ? '@' + t.account : platLabel(t)} · ${t.name} · ${countOf(t)}/${cap}`
+            : 'Choose post';
         actionAdd.textContent = t ? 'Add' : 'Add to post';
     }
 
@@ -591,7 +629,7 @@ window.Posts = (function () {
         } else {
             const t = targetPost();
             if (t && t.photos.some(ph => keyOf(ph) === key)) {
-                toast(`Already in ${t.name}`);
+                toast(`Already in ${t.name}${t.account ? ` (@${t.account})` : ''}`);
                 return;
             }
             const ref = refByKey.get(key) || { trip: cell.dataset.trip, id: cell.dataset.id };
@@ -622,6 +660,13 @@ window.Posts = (function () {
                 renderPasswordForm(root);
                 return;
             }
+            // One-time backfill: give pre-numbering drafts their #N (in stored
+            // order). Renders even if the save fails — numbers are then local.
+            if (doc.posts.some(p => !p.num)) {
+                mutate(posts => posts.forEach(p => { if (!p.num) p.num = nextNum(posts); }))
+                    .then(() => renderManager(root));
+                return;
+            }
             renderManager(root);
         });
     }
@@ -635,6 +680,7 @@ window.Posts = (function () {
     } catch (e) { /* private mode */ }
 
     function renderManager(root) {
+        updatePill();
         root.innerHTML = '';
         const head = document.createElement('div');
         head.className = 'posts-head';
@@ -648,11 +694,19 @@ window.Posts = (function () {
             newBtn.className = 'posts-new-btn';
             newBtn.textContent = plat === 'xhs' ? '+ New XHS post' : '+ New IG post';
             newBtn.addEventListener('click', () => {
+                // A freshly created post becomes the current one, so "+ Post"
+                // anywhere on the site adds straight to it.
+                const id = newId();
                 mutate(posts => {
-                    const post = { id: newId(), name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                    if (posts.find(p => p.id === id)) return;
+                    const post = { id, num: nextNum(posts), name: defaultName(posts),
+                                   created: new Date().toISOString(), photos: [] };
                     if (plat === 'xhs') post.platform = 'xhs';
-                    posts.push(post);
-                }).then(() => renderManager(root));
+                    posts.unshift(post);   // new drafts go to the top of the list
+                }).then(okSave => {
+                    if (okSave) setTarget(id);
+                    renderManager(root);
+                });
             });
             head.appendChild(newBtn);
         }
@@ -804,8 +858,91 @@ window.Posts = (function () {
         });
     }
 
-    // Posted drafts the user has temporarily expanded this session.
+    // ---------- fuzzy song matching ----------
+    // "Already used this song?" check: case, punctuation and word order are
+    // ignored (artist/title can be swapped), small typos tolerated (edit
+    // distance scales with token length), and while typing the last token
+    // matches as a prefix so suggestions appear early.
+
+    const normSong = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]+/g, ' ').trim();
+
+    function editDist(a, b) {
+        if (a === b) return 0;
+        let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+        for (let i = 1; i <= a.length; i++) {
+            const cur = [i];
+            for (let j = 1; j <= b.length; j++) {
+                cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1,
+                    prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+            }
+            prev = cur;
+        }
+        return prev[b.length];
+    }
+
+    /** 0..1: how much of `typed` is found in `existing`, token-wise. */
+    function songSimilarity(typed, existing, allowPrefix) {
+        const a = normSong(typed).split(' ').filter(Boolean);
+        const b = normSong(existing).split(' ').filter(Boolean);
+        if (!a.length || !b.length) return 0;
+        const taken = new Set();
+        let hit = 0;
+        a.forEach((t, i) => {
+            const last = allowPrefix && i === a.length - 1;
+            const maxD = t.length >= 6 ? 2 : t.length >= 4 ? 1 : 0;
+            for (let j = 0; j < b.length; j++) {
+                if (taken.has(j)) continue;
+                const c = b[j];
+                if (c === t || (last && t.length >= 2 && c.startsWith(t)) ||
+                    (maxD && Math.abs(c.length - t.length) <= maxD && editDist(t, c) <= maxD)) {
+                    taken.add(j);
+                    hit++;
+                    break;
+                }
+            }
+        });
+        return hit / a.length;
+    }
+
+    // Per-session expand/collapse overrides: posted drafts default collapsed,
+    // unposted ones default expanded; these hold the ids the user has flipped.
     const expandedPosted = new Set();
+    const collapsedUnposted = new Set();
+    const cardOpen = post => (post.posted ? expandedPosted.has(post.id) : !collapsedUnposted.has(post.id));
+
+    /** Move a draft one slot up/down among the cards around it. Display order
+     *  within a same-platform, same posted-state group IS stored order, so the
+     *  move swaps with the neighbouring card the user actually sees. */
+    function movePost(root, post, dir) {
+        mutate(posts => {
+            const group = posts.filter(p => platformOf(p) === platformOf(post) && !!p.posted === !!post.posted);
+            const gi = group.findIndex(p => p.id === post.id);
+            const neighbor = gi === -1 ? null : group[gi + dir];
+            if (!neighbor) return;
+            const from = posts.findIndex(p => p.id === post.id);
+            const [moved] = posts.splice(from, 1);
+            const to = posts.findIndex(p => p.id === neighbor.id) + (dir > 0 ? 1 : 0);
+            posts.splice(to, 0, moved);
+        }).then(() => renderManager(root));
+    }
+
+    /** Drop a dragged card onto another: the moved draft takes the target's
+     *  place (before it when dragging up, after it when dragging down). Only
+     *  within the same platform + posted-state group, where display order is
+     *  stored order — a cross-group drop would not visibly change anything. */
+    function movePostTo(root, fromId, target) {
+        mutate(posts => {
+            const moved = posts.find(p => p.id === fromId);
+            const tp = posts.find(p => p.id === target.id);
+            if (!moved || !tp || moved === tp) return;
+            if (platformOf(moved) !== platformOf(tp) || !!moved.posted !== !!tp.posted) return;
+            const from = posts.indexOf(moved);
+            const wasBefore = from < posts.indexOf(tp);
+            posts.splice(from, 1);
+            posts.splice(posts.indexOf(tp) + (wasBefore ? 1 : 0), 0, moved);
+        }).then(() => renderManager(root));
+    }
 
     function renderCard(root, post, set) {
         set = set || 'main';
@@ -815,6 +952,13 @@ window.Posts = (function () {
 
         const bar = document.createElement('div');
         bar.className = 'posts-card-bar';
+        if (set === 'main' && post.num) {
+            const num = document.createElement('span');
+            num.className = 'posts-num';
+            num.textContent = `#${post.num}`;
+            num.title = `./post.py pull ${post.num}`;
+            bar.appendChild(num);
+        }
         const name = document.createElement('input');
         name.className = 'posts-name';
         name.value = post.name;
@@ -824,7 +968,7 @@ window.Posts = (function () {
             M(posts => {
                 const p = posts.find(x => x.id === post.id);
                 if (p) p.name = v;
-            });
+            }).then(() => updatePill());
         });
         const count = document.createElement('span');
         count.className = 'posts-count';
@@ -870,7 +1014,10 @@ window.Posts = (function () {
                     const trimmed = post.photos.length + (post.phone || []).length
                         - dup.photos.length - (dup.phone || []).length;
                     mutate(posts => {
-                        if (!posts.some(p => p.name === dup.name && platformOf(p) === plat)) posts.push(dup);
+                        if (!posts.some(p => p.name === dup.name && platformOf(p) === plat)) {
+                            dup.num = nextNum(posts);
+                            posts.push(dup);
+                        }
                     }).then(okSave => {
                         if (okSave) {
                             toast(`Copied "${post.name}" to ${plat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
@@ -883,6 +1030,35 @@ window.Posts = (function () {
             });
         }
         if (set === 'main') {
+            // Drag the card by its handle to reorder. The card only becomes
+            // draggable while the handle is pressed, so text in the name and
+            // caption fields stays selectable; a distinct data type keeps
+            // card drops apart from the thumbs' own drag-to-reorder.
+            const handle = document.createElement('span');
+            handle.className = 'posts-drag-handle';
+            handle.textContent = '⠿';
+            handle.title = 'Drag to reorder';
+            handle.addEventListener('mousedown', () => { card.draggable = true; });
+            bar.insertBefore(handle, bar.firstChild);
+            card.addEventListener('dragstart', e => {
+                if (!card.draggable) return;   // a thumb drag bubbling up
+                e.dataTransfer.setData('text/posts-card', post.id);
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            card.addEventListener('dragend', () => { card.draggable = false; });
+            card.addEventListener('dragover', e => {
+                if (!e.dataTransfer.types.includes('text/posts-card')) return;
+                e.preventDefault();
+                card.classList.add('drag-over');
+            });
+            card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+            card.addEventListener('drop', e => {
+                if (!e.dataTransfer.types.includes('text/posts-card')) return;
+                e.preventDefault();
+                card.classList.remove('drag-over');
+                movePostTo(root, e.dataTransfer.getData('text/posts-card'), post);
+            });
+
             // published tick: posted drafts collapse to just their bar
             const postedLbl = document.createElement('label');
             postedLbl.className = 'posts-posted-toggle';
@@ -891,28 +1067,107 @@ window.Posts = (function () {
             tick.checked = !!post.posted;
             tick.addEventListener('change', () => {
                 const on = tick.checked;
-                if (!on) expandedPosted.delete(post.id);
+                // reset to the new default state (posted closed, unposted open)
+                expandedPosted.delete(post.id);
+                collapsedUnposted.delete(post.id);
                 M(posts => {
                     const p = posts.find(x => x.id === post.id);
                     if (!p) return;
                     if (on) p.posted = true; else delete p.posted;
                 }).then(() => renderManager(root));
             });
-            postedLbl.append(tick, document.createTextNode(' Posted'));
-            bar.appendChild(postedLbl);
-            if (post.posted) {
-                const expand = document.createElement('button');
-                expand.type = 'button';
-                expand.className = 'posts-expand';
-                const isOpen = expandedPosted.has(post.id);
-                expand.textContent = isOpen ? '▾' : '▸';
-                expand.title = isOpen ? 'Collapse' : 'Show photos';
-                expand.addEventListener('click', () => {
-                    if (isOpen) expandedPosted.delete(post.id); else expandedPosted.add(post.id);
+            // Which IG account this post is for: a chip cycling through
+            // unset → @ryanmcl0 → @urbex → unset. IG drafts only.
+            if (platformOf(post) === 'ig') {
+                const idx = IG_ACCOUNTS.indexOf(post.account);
+                const acct = document.createElement('button');
+                acct.type = 'button';
+                acct.className = 'posts-account' + (idx !== -1 ? ` posts-account-${idx}` : '');
+                acct.textContent = post.account ? '@' + post.account : '@ account?';
+                acct.title = 'Which IG account this post is for — click to change';
+                acct.addEventListener('click', () => {
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p) return;
+                        const next = IG_ACCOUNTS[IG_ACCOUNTS.indexOf(p.account) + 1];
+                        if (next) p.account = next;
+                        else delete p.account;   // past the last handle: back to unset
+                    }).then(() => renderManager(root));
+                });
+                bar.appendChild(acct);
+            }
+
+            // Duplicate this draft onto the other platform, keeping order,
+            // blur/map marks, caption and song. XHS copies obey the combined
+            // 18 cap: carousel photos first, phone items fill what remains.
+            const otherPlat = platformOf(post) === 'xhs' ? 'ig' : 'xhs';
+            const dupBtn = document.createElement('button');
+            dupBtn.type = 'button';
+            dupBtn.className = 'posts-copy-btn';
+            dupBtn.textContent = otherPlat === 'xhs' ? 'Copy → XHS' : 'Copy → IG';
+            dupBtn.title = otherPlat === 'xhs'
+                ? 'Duplicate this draft as a Xiaohongshu post'
+                : 'Duplicate this draft as an Instagram post';
+            dupBtn.addEventListener('click', () => {
+                const dup = {
+                    id: newId(), name: post.name, created: new Date().toISOString(),
+                    photos: post.photos.map(ph => ({ ...ph }))
+                };
+                if (post.caption) dup.caption = post.caption;
+                if (post.song) dup.song = post.song;
+                let phone = (post.phone || []).map(ph => ({ ...ph }));
+                if (otherPlat === 'xhs') {
+                    dup.platform = 'xhs';
+                    dup.photos = dup.photos.slice(0, CAPS.xhs);
+                    phone = phone.slice(0, Math.max(0, CAPS.xhs - dup.photos.length));
+                }
+                if (phone.length) dup.phone = phone;
+                const trimmed = post.photos.length + (post.phone || []).length
+                    - dup.photos.length - (dup.phone || []).length;
+                mutate(posts => {
+                    if (!posts.some(p => p.id === dup.id)) {
+                        dup.num = nextNum(posts);
+                        posts.unshift(dup);
+                    }
+                }).then(okSave => {
+                    if (okSave) {
+                        toast(`Copied "${post.name}" to ${otherPlat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
+                            + (trimmed > 0 ? ` (${trimmed} trimmed for the 18 cap)` : ''));
+                    }
                     renderManager(root);
                 });
-                bar.appendChild(expand);
-            }
+            });
+            bar.appendChild(dupBtn);
+            postedLbl.append(tick, document.createTextNode(' Posted'));
+            bar.appendChild(postedLbl);
+            // Reorder arrows: move the card among its visible neighbours.
+            const group = doc.posts.filter(p => platformOf(p) === platformOf(post) && !!p.posted === !!post.posted);
+            const gi = group.findIndex(p => p.id === post.id);
+            [['▲', -1, 'Move up'], ['▼', 1, 'Move down']].forEach(([sym, dir, label]) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'posts-expand posts-move';
+                b.textContent = sym;
+                b.title = label;
+                b.disabled = gi === -1 || (dir === -1 ? gi === 0 : gi === group.length - 1);
+                b.addEventListener('click', () => movePost(root, post, dir));
+                bar.appendChild(b);
+            });
+            const expand = document.createElement('button');
+            expand.type = 'button';
+            expand.className = 'posts-expand';
+            const isOpen = cardOpen(post);
+            expand.textContent = isOpen ? '▾' : '▸';
+            expand.title = isOpen ? 'Collapse' : 'Show photos';
+            expand.addEventListener('click', () => {
+                if (post.posted) {
+                    if (isOpen) expandedPosted.delete(post.id); else expandedPosted.add(post.id);
+                } else {
+                    if (isOpen) collapsedUnposted.add(post.id); else collapsedUnposted.delete(post.id);
+                }
+                renderManager(root);
+            });
+            bar.appendChild(expand);
         }
         bar.appendChild(del);
         // Local-only phone-library companion: shows phone photos taken around
@@ -927,9 +1182,10 @@ window.Posts = (function () {
             card.appendChild(note);
         }
 
-        // Posted drafts collapse to just their bar until expanded.
-        if (set === 'main' && post.posted && !expandedPosted.has(post.id)) {
+        // Collapsed drafts show just their bar (posted ones start collapsed).
+        if (set === 'main' && !cardOpen(post)) {
             card.classList.add('posts-card-collapsed');
+            if (post.posted) card.classList.add('posts-card-posted');
             return card;
         }
 
@@ -943,6 +1199,105 @@ window.Posts = (function () {
             strip.appendChild(hint);
         }
         card.appendChild(strip);
+
+        // Caption + song for the post; ./post.py pull writes both into the
+        // post folder as caption.txt. Saved on blur, empty clears the field.
+        // The song input fuzzy-matches against every other draft's song and
+        // warns when it looks already used; a cross-platform twin (a post
+        // with the same name, i.e. a Copy → IG/XHS of this one) is expected
+        // to share the song and is not flagged.
+        if (set === 'main') {
+            const meta = document.createElement('div');
+            meta.className = 'posts-meta';
+
+            const songWrap = document.createElement('div');
+            songWrap.className = 'posts-song-wrap';
+            const song = document.createElement('input');
+            song.type = 'text';
+            song.className = 'posts-song';
+            song.placeholder = 'Song';
+            song.value = post.song || '';
+            const drop = document.createElement('div');
+            drop.className = 'posts-song-suggest';
+            const warn = document.createElement('p');
+            warn.className = 'posts-song-warn';
+
+            const matchesFor = (v, allowPrefix) => (v.trim().length < 3 ? [] :
+                doc.posts
+                    .filter(p => p.id !== post.id && p.song &&
+                        p.name.trim().toLowerCase() !== post.name.trim().toLowerCase())
+                    .map(p => ({ song: p.song, name: p.name,
+                                 score: songSimilarity(v, p.song, allowPrefix) }))
+                    .filter(m => m.score >= 0.6)
+                    .sort((x, y) => y.score - x.score)
+                    .slice(0, 3));
+
+            function refreshWarn() {
+                const top = matchesFor(song.value, false)[0];
+                warn.textContent = !top ? ''
+                    : normSong(top.song) === normSong(song.value)
+                        ? `⚠ Already used in "${top.name}"`
+                        : `⚠ Looks already used in "${top.name}": ${top.song}`;
+                warn.style.display = top ? 'block' : 'none';
+            }
+            function refreshDrop() {
+                drop.innerHTML = '';
+                const matches = matchesFor(song.value, true);
+                matches.forEach(m => {
+                    const row = document.createElement('button');
+                    row.type = 'button';
+                    row.className = 'posts-song-suggest-row';
+                    const s = document.createElement('span');
+                    s.className = 'posts-song-suggest-song';
+                    s.textContent = m.song;
+                    const n = document.createElement('span');
+                    n.className = 'posts-song-suggest-used';
+                    n.textContent = `already used in ${m.name}`;
+                    row.append(s, n);
+                    // mousedown (not click) so it wins over the input's blur
+                    row.addEventListener('mousedown', e => {
+                        e.preventDefault();
+                        song.value = m.song;
+                        drop.style.display = 'none';
+                        song.dispatchEvent(new Event('change'));
+                    });
+                    drop.appendChild(row);
+                });
+                drop.style.display = matches.length ? 'block' : 'none';
+            }
+            song.addEventListener('input', () => { refreshDrop(); warn.style.display = 'none'; });
+            song.addEventListener('focus', refreshDrop);
+            song.addEventListener('blur', () => { drop.style.display = 'none'; refreshWarn(); });
+            song.addEventListener('change', () => {
+                const v = song.value.trim();
+                song.value = v;
+                M(posts => {
+                    const p = posts.find(x => x.id === post.id);
+                    if (!p) return;
+                    if (v) p.song = v; else delete p.song;
+                });
+                refreshWarn();
+            });
+            songWrap.append(song, drop);
+            meta.append(songWrap, warn);
+            refreshWarn();   // flag a duplicate song as soon as the card renders
+
+            const caption = document.createElement('textarea');
+            caption.className = 'posts-caption';
+            caption.placeholder = 'Caption';
+            caption.value = post.caption || '';
+            caption.addEventListener('change', () => {
+                const v = caption.value.trim();
+                caption.value = v;
+                M(posts => {
+                    const p = posts.find(x => x.id === post.id);
+                    if (!p) return;
+                    if (v) p.caption = v; else delete p.caption;
+                });
+            });
+            meta.appendChild(caption);
+            card.appendChild(meta);
+        }
 
         // Collapsible behind-the-scenes bucket from the local phone library
         // (uncapped, pulled into a Phone/ subfolder by ./post.py pull).
@@ -1145,7 +1500,9 @@ window.Posts = (function () {
     // script loads, so their onGridRender call never happens — pick up any
     // already-rendered grid once the state is in.
     ready.then(ok => {
-        if (ok && document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
+        if (!ok) return;
+        updatePill();
+        if (document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
     });
 
     return { enabled: true, attachLightbox, onGridRender, initPostsPage, addToPost };

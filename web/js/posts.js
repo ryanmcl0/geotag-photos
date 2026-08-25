@@ -984,9 +984,13 @@ window.Posts = (function () {
         });
         const count = document.createElement('span');
         count.className = 'posts-count';
-        count.textContent = set === 'auto'
+        const phonePhotos = (post.phone || []).filter(r => r.id).length;
+        const phoneVideos = (post.phone || []).length - phonePhotos;
+        count.textContent = (set === 'auto'
             ? `${post.photos.length} photos`
-            : `${platLabel(post)} · ${countOf(post)}/${capOf(post)} photos`;
+            : `${platLabel(post)} · ${countOf(post)}/${capOf(post)} photos`)
+            + (phonePhotos ? ` · ${phonePhotos} phone` : '')
+            + (phoneVideos ? ` · ${phoneVideos} video${phoneVideos === 1 ? '' : 's'}` : '');
         if (countOf(post) >= capOf(post)) count.classList.add('posts-count-full');
         const del = document.createElement('button');
         del.type = 'button';

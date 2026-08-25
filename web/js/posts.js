@@ -350,9 +350,13 @@ window.Posts = (function () {
         if (conflicts.length) {
             const names = [...new Set(conflicts.map(c => postLabel(c.post)))];
             const nDup = new Set(conflicts.map(c => keyOf(c.ref))).size;
+            // Name the TARGET too: "already in X" alone reads as if X is where
+            // the photo is about to go.
+            const target = doc && doc.posts.find(p => p.id === postId);
+            const addTo = target ? `Add to ${postLabel(target)} anyway?` : 'Add anyway?';
             const msg = refs.length === 1
-                ? `This photo is already in ${names[0]}. Add anyway?`
-                : `${nDup} of these photos are already in other posts (${names.join(', ')}). Add anyway?`;
+                ? `This photo is already in ${names[0]}. ${addTo}`
+                : `${nDup} of these photos are already in other posts (${names.join(', ')}). ${addTo}`;
             if (!confirm(msg)) return;
         }
         const result = {};
@@ -1327,7 +1331,8 @@ window.Posts = (function () {
                     img.loading = 'lazy';
                     img.style.cssText = 'height:96px;border-radius:5px;display:block;cursor:pointer';
                     img.addEventListener('click', () => {
-                        if (window.Gallery) Gallery.openLightbox(photoRefs, photoRefs.indexOf(ref));
+                        if (window.Gallery) Gallery.openLightbox(photoRefs, photoRefs.indexOf(ref),
+                            { defaultPostId: post.id });
                     });
                     cell.appendChild(img);
                 } else {
@@ -1388,7 +1393,9 @@ window.Posts = (function () {
         img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
         img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
         img.addEventListener('click', () => {
-            if (window.Gallery) Gallery.openLightbox(post.photos, idx);
+            // Auto-suggestion sets are pseudo-posts whose id matches no draft;
+            // the override lookup falls back to the current post for those.
+            if (window.Gallery) Gallery.openLightbox(post.photos, idx, { defaultPostId: post.id });
         });
 
         const move = pos => M(posts => {

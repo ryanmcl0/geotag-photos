@@ -209,6 +209,9 @@ window.Posts = (function () {
     const keyOf = ref => `${ref.trip}::${ref.id || ref.file}`;
     const plural = n => `${n} photo${n === 1 ? '' : 's'}`;
     const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    // Human-facing post number (#N on the card, ./post.py pull N): next above
+    // the highest ever used, so deleting a post never re-issues its number.
+    const nextNum = posts => posts.reduce((m, p) => Math.max(m, p.num || 0), 0) + 1;
 
     function defaultName(posts) {
         let n = posts.length + 1;
@@ -348,7 +351,8 @@ window.Posts = (function () {
         mutate(posts => {
             let post = posts.find(p => p.id === postId);
             if (!post) {
-                post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                post = { id: postId, num: nextNum(posts), name: defaultName(posts),
+                         created: new Date().toISOString(), photos: [] };
                 if (platform === 'xhs') post.platform = 'xhs';
                 posts.unshift(post);   // new drafts go to the top of the list
             }
@@ -412,7 +416,8 @@ window.Posts = (function () {
                 const result = {};
                 mutate(posts => {
                     if (!posts.find(p => p.id === postId)) {
-                        const post = { id: postId, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                        const post = { id: postId, num: nextNum(posts), name: defaultName(posts),
+                                       created: new Date().toISOString(), photos: [] };
                         if (platform === 'xhs') post.platform = 'xhs';
                         posts.unshift(post);   // new drafts go to the top of the list
                         result.name = post.name;
@@ -439,7 +444,7 @@ window.Posts = (function () {
                 if (p.posted) row.classList.add('posts-picker-posted');
                 if (current && current.id === p.id) row.classList.add('posts-picker-current');
                 row.innerHTML = `<span class="posts-picker-name"></span><span class="posts-picker-count"></span>`;
-                row.querySelector('.posts-picker-name').textContent = p.name;
+                row.querySelector('.posts-picker-name').textContent = (p.num ? `#${p.num} ` : '') + p.name;
                 row.querySelector('.posts-picker-count').textContent = (current && current.id === p.id ? 'current · ' : '')
                     + (p.posted ? 'posted · ' : '')
                     + `${platLabel(p)} ${countOf(p)}/${capOf(p)}`;
@@ -643,6 +648,13 @@ window.Posts = (function () {
                 renderPasswordForm(root);
                 return;
             }
+            // One-time backfill: give pre-numbering drafts their #N (in stored
+            // order). Renders even if the save fails — numbers are then local.
+            if (doc.posts.some(p => !p.num)) {
+                mutate(posts => posts.forEach(p => { if (!p.num) p.num = nextNum(posts); }))
+                    .then(() => renderManager(root));
+                return;
+            }
             renderManager(root);
         });
     }
@@ -675,7 +687,8 @@ window.Posts = (function () {
                 const id = newId();
                 mutate(posts => {
                     if (posts.find(p => p.id === id)) return;
-                    const post = { id, name: defaultName(posts), created: new Date().toISOString(), photos: [] };
+                    const post = { id, num: nextNum(posts), name: defaultName(posts),
+                                   created: new Date().toISOString(), photos: [] };
                     if (plat === 'xhs') post.platform = 'xhs';
                     posts.unshift(post);   // new drafts go to the top of the list
                 }).then(okSave => {
@@ -927,6 +940,13 @@ window.Posts = (function () {
 
         const bar = document.createElement('div');
         bar.className = 'posts-card-bar';
+        if (set === 'main' && post.num) {
+            const num = document.createElement('span');
+            num.className = 'posts-num';
+            num.textContent = `#${post.num}`;
+            num.title = `./post.py pull ${post.num}`;
+            bar.appendChild(num);
+        }
         const name = document.createElement('input');
         name.className = 'posts-name';
         name.value = post.name;
@@ -982,7 +1002,10 @@ window.Posts = (function () {
                     const trimmed = post.photos.length + (post.phone || []).length
                         - dup.photos.length - (dup.phone || []).length;
                     mutate(posts => {
-                        if (!posts.some(p => p.name === dup.name && platformOf(p) === plat)) posts.push(dup);
+                        if (!posts.some(p => p.name === dup.name && platformOf(p) === plat)) {
+                            dup.num = nextNum(posts);
+                            posts.push(dup);
+                        }
                     }).then(okSave => {
                         if (okSave) {
                             toast(`Copied "${post.name}" to ${plat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
@@ -1069,7 +1092,10 @@ window.Posts = (function () {
                 const trimmed = post.photos.length + (post.phone || []).length
                     - dup.photos.length - (dup.phone || []).length;
                 mutate(posts => {
-                    if (!posts.some(p => p.id === dup.id)) posts.unshift(dup);
+                    if (!posts.some(p => p.id === dup.id)) {
+                        dup.num = nextNum(posts);
+                        posts.unshift(dup);
+                    }
                 }).then(okSave => {
                     if (okSave) {
                         toast(`Copied "${post.name}" to ${otherPlat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`

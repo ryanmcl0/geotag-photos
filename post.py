@@ -561,6 +561,13 @@ def cmd_pull(args):
 
     doc = fetch_posts(url, env.get('CF_SITE_PASSWORD'), posts_password)
     posts = doc.get('posts', [])
+    if args.num is not None:
+        posts = [p for p in posts if p.get('num') == args.num]
+        if not posts:
+            avail = ', '.join(f"#{p['num']}" if p.get('num') else f'"{p["name"]}" (no number)'
+                              for p in doc.get('posts', []))
+            sys.exit(f'❌ No post numbered #{args.num}. Available: {avail or "none"}\n'
+                     '   (Numbers are assigned when the /posts page is opened.)')
     if args.post:
         posts = [p for p in posts if p['name'] == args.post]
         if not posts:
@@ -575,7 +582,8 @@ def cmd_pull(args):
     for post in posts:
         name = sanitize(post['name'])
         dest_dir = Path(args.dest) / name
-        print(f"── {post['name']} ({len(post['photos'])} photos) → {dest_dir}")
+        tag = f"#{post['num']} " if post.get('num') else ''
+        print(f"── {tag}{post['name']} ({len(post['photos'])} photos) → {dest_dir}")
         plan = []
         for i, ref in enumerate(post['photos'], 1):
             src, why = resolve_source(ref['trip'], ref['id'])
@@ -963,6 +971,8 @@ def main():
     s.set_defaults(func=cmd_serve)
 
     p = sub.add_parser('pull', help='pull drafts from the live site and copy their files')
+    p.add_argument('num', nargs='?', type=int,
+                   help='Only the post with this number (the #N on its card)')
     p.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
                    help='Destination root (default: /Volumes/RYAN/Edits/Posts)')
     p.add_argument('--post', help='Only this post name')

@@ -341,6 +341,10 @@
 
     const map = L.map(mapEl, { scrollWheelZoom: false, attributionControl: false });
     bridgeMap = map;
+    // wheel/trackpad zoom only while the cursor is over the map — enabled globally
+    // it hijacks the page scroll whenever the pointer crosses the map mid-scroll
+    mapEl.addEventListener('mouseenter', () => map.scrollWheelZoom.enable());
+    mapEl.addEventListener('mouseleave', () => map.scrollWheelZoom.disable());
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
       { maxZoom: 18 }).addTo(map);
 

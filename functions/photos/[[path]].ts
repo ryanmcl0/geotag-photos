@@ -17,8 +17,15 @@ const hex = (buf: ArrayBuffer) =>
 const tokenFor = async (secret: string) =>
     hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
 
+// Pages hands back the path segments still percent-encoded, but R2 keys hold the
+// raw filename — so "IMG_0624 (2).webp" arrives as "IMG_0624%20(2).webp" and misses
+// the object (404 → 🔒 placeholder tile). Decode every segment before it's used,
+// for the bucket lookup AND for the privacy check, which otherwise compares an
+// encoded stem against the raw names in private_photos and fails open.
+const decode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
+
 export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD: string }> = async (context) => {
-    const parts = context.params.path as string[];
+    const parts = (context.params.path as string[]).map(decode);
     const key = parts.join('/');
     const slug = parts[0] || '';
 

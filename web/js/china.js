@@ -19,6 +19,38 @@
   const esc = s => (s == null ? '' : String(s).replace(/[&<>"]/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])));
   const tileById = id => DATA.tiles.find(t => t.id === id);
+
+  /* Facet filters (year pickers) live in the hash as a query string —
+   * "#roofs?years=2017,2018" — so clicking into a building and hitting Back
+   * returns to the filtered view instead of the full list. Written with
+   * replaceState, so ticking years doesn't pile up history entries; only real
+   * navigation (a tile link) pushes one. */
+  function parseHash() {
+    const raw = location.hash.replace(/^#/, '');
+    const qi = raw.indexOf('?');
+    const query = {};
+    if (qi >= 0) {
+      raw.slice(qi + 1).split('&').filter(Boolean).forEach(kv => {
+        const i = kv.indexOf('=');
+        query[decodeURIComponent(i < 0 ? kv : kv.slice(0, i))] =
+          i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+      });
+    }
+    return { path: qi >= 0 ? raw.slice(0, qi) : raw, query };
+  }
+
+  function setHashQuery(patch) {
+    const { path, query } = parseHash();
+    Object.keys(patch).forEach(k => {
+      if (patch[k] == null || patch[k] === '') delete query[k];
+      else query[k] = String(patch[k]);
+    });
+    const qs = Object.keys(query).map(k =>
+      // commas read fine in a hash and keep the URL legible
+      `${encodeURIComponent(k)}=${encodeURIComponent(query[k]).replace(/%2C/g, ',')}`).join('&');
+    history.replaceState(null, '',
+      (path || qs) ? `#${path}${qs ? '?' + qs : ''}` : location.pathname + location.search);
+  }
   const allSubtiles = tile => (tile.subtiles || []).concat(
     (tile.sections || []).flatMap(sec => sec.subtiles || []));
   const subById = (tile, id) => allSubtiles(tile).find(s => s.id === id);
@@ -139,13 +171,19 @@
       `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`);
     app.appendChild(head);
 
+    // restored from the hash so Back from a province keeps the filter
+    const q = parseHash().query.year;
+    const initialYear = q && q !== 'all' && (tile.years || []).includes(Number(q)) ? Number(q) : 'all';
     if (tile.id === 'provinces' && (tile.years || []).length) {
-      app.appendChild(buildYearBar(tile.years, year => paintProvinceTiles(tile, year)));
+      app.appendChild(buildYearBar(tile.years, year => {
+        setHashQuery({ year: year === 'all' ? null : year });
+        paintProvinceTiles(tile, year);
+      }, initialYear));
     }
     const grid = el('div', 'tiles' + (tile.id === 'roads' ? '' : ' tiles--dense'));
     grid.id = 'facet-grid';
     app.appendChild(grid);
-    if (tile.id === 'provinces') paintProvinceTiles(tile, 'all');
+    if (tile.id === 'provinces') paintProvinceTiles(tile, initialYear);
     else {
       tile.subtiles.forEach(s => grid.appendChild(buildSubtile(tile, s)));
       observeReveal(grid, '.tile');
@@ -526,13 +564,27 @@
       app.appendChild(el('div', 'section-head',
         `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
     }
+    // restore any year selection carried in the hash (Back from a building page)
+    const initial = yearsFromHash(tile.years || []);
     if ((tile.years || []).length > 1) {
-      app.appendChild(buildYearMenu(tile, years => paintTieredSections(tile, years)));
+      app.appendChild(buildYearMenu(tile, initial, sel => {
+        setHashQuery({ years: sel === null ? null : ([...sel].sort().join(',') || 'none') });
+        paintTieredSections(tile, sel);
+      }));
     }
     const host = el('div');
     host.id = 'tier-host';
     app.appendChild(host);
-    paintTieredSections(tile, null);
+    paintTieredSections(tile, initial);
+  }
+
+  // "2017,2018" → Set; "none" → empty Set; absent/every-year → null (= all years)
+  function yearsFromHash(years) {
+    const raw = parseHash().query.years;
+    if (raw == null) return null;
+    if (raw === 'none') return new Set();
+    const want = new Set(raw.split(',').map(Number).filter(y => years.includes(y)));
+    return want.size && want.size !== years.length ? want : null;
   }
 
   // selected: null = all years, otherwise Set of years to show
@@ -562,13 +614,13 @@
 
   // Multi-select year dropdown (same interaction pattern as the map's country
   // filter): tick years to show, with Select all / none shortcuts.
-  function buildYearMenu(tile, onChange) {
+  function buildYearMenu(tile, initial, onChange) {
     const years = tile.years;
     const countByYear = {};
     (tile.sections || []).forEach(sec => sec.subtiles.forEach(s =>
       (s.years || []).forEach(y => { countByYear[y] = (countByYear[y] || 0) + 1; })));
 
-    let selected = null;  // null = all
+    let selected = initial || null;  // null = all
     const wrap = el('div', 'year-menu-wrapper');
     wrap.innerHTML = `
       <button class="year-menu-btn" type="button">
@@ -623,6 +675,7 @@
         apply();
       });
     });
+    paintOptions();   // reflect a restored selection in the ticks + button label
     return wrap;
   }
 
@@ -662,11 +715,12 @@
     applyFilters();
   }
 
-  function buildYearBar(years, onPick) {
+  function buildYearBar(years, onPick, initial) {
     const bar = el('div', 'yearbar');
     const opts = ['all', ...years];
-    opts.forEach((y, i) => {
-      const b = el('button', i === 0 ? 'active' : '', y === 'all' ? 'All years' : String(y));
+    const active = opts.indexOf(initial) >= 0 ? initial : 'all';
+    opts.forEach(y => {
+      const b = el('button', y === active ? 'active' : '', y === 'all' ? 'All years' : String(y));
       b.addEventListener('click', () => {
         bar.querySelectorAll('button').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
@@ -682,7 +736,7 @@
     if (!DATA) return;
     // every view starts with app.innerHTML = '' — drop the Leaflet instance with it
     if (bridgeMap) { try { bridgeMap.remove(); } catch (e) { /* already gone */ } bridgeMap = null; }
-    const hash = location.hash.replace(/^#/, '');
+    const hash = parseHash().path;   // filters ride in the ?query part, not the route
     window.scrollTo(0, 0);
     if (!hash) return DATA.tiles.length === 1 ? renderFacet(DATA.tiles[0]) : renderHub();
     const [facetId, subId] = hash.split('/');

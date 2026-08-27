@@ -262,7 +262,11 @@
       href = `map.html?collection=${encodeURIComponent(DATA.id)}&facet=${tile.id}` +
              `&sub=${encodeURIComponent(s.id)}&title=${encodeURIComponent(s.title)}`;
     } else {
-      href = `#${tile.id}/${s.id}`;
+      // A building climbed in two years is ONE tile, so opening it from a filtered
+      // view would otherwise show the other year's photos (Battersea under 2025
+      // opened on the 2018 climb). Carry the filter into the gallery, which offers
+      // its own All/year bar to see the rest.
+      href = `#${tile.id}/${s.id}` + (year && year !== 'all' ? `?year=${year}` : '');
     }
     const zh = s.name_zh ? `<div class="tile-zh">${esc(s.name_zh)}</div>` : '';
     const sub = s.subtitle ? `<div class="tile-sub">${esc(s.subtitle)}</div>` : '';
@@ -290,7 +294,8 @@
     // action, which is the GALLERY for provinces — plus buttons layered on top.
     const card = el('div', 'tile tile--haslink');
     const main = el('a', 'tile-mainlink');
-    main.href = isProvince ? `#${tile.id}/${s.id}` : href;
+    const galHref = `#${tile.id}/${s.id}` + (year && year !== 'all' ? `?year=${year}` : '');
+    main.href = isProvince ? galHref : href;
     main.innerHTML = inner;
     card.appendChild(main);
     const links = el('div', 'tile-bloglinks');
@@ -305,7 +310,7 @@
       const mapBtn = el('a', 'tile-viewbtn', 'Map');
       mapBtn.href = href;
       const galBtn = el('a', 'tile-viewbtn is-active', 'Gallery');
-      galBtn.href = `#${tile.id}/${s.id}`;
+      galBtn.href = galHref;
       toggle.appendChild(mapBtn);
       toggle.appendChild(galBtn);
       links.appendChild(toggle);
@@ -598,7 +603,9 @@
           `<h3>${esc(sec.title)}</h3><span class="count">${subs.length} ${esc(unit)}${subs.length !== 1 ? 's' : ''}</span>`));
       }
       const grid = el('div', 'tiles tiles--dense tiles--mosaic');
-      subs.forEach(s => grid.appendChild(buildSubtile(tile, s)));
+      // one year selected → tiles deep-link into that year of the building's gallery
+      const only = selected && selected.size === 1 ? [...selected][0] : 'all';
+      subs.forEach(s => grid.appendChild(buildSubtile(tile, s, only)));
       host.appendChild(grid);
       observeReveal(grid, '.tile');
     });
@@ -618,24 +625,36 @@
     const sub = s.subtitle ? ` <span class="count">${esc(s.subtitle)}</span>` : '';
     const zh = s.name_zh ? ` <span class="count">${esc(s.name_zh)}</span>` : '';
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}${sub}
-      <span class="count">${(s.photos || []).length} photos</span>`));
+      <span class="count" id="gallery-count">${(s.photos || []).length} photos</span>`));
     // lightbox caption: name · height · province/city (bridges + buildings carry these)
     const caption = [s.title, s.height_m ? `${s.height_m} m` : null, s.province || s.city || null]
       .filter(Boolean).join(' · ');
     const photos = (s.photos || []).map(p => ({ ...p, title: caption }));
 
-    // Province galleries get a year filter; every gallery gets a camera/drone
-    // filter when both kinds are present. The two compose.
+    // Any gallery spanning more than one year gets a year filter — a building
+    // climbed twice is one tile, so arriving from a filtered facet must open on
+    // the year that was filtered (?year=), not on whichever climb sorts first.
+    // Every gallery gets a camera/drone filter when both kinds are present. The
+    // two compose.
     const grid = el('div');
-    let year = 'all', kind = 'all';
-    const applyFilters = () => Gallery.renderGrid(grid, photos.filter(p =>
-      (year === 'all' || p.year === year) &&
-      (kind === 'all' || Gallery.photoKind(p) === kind)));
-    if (tile.id === 'provinces') {
-      const years = [...new Set(photos.map(p => p.year).filter(Boolean))].sort((a, b) => b - a);
-      if (years.length > 1) {
-        app.appendChild(buildYearBar(years, y => { year = y; applyFilters(); }));
-      }
+    const years = [...new Set(photos.map(p => p.year).filter(Boolean))].sort((a, b) => b - a);
+    const q = parseHash().query.year;
+    let year = q && q !== 'all' && years.includes(Number(q)) ? Number(q) : 'all';
+    let kind = 'all';
+    const applyFilters = () => {
+      const shown = photos.filter(p =>
+        (year === 'all' || p.year === year) &&
+        (kind === 'all' || Gallery.photoKind(p) === kind));
+      const count = document.getElementById('gallery-count');
+      if (count) count.textContent = `${shown.length} photos`;   // header tracks the filter
+      Gallery.renderGrid(grid, shown);
+    };
+    if (years.length > 1) {
+      app.appendChild(buildYearBar(years, y => {
+        year = y;
+        setHashQuery({ year: y === 'all' ? null : y });   // survives Back into the gallery
+        applyFilters();
+      }, year));
     }
     const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
     if (kindBar) app.appendChild(kindBar);

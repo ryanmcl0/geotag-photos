@@ -43,6 +43,9 @@ CLIP_CACHE = ROOT / 'config' / '.classify_cache.json'
 BRIDGE_VISITS = ROOT / 'config' / 'bridge_visits.json'
 BRIDGE_PICKS = ROOT / 'config' / 'bridge_photo_picks.json'
 
+# A `building` value that opens "Day 12 …" is the day's itinerary, not a building.
+DAY_ITINERARY = re.compile(r'^\s*day\s*\d', re.I)
+
 # One user-maintained file controls every tile cover on the site (hub facets,
 # heroes, per-province/bridge/roof/road-leg subtiles, landing-page tiles).
 # Values are local edit filepaths (or bare stems), resolved by filename.
@@ -591,7 +594,15 @@ def facet_roofs(facet, records, echo):
     each photo's `building` field is matched against every roster entry's `match`
     tokens, and the LONGEST matching token wins (so 'Greenland Center' can't steal
     'Wuhan Greenland Center' photos). Buildings without processed photos still
-    count toward the headline stat but don't get a tile."""
+    count toward the headline stat but don't get a tile.
+
+    On driving trips `building` holds the DAY'S ITINERARY, not a building name
+    ("Day 20 [Yunnan] Shangri-la - Nixi - Deqin County - Lijiang"), so a bare
+    place token matches a town the trip merely drove through: Shangri-La in Yunnan
+    claimed 74 photos for the Shangri-La Hotel in Dubai. Those strings are skipped
+    unless the roster opted in by using the day string ITSELF as a match token
+    (Grand View Zunyi Hotel does, to claim that day's climb). Roads read day
+    strings legitimately — the day names the road driven — so this is roofs-only."""
     roster_path = facet.get('roster')
     roster = json.loads((ROOT / roster_path).read_text()) if roster_path else {}
     entries = roster.get('buildings', [])
@@ -607,8 +618,11 @@ def facet_roofs(facet, records, echo):
         bl = r['building'].lower()
         if not bl:
             continue
+        itinerary = bool(DAY_ITINERARY.match(bl))
         best = None
         for t, i in tokens:
+            if itinerary and not DAY_ITINERARY.match(t):
+                continue           # place passed through on a drive, not a climb
             if t in bl and (best is None or len(t) > len(best[0])):
                 best = (t, i)
         if best:

@@ -219,6 +219,16 @@
     observeReveal(grid, '.tile');
   }
 
+  // Mirrors pick_cover() in build_collections.py: drone aerials first, then the
+  // first landscape frame (portrait covers crop badly), else whatever is first.
+  // Photo refs are already in time order and carry `ar`, so no probing needed.
+  function pickCover(photos) {
+    const dji = photos.filter(p => /^dji/i.test(p.id));
+    const rest = photos.filter(p => !/^dji/i.test(p.id));
+    const cands = dji.concat(rest);
+    return cands.find(p => (p.ar || 1) > 1) || cands[0];
+  }
+
   function buildSubtile(tile, s, year) {
     // Gated sub-tile (e.g. a province whose photos are all private): a locked tile
     // behind the See All password, like every other non-public tile.
@@ -268,12 +278,20 @@
       // its own All/year bar to see the rest.
       href = `#${tile.id}/${s.id}` + (year && year !== 'all' ? `?year=${year}` : '');
     }
+    // Under a year filter the tile must show THAT year: the stored cover and count
+    // are all-time, so 250 City Road under 2021 wore its 2017 cover and "23 photos".
+    const shown = year && year !== 'all'
+      ? (s.photos || []).filter(p => p.year === year) : null;
+    const useYear = shown && shown.length && shown.length !== (s.photos || []).length;
+    const cover = useYear ? pickCover(shown) : s.cover;
+    const total = useYear ? shown.length : s.count;
+
     const zh = s.name_zh ? `<div class="tile-zh">${esc(s.name_zh)}</div>` : '';
     const sub = s.subtitle ? `<div class="tile-sub">${esc(s.subtitle)}</div>` : '';
     const stat = s.infographic ? `<div class="tile-sub">${esc(s.infographic)}</div>` : '';
-    const count = s.count ? `<div class="tile-sub">${s.count} photos</div>` : '';
+    const count = total ? `<div class="tile-sub">${total} photos</div>` : '';
     const inner = `
-      ${imgTag(s.cover)}
+      ${imgTag(cover)}
       <div class="tile-overlay">
         <div class="tile-title">${esc(s.title)}</div>
         ${zh}${sub}${stat}${count}

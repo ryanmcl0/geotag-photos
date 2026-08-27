@@ -564,27 +564,22 @@
       app.appendChild(el('div', 'section-head',
         `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
     }
-    // restore any year selection carried in the hash (Back from a building page)
-    const initial = yearsFromHash(tile.years || []);
-    if ((tile.years || []).length > 1) {
-      app.appendChild(buildYearMenu(tile, initial, sel => {
-        setHashQuery({ years: sel === null ? null : ([...sel].sort().join(',') || 'none') });
-        paintTieredSections(tile, sel);
-      }));
+    // Same All/one-year bar as the Galleries index, restored from the hash so
+    // Back from a building keeps the filter.
+    const years = tile.years || [];
+    const q = parseHash().query.year;
+    const initial = q && q !== 'all' && years.includes(Number(q)) ? Number(q) : 'all';
+    const asSet = y => (y === 'all' ? null : new Set([y]));
+    if (years.length > 1) {
+      app.appendChild(buildYearBar(years, y => {
+        setHashQuery({ year: y === 'all' ? null : y });
+        paintTieredSections(tile, asSet(y));
+      }, initial));
     }
     const host = el('div');
     host.id = 'tier-host';
     app.appendChild(host);
-    paintTieredSections(tile, initial);
-  }
-
-  // "2017,2018" → Set; "none" → empty Set; absent/every-year → null (= all years)
-  function yearsFromHash(years) {
-    const raw = parseHash().query.years;
-    if (raw == null) return null;
-    if (raw === 'none') return new Set();
-    const want = new Set(raw.split(',').map(Number).filter(y => years.includes(y)));
-    return want.size && want.size !== years.length ? want : null;
+    paintTieredSections(tile, asSet(initial));
   }
 
   // selected: null = all years, otherwise Set of years to show
@@ -610,73 +605,6 @@
     if (!host.children.length) {
       host.appendChild(el('p', 'gallery-empty', 'Nothing for the selected years.'));
     }
-  }
-
-  // Multi-select year dropdown (same interaction pattern as the map's country
-  // filter): tick years to show, with Select all / none shortcuts.
-  function buildYearMenu(tile, initial, onChange) {
-    const years = tile.years;
-    const countByYear = {};
-    (tile.sections || []).forEach(sec => sec.subtiles.forEach(s =>
-      (s.years || []).forEach(y => { countByYear[y] = (countByYear[y] || 0) + 1; })));
-
-    let selected = initial || null;  // null = all
-    const wrap = el('div', 'year-menu-wrapper');
-    wrap.innerHTML = `
-      <button class="year-menu-btn" type="button">
-        <span class="year-menu-label">All years</span>
-        <svg viewBox="0 0 10 6" width="10" height="6">
-          <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <div class="year-menu">
-        <div class="year-menu-actions">
-          <button type="button" data-act="all">Select all</button>
-          <button type="button" data-act="none">Select none</button>
-        </div>
-        ${years.map(y => `
-          <div class="year-menu-option on" data-year="${y}">
-            <span class="tick">✓</span><span>${y}</span>
-            <span class="year-menu-count">${countByYear[y] || 0}</span>
-          </div>`).join('')}
-      </div>`;
-
-    const btn = wrap.querySelector('.year-menu-btn');
-    const menu = wrap.querySelector('.year-menu');
-    const label = wrap.querySelector('.year-menu-label');
-
-    function paintOptions() {
-      wrap.querySelectorAll('.year-menu-option').forEach(opt => {
-        const on = !selected || selected.has(Number(opt.dataset.year));
-        opt.classList.toggle('on', on);
-      });
-      if (!selected) label.textContent = 'All years';
-      else if (!selected.size) label.textContent = 'No years';
-      else if (selected.size === 1) label.textContent = String([...selected][0]);
-      else label.textContent = `${selected.size} years`;
-    }
-    function apply() { paintOptions(); onChange(selected); }
-
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      menu.classList.toggle('open');
-    });
-    document.addEventListener('click', () => menu.classList.remove('open'));
-    menu.addEventListener('click', e => e.stopPropagation());
-
-    menu.querySelector('[data-act="all"]').addEventListener('click', () => { selected = null; apply(); });
-    menu.querySelector('[data-act="none"]').addEventListener('click', () => { selected = new Set(); apply(); });
-    menu.querySelectorAll('.year-menu-option').forEach(opt => {
-      opt.addEventListener('click', () => {
-        const y = Number(opt.dataset.year);
-        if (!selected) selected = new Set(years);
-        if (selected.has(y)) selected.delete(y); else selected.add(y);
-        if (selected.size === years.length) selected = null;
-        apply();
-      });
-    });
-    paintOptions();   // reflect a restored selection in the ticks + button label
-    return wrap;
   }
 
   function renderSubGallery(tile, s) {
@@ -715,12 +643,14 @@
     applyFilters();
   }
 
+  // All / one-year filter bar, same markup and .yearbar styling as the Galleries index
   function buildYearBar(years, onPick, initial) {
     const bar = el('div', 'yearbar');
     const opts = ['all', ...years];
     const active = opts.indexOf(initial) >= 0 ? initial : 'all';
     opts.forEach(y => {
-      const b = el('button', y === active ? 'active' : '', y === 'all' ? 'All years' : String(y));
+      const b = el('button', y === active ? 'active' : '', y === 'all' ? 'All' : String(y));
+      b.type = 'button';
       b.addEventListener('click', () => {
         bar.querySelectorAll('button').forEach(x => x.classList.remove('active'));
         b.classList.add('active');

@@ -225,39 +225,6 @@ img { display: block; }
 .yearbar button:hover { color: var(--text); }
 .yearbar button.active { color: var(--text); border-bottom-color: var(--text); }
 
-/* multi-select year dropdown (rooftopping tiers) */
-.year-menu-wrapper { position: relative; display: inline-block; margin: 18px 0 0; }
-.year-menu-btn {
-  display: inline-flex; align-items: center; gap: 10px; background: var(--panel);
-  border: 1px solid var(--line); padding: 9px 14px; cursor: pointer;
-  font-family: var(--head); text-transform: uppercase; letter-spacing: .14em;
-  font-size: 14px; color: var(--text); transition: border-color .2s;
-}
-.year-menu-btn:hover { border-color: #3a3a3a; }
-.year-menu-btn svg { color: var(--muted); }
-.year-menu {
-  display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
-  min-width: 190px; background: var(--panel); border: 1px solid var(--line);
-  box-shadow: 0 14px 34px rgba(0,0,0,.5); padding: 6px 0;
-}
-.year-menu.open { display: block; }
-.year-menu-actions { display: flex; gap: 4px; padding: 4px 8px 8px; border-bottom: 1px solid var(--line); }
-.year-menu-actions button {
-  flex: 1; background: none; border: 1px solid var(--line); padding: 5px 0; cursor: pointer;
-  font-family: var(--head); text-transform: uppercase; letter-spacing: .1em; font-size: 11px;
-  color: var(--muted); transition: color .2s, border-color .2s;
-}
-.year-menu-actions button:hover { color: var(--text); border-color: #3a3a3a; }
-.year-menu-option {
-  display: flex; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer;
-  font-family: var(--head); letter-spacing: .12em; font-size: 14px; color: var(--muted);
-}
-.year-menu-option:hover { color: var(--text); background: #1f1f1f; }
-.year-menu-option .tick { width: 14px; color: var(--text); visibility: hidden; }
-.year-menu-option.on { color: var(--text); }
-.year-menu-option.on .tick { visibility: visible; }
-.year-menu-count { margin-left: auto; font-size: 12px; color: #6a6a6a; }
-
 /* ---------- photo grid: JS-computed justified rows (exact sizes set inline) ---------- */
 .photo-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 26px; }
 .photo-row { display: flex; gap: 8px; }

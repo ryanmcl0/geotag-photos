@@ -200,14 +200,23 @@ def load_member_photos(prov_index, exclude: set, echo) -> list:
             # Year from the PHOTO's timestamp, not the trip — trips straddle new year
             # (CNY trips) and edits folders can contain other-year strays, so trip-year
             # mislabels the province year filter.
+            # A dead camera clock stamps a whole shoot with a bogus year — a GoPro
+            # reporting 2015 across the 2017/2018 London roofs, a Sony reporting 2014
+            # in Seoul in 2022 — which then files those buildings under phantom 2014
+            # and 2015 sections. A trip only ever straddles ONE new year, so a photo
+            # more than a year off its trip is a broken clock, not a stray: fall back
+            # to the trip's year. (178 of 13,813 photos, all clock errors.)
             year = None
             if ph.get('timestamp'):
                 try:
                     year = int(ph['timestamp'][:4])
                 except ValueError:
                     pass
+            trip_year = meta.get('year')
+            if year and trip_year and abs(year - trip_year) > 1:
+                year = trip_year
             if not year:
-                year = meta.get('year')
+                year = trip_year
             records.append({
                 'trip': slug, 'id': ph['id'], 'lat': lat, 'lon': lon,
                 'building': (ph.get('building') or '').strip(),
@@ -669,7 +678,9 @@ def facet_roofs(facet, records, echo):
                 'count': len(photos),
                 'cover': pick_cover(photos),
                 'years': sorted({p['year'] for p in photos if p.get('year')}, reverse=True),
-                'photos': [_photo_ref(p) for p in photos],
+                # per-photo year: a building climbed twice is one tile, and its
+                # gallery needs to open on the year the facet was filtered to
+                'photos': [_photo_ref(p, with_year=True) for p in photos],
             })
         if subtiles:
             sections.append({'id': f'tier-{t if t is not None else "tbc"}',

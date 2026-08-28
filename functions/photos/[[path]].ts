@@ -9,6 +9,7 @@ import ACCESS_INDEX from './private_index.json';
 const ACCESS = ACCESS_INDEX as {
     private_trips: string[];
     private_photos: Record<string, string[]>;
+    blocked_photos?: Record<string, string[]>;
     force_public: Record<string, string[]>;
 };
 
@@ -35,6 +36,13 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD
         return new Response('Not found', { status: 404 });
     }
     const stem = (parts[parts.length - 1] || '').replace(/\.[a-z0-9]+$/i, '');
+
+    // Blocked photos (a person switched off at the strict tier) are refused before
+    // any allow-list or cookie is consulted: there is no tier that sees these, and
+    // force_public must not be able to rescue one. The object stays in R2.
+    if (((ACCESS.blocked_photos || {})[slug] || []).includes(stem)) {
+        return new Response('Not found', { status: 404 });
+    }
 
     const forced = (ACCESS.force_public[slug] || []).includes(stem);
     const restricted = !forced && (

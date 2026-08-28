@@ -25,14 +25,15 @@
         });
     }
 
-    // Face pages, built by the local_browse tooling rather than the phone
-    // mirror, so each may or may not exist. A missing page under /phone/ does
-    // NOT 404: the host serves the site index with 200, so presence has to be
-    // confirmed from the page's own <title>, not the status or content type.
-    const FACE_PAGES = [
-        { href: '/phone/people/index.html', label: 'People', key: 'people',
-          marker: '<title>People</title>' },
-    ];
+    // Face pages built by the local_browse tooling. Empty now: /people (injected by
+    // posts.js) is the single People entry, and on localhost its document includes
+    // the phone library, so there is nothing left for a second link to add. The old
+    // browser under /phone/people/ is still built by local_browse/build_people_ui.py
+    // if you want it directly — it just isn't in the nav twice.
+    // Kept as a list because the probe machinery below is the pattern for adding a
+    // local-only page back: a missing page under /phone/ does NOT 404 (the host
+    // serves the site index with 200), so presence is confirmed from its <title>.
+    const FACE_PAGES = [];
 
     function injectPage(page) {
         document.querySelectorAll('.nav-more-menu').forEach(menu => {

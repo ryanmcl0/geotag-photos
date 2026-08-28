@@ -106,14 +106,18 @@ window.Posts = (function () {
         document.body.appendChild(pill);
     })();
 
-    // "Posts" entry in the nav "More" dropdown while posts mode is on. The
-    // script loads at the end of body, so the nav is already in the DOM.
+    // "Posts" and "People" entries in the nav "More" dropdown while posts mode is
+    // on. The script loads at the end of body, so the nav is already in the DOM.
+    // People rides the same posts_auth tier (it is owner-only for the same reason),
+    // so it belongs to the same unlock rather than the See All gate.
     document.querySelectorAll('.nav-more-menu').forEach(menu => {
-        if (menu.querySelector('a[href="/posts"]')) return;
-        const a = document.createElement('a');
-        a.href = '/posts';
-        a.textContent = 'Posts';
-        menu.appendChild(a);
+        [['/posts', 'Posts'], ['/people', 'People']].forEach(([href, label]) => {
+            if (menu.querySelector(`a[href="${href}"]`)) return;
+            const a = document.createElement('a');
+            a.href = href;
+            a.textContent = label;
+            menu.appendChild(a);
+        });
     });
 
     let doc = null;           // manual drafts { version, posts }; null on failure

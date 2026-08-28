@@ -613,7 +613,10 @@ def make_proxy(clip, workdir=None):
                   'zscale=p=bt709:t=bt709:m=bt709:r=tv')
     vf.append('format=yuv420p')
     cmd = ['ffmpeg', '-y', '-v', 'error', '-hwaccel', 'videotoolbox', '-i', src,
-           '-map', '0:v:0', '-map', '0:a?',
+           # First audio stream only: 360 cameras ship an ambisonic/data track
+           # alongside the stereo one, and AAC cannot open an encoder for it,
+           # which fails the whole clip.
+           '-map', '0:v:0', '-map', '0:a:0?',
            '-vf', ','.join(vf),
            '-c:v', 'h264_videotoolbox', '-b:v', PROXY_VBITRATE, '-allow_sw', '1',
            '-c:a', 'aac', '-b:a', '96k', '-ac', '2',

@@ -433,6 +433,41 @@ def upload_source_index(config: 'DeployConfig', dry_run: bool = False):
           f"{len(body) / 1024:.0f} KB")
 
 
+def upload_people_index(config: 'DeployConfig', dry_run: bool = False):
+    """Upload the People page document to R2 (_state/people.json, served by the
+    posts-gated /api/people). Built by tools/people_index.py from the local-only
+    face clusters, so the site never sees face data — just photo ids per person.
+
+    Skipped silently when the file doesn't exist: the roster is optional, and a
+    site without one simply has no People page."""
+    src = Path('config/people_site.json')
+    if not src.exists():
+        return
+    body = src.read_bytes()
+    doc = json.loads(body)
+    # people_site.json is the camera-only variant; the one carrying the local phone
+    # library is config/people_local.json, which only serve.sh reads. Refuse rather
+    # than publish a document naming photos that exist on no host but this one.
+    groups = doc.get('people', []) + doc.get('unnamed', [])
+    phone = [ph['t'] for g in groups for ph in g.get('photos', [])
+             if ph.get('g') == 2 or str(ph.get('t', '')).startswith('phone-')]
+    if phone:
+        raise SystemExit(f"✗ config/people_site.json contains {len(phone)} local phone-library "
+                         f"references (e.g. {phone[0]}) — refusing to upload. Re-run "
+                         "tools/people_index.py, which writes the phone variant to "
+                         "config/people_local.json instead.")
+    n = sum(p['n'] for p in doc.get('people', [])) + sum(u['n'] for u in doc.get('unnamed', []))
+    if dry_run:
+        print(f"    [dry-run] would upload _state/people.json "
+              f"({len(doc.get('people', []))} people, {n} photos, {len(body) / 1024:.0f} KB)")
+        return
+    R2Uploader(config).s3.put_object(
+        Bucket=config.r2_bucket, Key='_state/people.json', Body=body,
+        ContentType='application/json')
+    print(f"    ✓ _state/people.json: {len(doc.get('people', []))} people, "
+          f"{len(doc.get('unnamed', []))} unnamed clusters, {n} photos")
+
+
 class ManifestPatcher:
     """Patch manifest.json files with CDN URLs for deployment.
     Saves originals and restores them after Pages deploy so local dev is unaffected."""
@@ -442,8 +477,13 @@ class ManifestPatcher:
         self._originals: dict[Path, str] = {}
 
     def patch_all(self, dry_run: bool = False):
-        # manifest.json + manifest.all.json (the gated full variant of split trips)
+        # manifest.json + manifest.all.json (the gated full variant of split trips).
+        # manifest.full.json is skipped: it is the local-only pre-strip stash for the
+        # blocked-people tier, never deployed, and baking CDN URLs into it would leave
+        # those URLs behind when photo_privacy restores from it.
         for manifest_file in sorted(Path('web/trips').rglob('manifest*.json')):
+            if manifest_file.name == 'manifest.full.json':
+                continue
             trip_slug = manifest_file.parent.name
             original = manifest_file.read_text()
             manifest = json.loads(original)
@@ -569,6 +609,10 @@ class GitSyncer:
                     '--exclude', 'plans',
                     '--exclude', 'trips/*/thumbnails',
                     '--exclude', 'trips/*/display',
+                    # Local-only pre-strip copy of a manifest whose blocked photos were
+                    # removed (photo_privacy.unblocked_manifest). Deploying it would
+                    # publish exactly the entries the blocked tier just took out.
+                    '--exclude', 'trips/*/manifest.full.json',
                     # local-only phone library mirror — never deployed
                     '--exclude', 'phone',
                     str(web_src) + '/', str(self.target_path) + '/'
@@ -700,6 +744,14 @@ def main():
     sync_public_flags(dry_run=args.dry_run)
     print()
 
+    # Step 1a0: Re-resolve the people roster against the face clusters, so a roster
+    # edit takes effect on this deploy. Only possible where the local-only face data
+    # lives; elsewhere photo_privacy's digest check is what catches a stale index.
+    if Path('local_browse/clusters.json').exists() and Path('config/people.json').exists():
+        print("👤 Resolving people roster...")
+        subprocess.run([sys.executable, 'tools/people_index.py'], check=True)
+        print()
+
     # Step 1a: Per-photo privacy — split public-trip manifests and refresh the
     # image-proxy access index, so a deploy never ships an unsplit manifest.
     print("🔒 Syncing photo privacy...")
@@ -778,6 +830,7 @@ def main():
     # deploy, including --skip-images (it's one small JSON).
     print("🗂️  Uploading photo source index...")
     upload_source_index(config, dry_run=args.dry_run)
+    upload_people_index(config, dry_run=args.dry_run)
     print()
 
     # Step 2: Patch manifests with CDN URLs

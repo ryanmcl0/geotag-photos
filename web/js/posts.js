@@ -723,6 +723,7 @@ window.Posts = (function () {
             head.appendChild(newBtn);
         }
         root.appendChild(head);
+        renderPostedBuildings(root);
 
         const tabs = document.createElement('div');
         tabs.className = 'posts-tabs';
@@ -767,6 +768,81 @@ window.Posts = (function () {
         }
 
         list.forEach(post => root.appendChild(renderCard(root, post, 'main')));
+    }
+
+    /* ---------- Posted Buildings banner ----------
+     *
+     * Which climbed buildings have already gone out, so a building doesn't get
+     * posted twice. The building a photo belongs to is only known to the Urbex
+     * collection (build_collections.facet_roofs does the roster matching), so
+     * this reads collections/rooftopping.json and inverts it into
+     * "<trip>|<id>" → building name. That file is behind the all-access gate;
+     * if it isn't unlocked the banner just stays hidden rather than erroring.
+     */
+    let roofMapP = null;
+    function roofMap() {
+        if (!roofMapP) {
+            roofMapP = fetch('collections/rooftopping.json', { cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null))
+                .then(doc => {
+                    const map = new Map();
+                    if (!doc) return map;
+                    for (const tile of doc.tiles || []) {
+                        for (const sec of tile.sections || []) {
+                            for (const sub of sec.subtiles || []) {
+                                for (const ph of sub.photos || []) {
+                                    map.set(`${ph.trip}|${ph.id}`, sub.title);
+                                }
+                            }
+                        }
+                    }
+                    return map;
+                })
+                .catch(() => new Map());
+        }
+        return roofMapP;
+    }
+
+    function renderPostedBuildings(root) {
+        roofMap().then(map => {
+            if (!map.size) return;   // locked, or no roofs data
+            // building → the posted drafts it appears in (any platform: this is
+            // "have I shared this building", not a per-account view).
+            const byBuilding = new Map();
+            for (const p of doc.posts) {
+                if (!p.posted) continue;
+                for (const ref of p.photos || []) {
+                    const b = map.get(`${ref.trip}|${ref.id}`);
+                    if (!b) continue;
+                    if (!byBuilding.has(b)) byBuilding.set(b, new Set());
+                    byBuilding.get(b).add(p.name || `#${p.num}`);
+                }
+            }
+            const existing = document.getElementById('posts-buildings');
+            if (existing) existing.remove();
+            if (!byBuilding.size) return;
+
+            const names = [...byBuilding.keys()].sort((a, b) => a.localeCompare(b));
+            const box = document.createElement('details');
+            box.id = 'posts-buildings';
+            box.className = 'posts-buildings';
+            const sum = document.createElement('summary');
+            sum.textContent = `Posted Buildings (${names.length})`;
+            box.appendChild(sum);
+            const ul = document.createElement('ul');
+            for (const n of names) {
+                const li = document.createElement('li');
+                const posts = [...byBuilding.get(n)];
+                li.innerHTML = `<span class="pb-name">${n}</span>`
+                    + `<span class="pb-posts">${posts.join(', ')}</span>`;
+                ul.appendChild(li);
+            }
+            box.appendChild(ul);
+            // Under the title, above the tabs.
+            const head = root.querySelector('.posts-head');
+            if (head && head.nextSibling) root.insertBefore(box, head.nextSibling);
+            else root.appendChild(box);
+        });
     }
 
     const THEME_LABELS = {

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Browser</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">🎬 Video Browser</div>
+  <div class="filters">
+    <select id="f-trip" title="Trip"></select>
+    <select id="f-year" title="Year"></select>
+    <select id="f-day" title="Day"></select>
+    <select id="f-building" title="Building (Urbex roster)"></select>
+    <div id="f-devices" class="chiprow" title="Device"></div>
+    <div id="f-regions" class="chiprow" title="Region"></div>
+    <input id="f-search" type="search" placeholder="search…">
+    <select id="f-sort">
+      <option value="chrono">Chronological</option>
+      <option value="newest">Newest first</option>
+      <option value="longest">Longest first</option>
+    </select>
+  </div>
+  <div class="meta">
+    <span id="count"></span>
+    <span id="progress" title="proxy generation"></span>
+    <button id="toggle-cuts" class="btn">My Videos</button>
+  </div>
+</header>
+
+<main id="grid"></main>
+
+<aside id="cuts" class="hidden">
+  <div class="cuts-head">
+    <select id="cut-select"></select>
+    <button id="cut-new" class="btn" title="New video">＋ New</button>
+  </div>
+  <div id="cut-clips"></div>
+  <div class="cuts-foot">
+    <div id="cut-stats"></div>
+    <button id="cut-export" class="btn primary">Create Resolve project</button>
+    <button id="cut-delete" class="btn danger">Delete</button>
+  </div>
+  <div id="export-result"></div>
+</aside>
+
+<div id="lightbox" class="hidden">
+  <div id="lb-backdrop"></div>
+  <div id="lb-inner">
+    <video id="lb-video" controls autoplay loop muted playsinline></video>
+    <div id="lb-info"></div>
+    <div id="lb-actions">
+      <button id="lb-add" class="btn primary">＋ Add to video</button>
+      <button id="lb-reveal" class="btn">Reveal in Finder</button>
+      <button id="lb-orig" class="btn">Play original</button>
+      <button id="lb-close" class="btn">✕ Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

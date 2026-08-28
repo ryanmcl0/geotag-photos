@@ -304,3 +304,33 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-song-suggest-song { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .posts-song-suggest-used { color: #e2a336; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
 .posts-song-warn { display: none; color: #e2a336; font-size: 12px; margin: -2px 0 0; }
+
+/* ---------- "Posted Buildings" banner (top of the manager) ----------
+   Collapsed by default: a reminder of which climbs have already gone out,
+   not something to read on every visit. */
+.posts-buildings {
+  background: #1a1a1a; border: 1px solid #333; border-radius: 10px;
+  margin: 0 0 18px; padding: 0;
+}
+.posts-buildings > summary {
+  cursor: pointer; padding: 10px 14px; color: #ccc;
+  font-size: 13px; font-weight: 600; letter-spacing: .04em; list-style: none;
+}
+.posts-buildings > summary::-webkit-details-marker { display: none; }
+.posts-buildings > summary::before { content: '▸ '; color: #777; }
+.posts-buildings[open] > summary::before { content: '▾ '; }
+.posts-buildings > summary:hover { color: #fff; }
+.posts-buildings ul {
+  margin: 0; padding: 0 14px 12px; list-style: none;
+  columns: 2; column-gap: 24px;
+}
+.posts-buildings li {
+  break-inside: avoid; padding: 3px 0; font-size: 13px;
+  display: flex; gap: 8px; align-items: baseline;
+}
+.posts-buildings .pb-name { color: #e8e8e8; }
+.posts-buildings .pb-posts {
+  color: #777; font-size: 11px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+@media (max-width: 640px) { .posts-buildings ul { columns: 1; } }

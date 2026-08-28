@@ -104,3 +104,6 @@ _trip_privacy_review.html
 
 *.txt
 _publish_review.html
+
+# ── Video browser (local-only feature; proxies + index + cuts live here) ─────
+local_videos/

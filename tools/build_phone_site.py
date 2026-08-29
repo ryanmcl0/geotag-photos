@@ -158,7 +158,10 @@ def main():
             })
 
         phone_dir = Path(rows[0]["src"]).parent
-        while phone_dir.name.lower() != "phone" and phone_dir != phone_dir.parent:
+        # .strip(): a "Phone " folder (one trip on the drive had the trailing
+        # space) would otherwise walk this loop all the way to the drive root and
+        # then rglob the entire NAS looking for videos.
+        while phone_dir.name.strip().lower() != "phone" and phone_dir != phone_dir.parent:
             phone_dir = phone_dir.parent
         vid_ts, vid_sizes = video_timestamps(phone_dir)
         videos = [{"file": rel, "timestamp": iso(ts), "bytes": vid_sizes[rel]}

@@ -9,11 +9,16 @@ Two routes, both attempted:
     External scripting using: Local). Creates/loads a project named after the cut,
     imports the full-res NAS clips into the media pool, and builds a timeline in
     the cut's order.
+
+Exporting the same cut twice is an APPEND, not a rebuild. The second export reuses
+the project, reuses its timeline, imports only clips the media pool does not have
+yet, and appends only the clips that are not on the timeline already — so whatever
+editing has been done in Resolve since the first export survives, and the new
+clips land at the end of the timeline.
 """
 import re
 import subprocess
 import sys
-from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
 
@@ -73,6 +78,66 @@ def write_fcpxml(cut, clips, out_dir: Path):
     return out
 
 
+def _pool_items_by_path(mp):
+    """{file path: media pool item} over the whole pool, folders included."""
+    found = {}
+
+    def walk(folder):
+        if not folder:
+            return
+        for it in folder.GetClipList() or []:
+            try:
+                path = it.GetClipProperty('File Path')
+            except Exception:                     # noqa: BLE001 — API returns odd shapes
+                continue
+            if path:
+                found[path] = it
+        for sub in folder.GetSubFolderList() or []:
+            walk(sub)
+
+    walk(mp.GetRootFolder())
+    return found
+
+
+def _find_timeline(proj, name):
+    """The cut's timeline: exact name first, then the newest one this tool made
+    under the old '<name> HHMMSS' scheme, so pre-existing projects keep working."""
+    try:
+        count = int(proj.GetTimelineCount() or 0)
+    except Exception:                             # noqa: BLE001
+        return None
+    fallback = None
+    for i in range(1, count + 1):
+        tl = proj.GetTimelineByIndex(i)
+        if not tl:
+            continue
+        tl_name = tl.GetName()
+        if tl_name == name:
+            return tl
+        if tl_name.startswith(name + ' '):
+            fallback = tl                          # later index wins: the newest
+    return fallback
+
+
+def _timeline_paths(tl):
+    """Source paths already on the timeline, across every video track."""
+    paths = set()
+    try:
+        tracks = int(tl.GetTrackCount('video') or 0)
+    except Exception:                             # noqa: BLE001
+        return paths
+    for t in range(1, tracks + 1):
+        for item in tl.GetItemListInTrack('video', t) or []:
+            try:
+                mpi = item.GetMediaPoolItem()
+                path = mpi.GetClipProperty('File Path') if mpi else None
+            except Exception:                     # noqa: BLE001
+                continue
+            if path:
+                paths.add(path)
+    return paths
+
+
 def try_resolve_api(cut, clips):
     sys.path.insert(0, RESOLVE_MODULES)
     try:
@@ -82,7 +147,7 @@ def try_resolve_api(cut, clips):
     resolve = None
     try:
         resolve = dvr.scriptapp('Resolve')
-    except Exception as e:
+    except Exception as e:                        # noqa: BLE001
         return {'ok': False, 'why': f'could not connect ({e})'}
     if not resolve:
         return {'ok': False, 'why': 'Resolve not running or external scripting disabled '
@@ -90,29 +155,48 @@ def try_resolve_api(cut, clips):
     try:
         pm = resolve.GetProjectManager()
         name = _slug(cut.get('name') or 'cut')
+        # LoadProject on the already-open project returns it, so exporting while
+        # the project is open in front of you is the normal path, not an error.
         proj = pm.LoadProject(name) or pm.CreateProject(name)
         if not proj:
             return {'ok': False, 'why': 'could not create/load project'}
         mp = proj.GetMediaPool()
-        items = mp.ImportMedia([c['path'] for c in clips])
-        if not items:
-            return {'ok': False, 'why': 'media import returned nothing'}
-        tl_name = f'{name} {datetime.now().strftime("%H%M%S")}'
-        tl = mp.CreateEmptyTimeline(tl_name)
+
+        pool = _pool_items_by_path(mp)
+        missing = [c['path'] for c in clips if c['path'] not in pool]
+        if missing:
+            for it in mp.ImportMedia(missing) or []:
+                try:
+                    pool[it.GetClipProperty('File Path')] = it
+                except Exception:                 # noqa: BLE001
+                    pass
+
+        # Reuse the cut's timeline. A stored name wins, so renaming the cut here
+        # never orphans the timeline someone has been editing.
+        tl = None
+        stored = cut.get('resolve_timeline')
+        if stored:
+            tl = _find_timeline(proj, stored)
+        tl = tl or _find_timeline(proj, name)
+        created = tl is None
+        if created:
+            tl = mp.CreateEmptyTimeline(name)
         if not tl:
             return {'ok': False, 'why': 'could not create timeline'}
-        # ImportMedia may return items out of order; re-sort to the cut's order
-        by_path = {}
-        for it in items:
-            try:
-                by_path[it.GetClipProperty('File Path')] = it
-            except Exception:
-                pass
-        ordered = [by_path.get(c['path']) for c in clips]
-        ordered = [i for i in ordered if i] or items
-        mp.AppendToTimeline(ordered)
-        return {'ok': True, 'project': name, 'timeline': tl_name}
-    except Exception as e:
+        proj.SetCurrentTimeline(tl)
+
+        # Append only what is not on the timeline yet, in the cut's order. Resolve
+        # appends after the last clip, so earlier edits are left where they are.
+        on_timeline = set() if created else _timeline_paths(tl)
+        to_add = [pool[c['path']] for c in clips
+                  if c['path'] not in on_timeline and c['path'] in pool]
+        if to_add and not mp.AppendToTimeline(to_add):
+            return {'ok': False, 'why': 'append to timeline failed'}
+        return {'ok': True, 'project': name, 'timeline': tl.GetName(),
+                'created': created, 'appended': len(to_add),
+                'already_present': len(clips) - len(to_add),
+                'imported': len(missing)}
+    except Exception as e:                        # noqa: BLE001
         return {'ok': False, 'why': f'{type(e).__name__}: {e}'}
 
 

@@ -34,6 +34,8 @@ edit can never silently deploy without a rebuild here.
 import hashlib
 import json
 import sys
+from bisect import bisect_left
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -278,7 +280,51 @@ def photo_meta() -> dict:
         except Exception as e:                    # noqa: BLE001 — optional enrichment
             print(f"  ⚠ coordinate country lookup unavailable ({e}); "
                   f"{len(need_geo)} photos stay uncategorised", file=sys.stderr)
+    fill_countries_by_time(meta)
     return meta
+
+
+NEAR_HOURS = 24        # how far a photo may borrow a country from another photo
+
+
+def fill_countries_by_time(meta: dict) -> None:
+    """Give the GPS-less photos a country, borrowed from what was photographed
+    around the same time on a device that did record where it was.
+
+    Whole phone trips carry no coordinates at all — phone-2024-asia-24-pt2 has 0
+    of 2850 — so they landed under 'Unknown' and the People page's country filter
+    could not reach them: 195 photos of a China trip sitting outside China. A
+    photo taken within NEAR_HOURS of one whose country IS known was in the same
+    country. Beyond that the answer is left as unknown rather than guessed, which
+    is what keeps a travel day from tagging the country you had just left.
+    """
+    def epoch(ts):
+        try:
+            return datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
+        except (AttributeError, ValueError):
+            return None
+
+    known = sorted((e, cc) for ts, cc in meta.values()
+                   if ts and cc and (e := epoch(ts)) is not None)
+    if not known:
+        return
+    times = [e for e, _ in known]
+    filled = 0
+    for key, (ts, cc) in meta.items():
+        if cc or not ts:
+            continue
+        t = epoch(ts)
+        if t is None:
+            continue
+        i = bisect_left(times, t)
+        best = min((c for c in (i - 1, i) if 0 <= c < len(known)),
+                   key=lambda c: abs(times[c] - t), default=None)
+        if best is not None and abs(times[best] - t) <= NEAR_HOURS * 3600:
+            meta[key] = (ts, known[best][1])
+            filled += 1
+    if filled:
+        print(f"  ↳ {filled} photos took a country from another photo "
+              f"within {NEAR_HOURS}h")
 
 
 def public_ids(slug: str) -> set:

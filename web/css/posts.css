@@ -334,3 +334,27 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   text-overflow: ellipsis; white-space: nowrap;
 }
 @media (max-width: 640px) { .posts-buildings ul { columns: 1; } }
+
+/* "Already in a post" pill. Shown while posts mode is unlocked, on grid cells and
+   in the full-screen viewer, so a photo that is already spoken for reads at a
+   glance instead of at the moment of adding it. */
+.photo-cell.posts-has-badge { position: relative; }
+.posts-badge {
+  position: absolute; left: 5px; bottom: 5px; z-index: 4; pointer-events: none;
+  max-width: calc(100% - 10px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; font-weight: 600; letter-spacing: .03em;
+  padding: 2px 7px; border-radius: 999px;
+  background: rgba(0, 0, 0, .72); backdrop-filter: blur(2px);
+  border: 1px solid transparent;
+}
+.posts-badge[data-state="posted"] { color: #7ee0a0; border-color: rgba(90, 209, 126, .45); }
+.posts-badge[data-state="planned"] { color: #ffd27a; border-color: rgba(255, 210, 122, .4); }
+
+/* Sits above the PhotoSwipe caption rather than on top of it. */
+.posts-badge--lightbox {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: 62px; top: auto; z-index: 1600; font-size: 12px; padding: 5px 13px;
+  background: rgba(0, 0, 0, .82); max-width: 80vw;
+}
+/* Nothing under it on this slide — drop back down so it isn't floating. */
+.posts-badge--lightbox.is-low { bottom: 22px; }

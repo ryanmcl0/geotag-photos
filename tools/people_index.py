@@ -34,6 +34,8 @@ edit can never silently deploy without a rebuild here.
 import hashlib
 import json
 import sys
+from bisect import bisect_left
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -221,6 +223,110 @@ def cluster_photos_phone() -> dict:
     return out
 
 
+def photo_meta() -> dict:
+    """(display_trip_id, photo_id) -> (iso_timestamp, country_code).
+
+    Country comes from the photo's cluster in the manifest, falling back to the
+    trip's first country — the same resolution build_collections uses, so the
+    People page agrees with the map. Keyed by the trip id as it appears in the
+    page's photo refs ('2025-china-cny', 'phone-2025-01-25-china') so curated sets
+    and roster people can share one lookup.
+    """
+    meta = {}
+    need_geo = []
+
+    def ingest(trip_dir, display_id, fallback_country):
+        man = (_load(trip_dir / 'manifest.full.json') or _load(trip_dir / 'manifest.all.json')
+               or _load(trip_dir / 'manifest.json'))
+        if not man:
+            return
+        by_photo = {}
+        for c in man.get('clusters', []):
+            cc = c.get('country')
+            if not cc:
+                continue
+            for pid in c.get('photo_ids', []):
+                by_photo[pid] = cc
+        for ph in man.get('photos', []):
+            ts = ph.get('timestamp') or ''
+            cc = by_photo.get(ph['id']) or fallback_country
+            if not cc and ph.get('lat') is not None and ph.get('lon') is not None:
+                # Only 16 of 40 phone trips carry a country, and their clusters
+                # often don't either — but the photos have coordinates, so resolve
+                # from those rather than guessing from the trip name (which would
+                # pick one country for trips like 'iceland-italy').
+                need_geo.append(((display_id, ph['id']), (ph['lat'], ph['lon'])))
+            meta[(display_id, ph['id'])] = (ts or None, cc)
+
+    idx = _load(TRIPS / 'index.json') or {}
+    trip_country = {t['id']: (t.get('countries') or [None])[0] for t in idx.get('trips', [])}
+    for d in TRIPS.iterdir():
+        if d.is_dir():
+            ingest(d, d.name, trip_country.get(d.name))
+    if PHONE_TRIPS.is_dir():
+        pidx = _load(PHONE_TRIPS / 'index.json') or {}
+        pc = {t['id']: (t.get('countries') or [None])[0] for t in pidx.get('trips', [])}
+        for d in PHONE_TRIPS.iterdir():
+            if d.is_dir():
+                ingest(d, d.name, pc.get(d.name))
+
+    if need_geo:
+        try:
+            import reverse_geocoder as rg
+            hits = rg.search([c for _, c in need_geo], mode=1)
+            for (key, _), hit in zip(need_geo, hits):
+                y, _ = meta[key]
+                meta[key] = (y, hit.get('cc') or None)
+        except Exception as e:                    # noqa: BLE001 — optional enrichment
+            print(f"  ⚠ coordinate country lookup unavailable ({e}); "
+                  f"{len(need_geo)} photos stay uncategorised", file=sys.stderr)
+    fill_countries_by_time(meta)
+    return meta
+
+
+NEAR_HOURS = 24        # how far a photo may borrow a country from another photo
+
+
+def fill_countries_by_time(meta: dict) -> None:
+    """Give the GPS-less photos a country, borrowed from what was photographed
+    around the same time on a device that did record where it was.
+
+    Whole phone trips carry no coordinates at all — phone-2024-asia-24-pt2 has 0
+    of 2850 — so they landed under 'Unknown' and the People page's country filter
+    could not reach them: 195 photos of a China trip sitting outside China. A
+    photo taken within NEAR_HOURS of one whose country IS known was in the same
+    country. Beyond that the answer is left as unknown rather than guessed, which
+    is what keeps a travel day from tagging the country you had just left.
+    """
+    def epoch(ts):
+        try:
+            return datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
+        except (AttributeError, ValueError):
+            return None
+
+    known = sorted((e, cc) for ts, cc in meta.values()
+                   if ts and cc and (e := epoch(ts)) is not None)
+    if not known:
+        return
+    times = [e for e, _ in known]
+    filled = 0
+    for key, (ts, cc) in meta.items():
+        if cc or not ts:
+            continue
+        t = epoch(ts)
+        if t is None:
+            continue
+        i = bisect_left(times, t)
+        best = min((c for c in (i - 1, i) if 0 <= c < len(known)),
+                   key=lambda c: abs(times[c] - t), default=None)
+        if best is not None and abs(times[best] - t) <= NEAR_HOURS * 3600:
+            meta[key] = (ts, known[best][1])
+            filled += 1
+    if filled:
+        print(f"  ↳ {filled} photos took a country from another photo "
+              f"within {NEAR_HOURS}h")
+
+
 def public_ids(slug: str) -> set:
     """Ids that survive the privacy filter into the trip's PUBLIC manifest.json.
     Empty for a private trip (nothing there is public)."""
@@ -250,6 +356,7 @@ def site_payload(roster: dict, detail: dict, include_phone: bool = False) -> dic
     """
     by_cluster, _ = cluster_photos()
     phone_by_cluster = cluster_photos_phone() if include_phone else {}
+    meta = photo_meta()
     assigned = {c for p in roster.values() for c in p['clusters']}
     blocked_pairs = {pair for k, d in detail.items() if d['hide'] == 'blocked'
                      for pair in d['photos']}
@@ -262,9 +369,16 @@ def site_payload(roster: dict, detail: dict, include_phone: bool = False) -> dic
                 continue
             if slug not in pub_cache:
                 pub_cache[slug] = public_ids(slug)
-            out.append({'t': slug, 'i': pid, 'g': 0 if pid in pub_cache[slug] else 1})
+            d, cc = meta.get((slug, pid), (None, None))
+            out.append({'t': slug, 'i': pid, 'g': 0 if pid in pub_cache[slug] else 1,
+                        'd': d, 'c': cc})
         # g=2: local phone library. Never public, never gated, never deployed.
-        out += [{'t': slug, 'i': pid, 'g': 2} for slug, pid in sorted(phone_pairs)]
+        for slug, pid in sorted(phone_pairs):
+            d, cc = meta.get((slug, pid), (None, None))
+            out.append({'t': slug, 'i': pid, 'g': 2, 'd': d, 'c': cc})
+        # Newest first: opening a person on their oldest trip (alphabetical by
+        # slug) buried anything recent hundreds of rows down.
+        out.sort(key=lambda e: (e.get('d') or '', e['t'], e['i']), reverse=True)
         return out
 
     def pairs_for(clusters):
@@ -376,6 +490,18 @@ def main():
     # otherwise removed, so serve.sh can't seed a stale copy.
     if PHONE_TRIPS.is_dir():
         local = site_payload(roster, detail, include_phone=True)
+        # Hand-curated sets (tools/curate_photos_of_person.py) ride along as extra
+        # entries on the People page. Local document ONLY — they can reference the
+        # phone library and backup photos, none of which exist on the deployed site.
+        cmeta = photo_meta()
+        for name, entries in (_load(ROOT / 'config' / 'curated_sets.json') or {}).items():
+            for e in entries:
+                d, cc = cmeta.get((e['t'], e['i']), (None, None))
+                e.setdefault('d', d)
+                e.setdefault('c', cc)
+            local['people'].insert(0, {'key': name.lower().replace(' ', '-'), 'label': name,
+                                       'hide': False, 'clusters': [], 'curated_set': True,
+                                       'n': len(entries), 'photos': entries})
         LOCAL_OUT.write_text(json.dumps(local, separators=(',', ':')) + '\n')
         print(f"✓ {LOCAL_OUT.relative_to(ROOT)}: {count(local)} photos "
               f"(+{count(local) - count(site)} from the local phone library, localhost only)")

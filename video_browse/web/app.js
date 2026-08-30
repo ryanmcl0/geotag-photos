@@ -371,8 +371,17 @@ async function exportCut() {
     if (r.error) { out.innerHTML = `<span class="warn">${r.error}</span>`; return; }
     let html = `FCPXML: ${r.fcpxml}\n`;
     if (r.resolve && r.resolve.ok) {
-      html += `<span class="ok">✓ Resolve project "${r.resolve.project}" ` +
-              `timeline "${r.resolve.timeline}" created (${r.clips} clips)</span>`;
+      // Say what actually happened: a re-export appends the new clips to the
+      // timeline you have been editing rather than building a fresh one.
+      const v = r.resolve;
+      const what = v.created
+        ? `created with ${v.appended} clip${v.appended === 1 ? '' : 's'}`
+        : v.appended
+          ? `${v.appended} clip${v.appended === 1 ? '' : 's'} appended` +
+            (v.already_present ? `, ${v.already_present} already there` : '')
+          : 'already up to date';
+      html += `<span class="ok">✓ Resolve project "${v.project}" ` +
+              `timeline "${v.timeline}" ${what}</span>`;
     } else if (r.resolve) {
       html += `<span class="warn">Resolve API: ${r.resolve.why}</span>`;
     }

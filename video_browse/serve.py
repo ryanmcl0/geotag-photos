@@ -223,6 +223,19 @@ class Handler(BaseHTTPRequestHandler):
         sys.path.insert(0, str(ROOT / 'video_browse'))
         import resolve_export
         result = resolve_export.export_cut(cut, clips, EXPORTS)
+        # Remember which timeline this cut owns. Exporting again then appends the
+        # newly added clips to that same timeline instead of building a fresh one,
+        # even if the cut has been renamed here since.
+        tl = (result.get('resolve') or {}).get('timeline')
+        if tl and cut.get('resolve_timeline') != tl:
+            with CUTS_LOCK:
+                saved = load_cuts()
+                for c in saved.get('cuts', []):
+                    if c.get('id') == cut.get('id'):
+                        c['resolve_timeline'] = tl
+                        c['resolve_project'] = result['resolve'].get('project')
+                LIB.mkdir(exist_ok=True)
+                CUTS_PATH.write_text(json.dumps(saved, indent=1))
         return self.send_json(result)
 
 

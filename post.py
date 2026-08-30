@@ -6,6 +6,7 @@ Everything for working with post drafts. Always takes a subcommand:
   ./post.py pull      pull the drafts from the remote and copy their files
                       (plus a location card in <post>/maps/ for every photo
                       marked with the map button — see tools/map_card.py)
+  ./post.py mirror    sync a dev server started elsewhere (./serve.sh runs this)
   ./post.py sync      copy the remote state down to the local dev server
   ./post.py push      copy the local dev state up to the remote
   ./post.py status    show both sides' versions and post counts
@@ -140,18 +141,57 @@ def same_posts(a, b):
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
-def copy_state(src_base, dst_base, env, label, quiet=False):
-    """Copy both documents src -> dst. Returns the number of sets changed."""
+def merge_down(remote_posts, local_posts):
+    """Remote wins, except for drafts that exist only on this laptop.
+
+    A copy-down used to replace the local document outright, which is harmless
+    while the mirror runs (local edits have already travelled up). Started any
+    other way the two sides drift, and a laptop-only draft — the phone-photo ones
+    can only be made here — would be erased by the next sync. Those are appended
+    instead, renumbered when their #N is already taken on the live site, and the
+    mirror then pushes them up, so the two sides converge without losing work.
+
+    Returns (merged posts, the local-only ones that were kept).
+    """
+    remote_ids = {p.get('id') for p in remote_posts}
+    extra = [p for p in local_posts if p.get('id') not in remote_ids]
+    merged = list(remote_posts)
+    if not extra:
+        return merged, []
+    used = {p.get('num') for p in remote_posts if isinstance(p.get('num'), int)}
+    nxt = max(used) if used else 0
+    kept = []
+    for post in extra:
+        post = dict(post)
+        if post.get('num') in used:
+            nxt += 1
+            post['num'] = nxt
+        used.add(post.get('num'))
+        merged.append(post)
+        kept.append(post)
+    return merged, kept
+
+
+def copy_state(src_base, dst_base, env, label, quiet=False, keep_extra=False):
+    """Copy both documents src -> dst. Returns the number of sets changed.
+
+    keep_extra carries drafts the destination has and the source does not (see
+    merge_down); used when copying DOWN, so a sync can never delete local work.
+    """
     changed = 0
     for which in SETS:
         src = read_doc(src_base, env, which)
         dst = read_doc(dst_base, env, which)
-        if same_posts(src.get('posts', []), dst.get('posts', [])):
+        posts, kept = (merge_down(src.get('posts', []), dst.get('posts', []))
+                       if keep_extra else (src.get('posts', []), []))
+        if same_posts(posts, dst.get('posts', [])):
             continue
-        write_doc(dst_base, env, which, src.get('posts', []), dst.get('version', 0))
+        write_doc(dst_base, env, which, posts, dst.get('version', 0))
         changed += 1
         if not quiet:
-            print(f"   ↳ {which}: {len(src.get('posts', []))} posts {label}")
+            extra = (f" (+{len(kept)} kept from here: "
+                     f"{', '.join(p.get('name', '?') for p in kept[:3])})" if kept else '')
+            print(f"   ↳ {which}: {len(src.get('posts', []))} posts {label}{extra}")
     return changed
 
 
@@ -769,14 +809,18 @@ def local_ip():
 
 
 def start_dev_server(env, port):
-    cmd = ['npx', 'wrangler', 'pages', 'dev', 'web', '--ip', '0.0.0.0',
-           '--port', str(port), '--compatibility-date=2026-06-10', '--live-reload']
-    for name in ('CF_SITE_PASSWORD', 'CF_ALL_PASSWORD', 'CF_POSTS_PASSWORD'):
-        if env.get(name):
-            cmd += ['--binding', f'{name}={env[name]}']
+    """Start the dev server through ./serve.sh — the one place that knows how.
+
+    It also seeds the local R2 with the People document, which a bare `wrangler
+    pages dev` does not, so starting the server two different ways no longer
+    gives you two different sites. POSTS_MIRROR=0 because `serve` runs its own
+    mirror around this call.
+    """
+    child = dict(os.environ, POSTS_MIRROR='0', PORT=str(port))
     # Own process group: Ctrl-C reaches this script first, so the final sync
     # runs while the dev server (and its API) is still alive.
-    return subprocess.Popen(cmd, cwd=str(ROOT), start_new_session=True,
+    return subprocess.Popen([str(ROOT / 'serve.sh')], cwd=str(ROOT), env=child,
+                            start_new_session=True,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -799,9 +843,10 @@ class RemoteMirror:
     the push is held and reported instead.
     """
 
-    def __init__(self, env, remote):
+    def __init__(self, env, remote, local=None):
         self.env = env
         self.remote = remote
+        self.local = local or LOCAL_BASE
         self.expect = {}        # set -> remote version we last observed/wrote
         self.warned = set()
 
@@ -809,19 +854,21 @@ class RemoteMirror:
         print('⇣ Seeding the local dev server from the live site...')
         for which in SETS:
             src = read_doc(self.remote, self.env, which)
-            dst = read_doc(LOCAL_BASE, self.env, which)
-            if not same_posts(src.get('posts', []), dst.get('posts', [])):
-                write_doc(LOCAL_BASE, self.env, which,
-                          src.get('posts', []), dst.get('version', 0))
+            dst = read_doc(self.local, self.env, which)
+            posts, kept = merge_down(src.get('posts', []), dst.get('posts', []))
+            if not same_posts(posts, dst.get('posts', [])):
+                write_doc(self.local, self.env, which, posts, dst.get('version', 0))
             self.expect[which] = src.get('version', 0)
-            print(f"   ↳ {which}: {len(src.get('posts', []))} posts")
+            extra = (f", kept {len(kept)} made here: "
+                     f"{', '.join(p.get('name', '?') for p in kept[:3])}" if kept else '')
+            print(f"   ↳ {which}: {len(src.get('posts', []))} posts from the live site{extra}")
 
     def push(self, quiet=False):
         """Push any local change up. Returns the number of sets written."""
         written = 0
         for which in SETS:
             try:
-                local = read_doc(LOCAL_BASE, self.env, which)
+                local = read_doc(self.local, self.env, which)
                 remote = read_doc(self.remote, self.env, which)
             except (urllib.error.URLError, urllib.error.HTTPError, OSError):
                 continue
@@ -867,7 +914,7 @@ def cmd_serve(args):
             dev.terminate()
             sys.exit('❌ The dev server did not come up. Run ./serve.sh to see why.')
 
-    mirror = RemoteMirror(env, remote) if remote else None
+    mirror = RemoteMirror(env, remote, f'http://localhost:{args.port}') if remote else None
     if mirror:
         mirror.seed_local()
 
@@ -921,13 +968,68 @@ def cmd_serve(args):
         print('Done.')
 
 
+def cmd_mirror(args):
+    """Sync a dev server this script did not start, then keep pushing edits up.
+
+    ./serve.sh (and the desktop app that wraps it) runs this in the background,
+    so the posts on localhost are the posts on the live site however the server
+    was started — the drafts used to arrive only when the server happened to be
+    started through ./post.py serve, and a post made on the phone would simply
+    never show up here.
+    """
+    env = require_env()
+    remote = remote_base(env)
+    local = f'http://localhost:{args.port}'
+    if not wait_for_server(local, env, args.wait):
+        print('⚠️  posts: no local dev server answered; not syncing drafts.')
+        return
+    if not server_up(remote, env):
+        print('⚠️  posts: the live site did not answer; leaving local drafts alone.')
+        return
+    mirror = RemoteMirror(env, remote, local)
+    mirror.seed_local()
+
+    def _stop(signum, _frame):
+        raise KeyboardInterrupt
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, _stop)
+        except (ValueError, OSError, AttributeError):
+            pass
+    # Also stop on our own when the dev server goes away. The shell that started
+    # this is supposed to kill it, but it can be killed itself (or crash), and a
+    # mirror left running against a dead server would keep pushing an empty
+    # document at the live site.
+    gone = 0
+    try:
+        while True:
+            time.sleep(args.interval)
+            if not server_up(local, env):
+                gone += 1
+                if gone >= 3:
+                    break
+                continue
+            gone = 0
+            mirror.push()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # The dev server is usually on its way out too, so a failed last push is
+        # normal: everything up to the previous tick is already on the live site.
+        try:
+            if server_up(local, env):
+                mirror.push(quiet=True)
+        except Exception:                               # noqa: BLE001
+            pass
+
+
 def cmd_sync(args):
     env = require_env()
     remote = remote_base(env)
     if not server_up(LOCAL_BASE, env):
         sys.exit(f'❌ No dev server on {LOCAL_BASE}. Start one with ./post.py serve.')
     print('⇣ Live site → local dev server')
-    if copy_state(remote, LOCAL_BASE, env, 'copied down') == 0:
+    if copy_state(remote, LOCAL_BASE, env, 'copied down', keep_extra=True) == 0:
         print('   ↳ already identical')
 
 
@@ -1011,6 +1113,15 @@ def main():
     p.add_argument('--dry-run', action='store_true', help='Print the copy plan only')
     p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
     p.set_defaults(func=cmd_pull)
+
+    m = sub.add_parser('mirror', help='sync an already-running dev server with the live site')
+    m.add_argument('--interval', type=int, default=5,
+                   help='seconds between push checks (default 5)')
+    m.add_argument('--port', type=int, default=DEV_PORT,
+                   help=f'port the dev server is on (default {DEV_PORT})')
+    m.add_argument('--wait', type=int, default=120,
+                   help='seconds to wait for the dev server to come up (default 120)')
+    m.set_defaults(func=cmd_mirror)
 
     y = sub.add_parser('sync', help='copy the live state down to the local dev server')
     y.set_defaults(func=cmd_sync)

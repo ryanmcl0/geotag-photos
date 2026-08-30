@@ -169,7 +169,8 @@ window.Posts = (function () {
         };
         saveChain = saveChain
             .then(run)
-            .then(() => true, err => { toast('Save failed: ' + err.message); return false; });
+            .then(() => { stampPostBadges(); return true; },
+                  err => { toast('Save failed: ' + err.message); return false; });
         return saveChain;
     }
     function mutate(fn) { return mutateSet('main', fn); }
@@ -537,6 +538,33 @@ window.Posts = (function () {
         const closeBtn = bar.querySelector('.pswp__button--close');
         bar.insertBefore(btn, closeBtn || null);
         bar.insertBefore(pick, closeBtn || null);
+
+        // Same "already in a post" pill as the grids. The map has no thumbnails
+        // of its own, so the viewer is the only place its photos can carry one.
+        let pill = pswpEl.querySelector('.posts-badge--lightbox');
+        if (!pill) {
+            pill = document.createElement('span');
+            pill.className = 'posts-badge posts-badge--lightbox';
+            pswpEl.appendChild(pill);
+        }
+        const refresh = () => {
+            const item = gallery.currItem;
+            const info = item && item.ref
+                ? badgeFor(postsByPhoto().get(keyOf(item.ref)))
+                : null;
+            pill.style.display = info ? '' : 'none';
+            if (info) {
+                pill.dataset.state = info.state;
+                pill.textContent = info.text;
+                pill.title = info.title;
+                // Clear the caption when there is one, sit low when there isn't.
+                const cap = pswpEl.querySelector('.pswp__caption__center');
+                pill.classList.toggle('is-low', !(cap && cap.textContent.trim()));
+            }
+        };
+        gallery.listen('afterChange', refresh);
+        gallery.listen('close', () => { pill.style.display = 'none'; });
+        ready.then(ok => { if (ok) refresh(); });
     }
 
     // ---------- Grid select mode ----------
@@ -621,6 +649,71 @@ window.Posts = (function () {
         actionAdd.textContent = t ? 'Add' : 'Add to post';
     }
 
+    /* ---------- "already in a post" badges ----------
+     *
+     * While browsing in posts mode, any photo already committed to a post gets a
+     * pill saying so, on every surface: grids (galleries, blogs, China, People)
+     * and the full-screen viewer, which is the only place map photos are seen.
+     * The point is recognising at a glance that a shot is already spoken for,
+     * instead of finding out at the moment of adding it.
+     */
+
+    /** key -> [{name, posted}], rebuilt from doc on demand (a few hundred refs). */
+    function postsByPhoto() {
+        const map = new Map();
+        for (const post of (doc && doc.posts) || []) {
+            const label = post.name || (post.num ? `#${post.num}` : 'Untitled');
+            for (const ref of post.photos || []) {
+                const key = keyOf(ref);
+                if (!map.has(key)) map.set(key, []);
+                map.get(key).push({ name: label, posted: !!post.posted });
+            }
+        }
+        return map;
+    }
+
+    /** "Posted · Norway bridge" / "Planned · Asia v1 +1", plus a full title. */
+    function badgeFor(entries) {
+        if (!entries || !entries.length) return null;
+        // Posted wins the label when a photo sits in both: "already out" is the
+        // fact that actually changes what you do next.
+        const posted = entries.filter(e => e.posted);
+        const shown = posted.length ? posted : entries;
+        const rest = entries.length - shown.length;
+        const extra = shown.length - 1 + rest;
+        return {
+            state: posted.length ? 'posted' : 'planned',
+            text: (posted.length ? 'Posted' : 'Planned') + ' · ' + shown[0].name
+                  + (extra > 0 ? ` +${extra}` : ''),
+            title: entries.map(e => (e.posted ? 'Posted' : 'Planned') + ' · ' + e.name).join('\n'),
+        };
+    }
+
+    function stampPostBadges(root) {
+        if (!doc) return;
+        const map = postsByPhoto();
+        (root || document).querySelectorAll('.photo-cell[data-trip]').forEach(cell => {
+            const info = badgeFor(map.get(`${cell.dataset.trip}::${cell.dataset.id}`));
+            let pill = cell.querySelector(':scope > .posts-badge');
+            if (!info) {
+                if (pill) pill.remove();
+                cell.classList.remove('posts-has-badge');
+                return;
+            }
+            if (!pill) {
+                pill = document.createElement('span');
+                pill.className = 'posts-badge';
+                cell.appendChild(pill);
+            }
+            // Cells are only position:relative while selecting; the badge shows
+            // whenever posts mode is unlocked, so it needs its own anchor.
+            cell.classList.add('posts-has-badge');
+            pill.dataset.state = info.state;
+            pill.textContent = info.text;
+            pill.title = info.title;
+        });
+    }
+
     function restampSelections() {
         const t = selectMode ? targetPost() : null;
         const inTarget = t ? new Set(t.photos.map(keyOf)) : null;
@@ -660,7 +753,7 @@ window.Posts = (function () {
         (order || []).forEach(ref => {
             if (ref && ref.trip && ref.id) refByKey.set(keyOf(ref), ref);
         });
-        ready.then(ok => { if (ok) ensureSelectUi(); });
+        ready.then(ok => { if (ok) { ensureSelectUi(); stampPostBadges(grid); } });
         restampSelections();   // relayout rebuilds cells, so re-apply check marks
     }
 
@@ -1607,6 +1700,9 @@ window.Posts = (function () {
     ready.then(ok => {
         if (!ok) return;
         updatePill();
+        // Blogs render their grids before this script loads, so stamp whatever is
+        // already on the page as well as anything rendered later.
+        stampPostBadges();
         if (document.querySelector('.photo-cell[data-trip]')) ensureSelectUi();
     });
 

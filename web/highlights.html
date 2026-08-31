@@ -3,26 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>China · Ryan's Travels</title>
+    <title>Highlights · Ryan's Travels</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <link rel="stylesheet" href="css/site.css"/>
+    <link rel="stylesheet" href="css/highlights.css"/>
 </head>
 <body>
     <nav class="topnav">
         <div class="nav-links">
             <a href="index.html">Home</a>
             <a href="map.html">Map</a>
-            <a href="china.html" class="active">China</a>
+            <a href="china.html">China</a>
             <a href="blogs.html">Blogs</a>
             <a href="rooftopping.html" data-gated>Urbex</a>
             <a href="galleries.html">Galleries</a>
             <div class="nav-more">
-                <button class="nav-more-toggle" type="button">More</button>
+                <button class="nav-more-toggle active" type="button">More</button>
                 <div class="nav-more-menu">
-                    <a href="highlights.html">Highlights</a>
-                    <a href="videos.html" data-gated>Videos</a>
+                    <a href="highlights.html" class="active">Highlights</a>
+                    <a href="videos.html">Videos</a>
                     <a href="plans/" data-gated>Plans</a>
                 </div>
             </div>
@@ -33,12 +33,14 @@
         <div class="nav-links"><a id="seeall-link" href="#">See All</a></div>
     </nav>
 
-    <main class="wrap">
-        <div class="crumbs" id="crumbs"></div>
-        <div id="app"></div>
-    </main>
+    <header class="hl-masthead">
+        <h1>Highlights</h1>
+        <p>Curated sets from the road. Scroll to spin through them.</p>
+    </header>
 
-    <!-- PhotoSwipe lightbox template (same as the map) -->
+    <div id="hl-app"></div>
+
+    <!-- PhotoSwipe lightbox template (same as the galleries) -->
     <div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="pswp__bg"></div>
         <div class="pswp__scroll-wrap">
@@ -63,14 +65,10 @@
         </div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
     <script src="js/unlock.js"></script>
     <script src="js/gallery.js"></script>
-    <script src="js/china.js"></script>
-    <script src="js/posts.js"></script>
-    <script src="js/nontrip-filter.js"></script>
-    <script src="js/phone-mode.js"></script>
+    <script src="js/highlights.js"></script>
 </body>
 </html>

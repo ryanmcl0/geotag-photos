@@ -34,9 +34,12 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 // can offer them back; the client caps the list and drops re-added entries.
 interface HistoryRef {
     trip: string; id?: string; file?: string; ar?: number; blur?: boolean;
-    map?: 'route' | 'pin' | 'china'; phone?: boolean; removed?: string;
+    map?: 'route' | 'pin' | 'china'; phone?: boolean; waitlist?: boolean; removed?: string;
 }
 const MAX_HISTORY_PER_POST = 100;
+// Demoted photos: still attached to the post but outside the carousel, so they
+// do NOT count toward the platform cap (unlike phone items on xhs).
+const MAX_WAITLIST_PER_POST = 40;
 // platform: 'ig' (default) or 'xhs'. On xhs the phone items are part of the
 // carousel, so photos+phone together are capped at 18; on ig the phone bucket
 // stays behind-the-scenes and uncapped. posted marks published drafts.
@@ -48,7 +51,7 @@ const MAX_HISTORY_PER_POST = 100;
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
-    num?: number; account?: string; history?: HistoryRef[];
+    num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
 }
 interface PostsDoc { version: number; updated: string | null; posts: Post[] }
 
@@ -84,6 +87,14 @@ function validPosts(posts: unknown): posts is Post[] {
                 ph && typeof ph === 'object' &&
                 typeof ph.trip === 'string' && ph.trip.startsWith('phone-') &&
                 (typeof ph.id === 'string' || typeof ph.file === 'string')))) &&
+        ((p as Post).waitlist === undefined || (
+            Array.isArray((p as Post).waitlist) &&
+            (p as Post).waitlist!.length <= MAX_WAITLIST_PER_POST &&
+            (p as Post).waitlist!.every(ph =>
+                ph && typeof ph === 'object' &&
+                typeof ph.trip === 'string' && typeof ph.id === 'string' &&
+                (ph.blur === undefined || typeof ph.blur === 'boolean') &&
+                (ph.map === undefined || MAP_STYLES.includes(ph.map))))) &&
         ((p as Post).history === undefined || (
             Array.isArray((p as Post).history) &&
             (p as Post).history!.length <= MAX_HISTORY_PER_POST &&
@@ -94,6 +105,7 @@ function validPosts(posts: unknown): posts is Post[] {
                 (h.blur === undefined || typeof h.blur === 'boolean') &&
                 (h.map === undefined || MAP_STYLES.includes(h.map)) &&
                 (h.phone === undefined || typeof h.phone === 'boolean') &&
+                (h.waitlist === undefined || typeof h.waitlist === 'boolean') &&
                 (h.removed === undefined ||
                     (typeof h.removed === 'string' && h.removed.length <= 40))))));
 }

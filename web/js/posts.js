@@ -194,8 +194,13 @@ window.Posts = (function () {
     const platformOf = post => (post.platform === 'xhs' ? 'xhs' : 'ig');
     const platLabel = post => (platformOf(post) === 'xhs' ? 'XHS' : 'IG');
     const capOf = post => CAPS[platformOf(post)];
+    // The waitlist is a holding bay OUTSIDE the carousel — demoted photos stay
+    // attached to the post but are not part of it, so they never count toward
+    // the cap on either platform (unlike phone items, which do on XHS).
     const countOf = post => post.photos.length
         + (platformOf(post) === 'xhs' ? (post.phone || []).length : 0);
+    const waitOf = post => post.waitlist || [];
+    const WAITLIST_MAX = 40;
 
     // Orientation lock: a carousel must not mix portrait and landscape; the
     // first photo with a known aspect ratio sets the post's orientation.
@@ -251,7 +256,9 @@ window.Posts = (function () {
     function addRefsToPost(post, refs) {
         const cap = capOf(post);
         const xhs = platformOf(post) === 'xhs';
-        const have = new Set(post.photos.map(keyOf));
+        // A waitlisted photo already belongs to this post, so re-adding it is a
+        // duplicate, not a new photo (promote it from the waitlist instead).
+        const have = new Set(post.photos.map(keyOf).concat(waitOf(post).map(keyOf)));
         const havePhone = new Set((post.phone || []).map(keyOf));
         let added = 0, dupes = 0, hitCap = false, phoneAdded = 0;
         refs.forEach(ref => {
@@ -361,6 +368,8 @@ window.Posts = (function () {
                 if (p.photos.some(ph => keyOf(ph) === k) ||
                     (p.phone || []).some(ph => keyOf(ph) === k)) {
                     out.push({ ref, post: p });
+                } else if (waitOf(p).some(ph => keyOf(ph) === k)) {
+                    out.push({ ref, post: p, waitlist: true });
                 }
             });
         });
@@ -397,7 +406,8 @@ window.Posts = (function () {
         if (!orientationOk(postId, refs, platform)) return;
         const conflicts = conflictsFor(refs, postId);
         if (conflicts.length) {
-            const names = [...new Set(conflicts.map(c => postLabel(c.post)))];
+            const names = [...new Set(conflicts.map(c =>
+                postLabel(c.post) + (c.waitlist ? ' (waitlist)' : '')))];
             const nDup = new Set(conflicts.map(c => keyOf(c.ref))).size;
             // Name the TARGET too: "already in X" alone reads as if X is where
             // the photo is about to go.
@@ -702,34 +712,50 @@ window.Posts = (function () {
      * instead of finding out at the moment of adding it.
      */
 
-    /** key -> [{name, posted}], rebuilt from doc on demand (a few hundred refs). */
+    /** key -> [{name, posted, waitlist}], rebuilt from doc on demand (a few
+     *  hundred refs). Waitlisted photos are included so browsing shows they
+     *  are spoken for, marked so the badge can say which shelf they sit on. */
     function postsByPhoto() {
         const map = new Map();
+        const add = (ref, entry) => {
+            const key = keyOf(ref);
+            if (!map.has(key)) map.set(key, []);
+            map.get(key).push(entry);
+        };
         for (const post of (doc && doc.posts) || []) {
             const label = post.name || (post.num ? `#${post.num}` : 'Untitled');
             for (const ref of post.photos || []) {
-                const key = keyOf(ref);
-                if (!map.has(key)) map.set(key, []);
-                map.get(key).push({ name: label, posted: !!post.posted });
+                add(ref, { name: label, posted: !!post.posted });
+            }
+            for (const ref of waitOf(post)) {
+                add(ref, { name: label, posted: false, waitlist: true });
             }
         }
         return map;
     }
 
-    /** "Posted · Norway bridge" / "Planned · Asia v1 +1", plus a full title. */
+    /** "Posted · Norway bridge" / "Planned · Asia v1 +1" /
+     *  "Planned · Asia v1 (waitlist)", plus a full title listing every post the
+     *  photo sits in.
+     *
+     *  Precedence for the one-line label: posted (already out) beats being in a
+     *  post's carousel, which beats merely sitting on a waitlist. A waitlisted
+     *  photo is named with "(waitlist)" after the post, so browsing shows the
+     *  shot is spoken for while making clear it is not in the carousel yet. */
     function badgeFor(entries) {
         if (!entries || !entries.length) return null;
-        // Posted wins the label when a photo sits in both: "already out" is the
-        // fact that actually changes what you do next.
         const posted = entries.filter(e => e.posted);
-        const shown = posted.length ? posted : entries;
+        const main = entries.filter(e => !e.posted && !e.waitlist);
+        const shown = posted.length ? posted : (main.length ? main : entries);
+        const waitOnly = !posted.length && !main.length;
         const rest = entries.length - shown.length;
         const extra = shown.length - 1 + rest;
+        const named = e => e.name + (e.waitlist ? ' (waitlist)' : '');
         return {
-            state: posted.length ? 'posted' : 'planned',
-            text: (posted.length ? 'Posted' : 'Planned') + ' · ' + shown[0].name
+            state: posted.length ? 'posted' : waitOnly ? 'waitlist' : 'planned',
+            text: (posted.length ? 'Posted' : 'Planned') + ' · ' + named(shown[0])
                   + (extra > 0 ? ` +${extra}` : ''),
-            title: entries.map(e => (e.posted ? 'Posted' : 'Planned') + ' · ' + e.name).join('\n'),
+            title: entries.map(e => (e.posted ? 'Posted' : 'Planned') + ' · ' + named(e)).join('\n'),
         };
     }
 
@@ -760,7 +786,7 @@ window.Posts = (function () {
 
     function restampSelections() {
         const t = selectMode ? targetPost() : null;
-        const inTarget = t ? new Set(t.photos.map(keyOf)) : null;
+        const inTarget = t ? new Set(t.photos.map(keyOf).concat(waitOf(t).map(keyOf))) : null;
         document.querySelectorAll('.photo-cell[data-trip]').forEach(cell => {
             const key = `${cell.dataset.trip}::${cell.dataset.id}`;
             cell.classList.toggle('posts-selected', selectMode && selected.has(key));
@@ -783,6 +809,10 @@ window.Posts = (function () {
             const t = targetPost();
             if (t && t.photos.some(ph => keyOf(ph) === key)) {
                 toast(`Already in ${t.name}${t.account ? ` (@${t.account})` : ''}`);
+                return;
+            }
+            if (t && waitOf(t).some(ph => keyOf(ph) === key)) {
+                toast(`Already on the waitlist of ${t.name}${t.account ? ` (@${t.account})` : ''}`);
                 return;
             }
             const ref = refByKey.get(key) || { trip: cell.dataset.trip, id: cell.dataset.id };
@@ -1207,7 +1237,8 @@ window.Posts = (function () {
             ? `${post.photos.length} photos`
             : `${platLabel(post)} · ${countOf(post)}/${capOf(post)} photos`)
             + (phonePhotos ? ` · ${phonePhotos} phone` : '')
-            + (phoneVideos ? ` · ${phoneVideos} video${phoneVideos === 1 ? '' : 's'}` : '');
+            + (phoneVideos ? ` · ${phoneVideos} video${phoneVideos === 1 ? '' : 's'}` : '')
+            + (set === 'main' && waitOf(post).length ? ` · ${waitOf(post).length} waitlisted` : '');
         if (countOf(post) >= capOf(post)) count.classList.add('posts-count-full');
         const del = document.createElement('button');
         del.type = 'button';
@@ -1348,6 +1379,7 @@ window.Posts = (function () {
                 };
                 if (post.caption) dup.caption = post.caption;
                 if (post.song) dup.song = post.song;
+                if (waitOf(post).length) dup.waitlist = waitOf(post).map(ph => ({ ...ph }));
                 let phone = (post.phone || []).map(ph => ({ ...ph }));
                 if (otherPlat === 'xhs') {
                     dup.platform = 'xhs';
@@ -1622,6 +1654,22 @@ window.Posts = (function () {
             card.appendChild(det);
         }
 
+        // Waitlist: demoted photos, still attached to the post but out of the
+        // carousel (and out of the cap). Promote to put one back.
+        if (set === 'main' && waitOf(post).length) {
+            const det = document.createElement('details');
+            det.className = 'posts-waitlist';
+            det.open = true;
+            const sum = document.createElement('summary');
+            sum.textContent = `Waitlist (${waitOf(post).length})`;
+            sum.title = 'Demoted photos: kept on this post but not in the carousel, and not counted against the cap';
+            const wstrip = document.createElement('div');
+            wstrip.className = 'posts-strip posts-waitlist-strip';
+            waitOf(post).forEach(ref => wstrip.appendChild(renderWaitCell(root, post, ref)));
+            det.append(sum, wstrip);
+            card.appendChild(det);
+        }
+
         // Previously-removed photos, offered back (see rememberRemoval).
         if (set === 'main' && post.history && post.history.length) {
             const det = document.createElement('details');
@@ -1638,14 +1686,104 @@ window.Posts = (function () {
         return card;
     }
 
+    /** One waitlist entry: thumb + promote ("⇧", back into the carousel at the
+     *  end) and remove ("✕", confirm + History like the main strip). Keeps the
+     *  blur/map marks visible so a demoted photo does not silently lose them. */
+    function renderWaitCell(root, post, ref) {
+        const cell = document.createElement('div');
+        cell.className = 'posts-wait-cell';
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.alt = '';
+        img.title = 'On the waitlist';
+        img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
+        img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+        img.addEventListener('click', () => {
+            if (window.Gallery) Gallery.openLightbox(waitOf(post), waitOf(post).indexOf(ref),
+                { defaultPostId: post.id });
+        });
+        cell.appendChild(img);
+
+        if (ref.blur || ref.map) {
+            const mark = document.createElement('span');
+            mark.className = 'posts-wait-marks';
+            mark.textContent = (ref.blur ? '🙂🚫' : '') + (ref.map ? ' 🗺' : '');
+            mark.title = [ref.blur ? 'Faces blurred on pull' : null,
+                          ref.map ? `Map card: ${MAP_LABELS[ref.map]}` : null]
+                         .filter(Boolean).join('\n');
+            cell.appendChild(mark);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'posts-wait-actions';
+        const up = document.createElement('button');
+        up.type = 'button';
+        up.textContent = '⇧';
+        up.title = 'Promote back into the post';
+        up.addEventListener('click', () => {
+            const result = {};
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
+                if (wi === -1) return;
+                if (countOf(p) >= capOf(p)) { result.full = true; return; }
+                const back = p.waitlist.splice(wi, 1)[0];
+                if (!p.waitlist.length) delete p.waitlist;
+                p.photos.push(back);
+                result.ok = true;
+            }).then(okSave => {
+                renderManager(root);
+                if (result.full) toast(`"${post.name}" is full (${countOf(post)}/${capOf(post)})`);
+                else if (okSave && result.ok) toast(`Promoted into "${post.name}"`);
+            });
+        });
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.textContent = '✕';
+        rm.title = 'Remove from the waitlist';
+        rm.addEventListener('click', () => {
+            if (!confirm(`Remove this photo from the waitlist of "${post.name}"? `
+                + `It stays in the card's History.`)) return;
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
+                if (wi === -1) return;
+                const gone = p.waitlist.splice(wi, 1)[0];
+                if (!p.waitlist.length) delete p.waitlist;
+                rememberRemoval(p, { ...gone, waitlist: true }, false);
+            }).then(okSave => {
+                renderManager(root);
+                if (!okSave) return;
+                toast(`Removed from the waitlist of "${post.name}"`, { label: 'Undo', fn: () => {
+                    mutate(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p || waitOf(p).some(ph => keyOf(ph) === keyOf(ref))) return;
+                        if (waitOf(p).length >= WAITLIST_MAX) return;
+                        if (!p.waitlist) p.waitlist = [];
+                        p.waitlist.push({ ...ref });
+                        unhistory(p, keyOf(ref));
+                    }).then(() => renderManager(root));
+                } });
+            });
+        });
+        actions.append(up, rm);
+        cell.appendChild(actions);
+        return cell;
+    }
+
     /** One History entry: greyed thumb + "add back" / "forget". Restoring
      *  keeps the ref's marks (ar/blur/map) and returns phone items to the
      *  Phone bucket; caps are respected with a toast instead of a save. */
     function renderHistoryCell(root, post, entry) {
         const isPhone = !!entry.phone || (entry.trip && entry.trip.startsWith('phone-'));
+        const wasWait = !!entry.waitlist;
         const cell = document.createElement('div');
         cell.className = 'posts-history-cell';
-        const when = entry.removed ? `Removed ${new Date(entry.removed).toLocaleDateString()}` : 'Removed';
+        const when = (entry.removed ? `Removed ${new Date(entry.removed).toLocaleDateString()}` : 'Removed')
+            + (wasWait ? ' (from the waitlist)' : '');
         if (entry.file) {   // phone video: no thumbnail to show
             const vid = document.createElement('span');
             vid.className = 'posts-history-video';
@@ -1667,19 +1805,27 @@ window.Posts = (function () {
         const back = document.createElement('button');
         back.type = 'button';
         back.textContent = '+';
-        back.title = isPhone ? 'Add back to the Phone section' : 'Add back to the post';
+        back.title = isPhone ? 'Add back to the Phone section'
+            : wasWait ? 'Add back to the waitlist' : 'Add back to the post';
         back.addEventListener('click', () => {
             const result = {};
             mutate(posts => {
                 const p = posts.find(x => x.id === post.id);
                 if (!p) return;
-                const { removed, phone, ...ref } = entry;
+                const { removed, phone, waitlist, ...ref } = entry;
                 const k = keyOf(ref);
                 if (isPhone) {
                     if (!(p.phone || []).some(r => keyOf(r) === k)) {
                         if (platformOf(p) === 'xhs' && countOf(p) >= capOf(p)) { result.full = true; return; }
                         if (!p.phone) p.phone = [];
                         p.phone.push(ref);
+                    }
+                } else if (wasWait) {
+                    // it left from the waitlist, so it goes back there
+                    if (!waitOf(p).some(r => keyOf(r) === k)) {
+                        if (waitOf(p).length >= WAITLIST_MAX) { result.waitFull = true; return; }
+                        if (!p.waitlist) p.waitlist = [];
+                        p.waitlist.push(ref);
                     }
                 } else if (!p.photos.some(r => keyOf(r) === k)) {
                     if (countOf(p) >= capOf(p)) { result.full = true; return; }
@@ -1690,7 +1836,11 @@ window.Posts = (function () {
             }).then(okSave => {
                 renderManager(root);
                 if (result.full) toast(`"${post.name}" is full (${countOf(post)}/${capOf(post)})`);
-                else if (okSave && result.ok) toast(`Added back to "${post.name}"`);
+                else if (result.waitFull) toast(`Waitlist is full (${WAITLIST_MAX})`);
+                else if (okSave && result.ok) {
+                    toast(wasWait ? `Added back to the waitlist of "${post.name}"`
+                                  : `Added back to "${post.name}"`);
+                }
             });
         });
         const forget = document.createElement('button');
@@ -1787,6 +1937,45 @@ window.Posts = (function () {
             }).then(() => renderManager(root));
         });
 
+        // Demote: park the photo on the post's waitlist instead of removing it.
+        // It stays attached to the post (and keeps its blur/map marks) but
+        // leaves the carousel, freeing a slot against the cap.
+        const demote = document.createElement('button');
+        demote.type = 'button';
+        demote.textContent = '⇩';
+        demote.title = 'Demote to the waitlist (keeps it on this post, out of the carousel)';
+        demote.addEventListener('click', () => {
+            const at = idx;
+            const result = {};
+            M(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
+                if (i === -1) return;
+                if (waitOf(p).length >= WAITLIST_MAX) { result.full = true; return; }
+                const moved = p.photos.splice(i, 1)[0];
+                if (!p.waitlist) p.waitlist = [];
+                p.waitlist.push(moved);
+                result.ok = true;
+            }).then(okSave => {
+                renderManager(root);
+                if (result.full) { toast(`Waitlist is full (${WAITLIST_MAX})`); return; }
+                if (!okSave || !result.ok) return;
+                toast(`Waitlisted in "${post.name}"`, { label: 'Undo', fn: () => {
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p) return;
+                        const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
+                        if (wi === -1) return;
+                        if (countOf(p) >= capOf(p)) return;   // carousel filled up meanwhile
+                        const back = p.waitlist.splice(wi, 1)[0];
+                        if (!p.waitlist.length) delete p.waitlist;
+                        p.photos.splice(Math.min(at, p.photos.length), 0, back);
+                    }).then(() => renderManager(root));
+                } });
+            });
+        });
+
         const rm = document.createElement('button');
         rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove from post';
         rm.addEventListener('click', () => {
@@ -1842,6 +2031,8 @@ window.Posts = (function () {
 
         controls.insertBefore(blurBtn, rm);
         controls.insertBefore(mapBtn, rm);
+        // Demote sits next to remove: the softer of the two "take it out" actions.
+        if (set === 'main') controls.insertBefore(demote, rm);
         if (ref.map) {
             const mark = document.createElement('span');
             mark.textContent = '🗺 ' + MAP_SHORT[ref.map];

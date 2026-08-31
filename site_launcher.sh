@@ -19,6 +19,8 @@ alert() {   # non-blocking notification; falls back to nothing on failure
 cd "$REPO" || exit 1
 mkdir -p local_browse
 LOG=local_browse/serve_site.log
+LAUNCHLOG=local_browse/launcher.log
+echo "$(date '+%F %T') launched (pid $$)" >>"$LAUNCHLOG"
 
 if ! curl -s -o /dev/null --max-time 2 "$URL"; then
   alert "Starting the local server…"
@@ -35,7 +37,8 @@ if ! curl -s -o /dev/null --max-time 2 "$URL"; then
   fi
 fi
 
-open "$URL"
+open "$URL" && echo "$(date '+%F %T') opened $URL in browser" >>"$LAUNCHLOG" \
+  || { echo "$(date '+%F %T') open failed" >>"$LAUNCHLOG"; alert "Could not open the browser, see local_browse/launcher.log"; }
 
 # People and Posts serve phone photos through symlinks into the Tailscale drive.
 # Without it those pages load but every phone thumbnail 404s, so flag it — after

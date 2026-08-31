@@ -712,12 +712,35 @@ def phone_sources(slug):
     return _phone_cache[slug]
 
 
+def pseudo_source(trip, pid):
+    """Original for a curated pseudo trip (web/phone/trips/<trip>/) photo.
+
+    Those trips are materialised from the personal backup share by
+    curate_photos_of_person.py, so they are in no phone_browse manifest; their
+    own manifest.json records a local copy of the original ('original') and
+    the backup path it came from ('src').
+    """
+    mpath = ROOT / 'web' / 'phone' / 'trips' / trip / 'manifest.json'
+    if not mpath.exists():
+        return None
+    for row in json.loads(mpath.read_text()).get('photos', []):
+        if row.get('id') != pid:
+            continue
+        for key in ('original', 'src'):
+            if row.get(key):
+                p = Path(row[key])
+                p = p if p.is_absolute() else mpath.parent / p
+                if p.exists():
+                    return p
+    return None
+
+
 def resolve_phone(ref):
     """Original NAS file for a {trip, id} phone photo or {trip, file} video."""
     slug = ref['trip'].removeprefix('phone-')
     names, phone_root = phone_sources(slug)
     if ref.get('id'):
-        src = names.get(ref['id'])
+        src = names.get(ref['id']) or pseudo_source(ref['trip'], ref['id'])
         return (src, None) if src and src.exists() else (None, 'not in phone manifest')
     if phone_root is None:
         return None, 'phone trip manifest missing'

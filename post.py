@@ -257,20 +257,21 @@ def resolve_source(trip, photo_id):
 MODELS_DIR = ROOT / 'tools' / 'models'
 
 
-def _face_boxes(img):
-    """Face bboxes [(x, y, w, h)] via insightface if available (best recall,
-    laptop venv) else OpenCV YuNet (tiny ONNX in tools/models — enough for the
-    NAS docker container with just opencv-python-headless + numpy)."""
+def _face_boxes_scored(img):
+    """Face bboxes [(x, y, w, h, score)] via insightface if available (best
+    recall, laptop venv) else OpenCV YuNet (tiny ONNX in tools/models — enough
+    for the NAS docker container with just opencv-python-headless + numpy)."""
     try:
         from insightface.app import FaceAnalysis
-        if not hasattr(_face_boxes, '_app'):
+        if not hasattr(_face_boxes_scored, '_app'):
             app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'],
                                allowed_modules=['detection'])
             app.prepare(ctx_id=-1, det_size=(1024, 1024), det_thresh=0.4)
-            _face_boxes._app = app
-        faces = _face_boxes._app.get(img)
+            _face_boxes_scored._app = app
+        faces = _face_boxes_scored._app.get(img)
         return [tuple(int(v) for v in (f.bbox[0], f.bbox[1],
-                f.bbox[2] - f.bbox[0], f.bbox[3] - f.bbox[1])) for f in faces]
+                f.bbox[2] - f.bbox[0], f.bbox[3] - f.bbox[1])) + (float(f.det_score),)
+                for f in faces]
     except ImportError:
         pass
     import cv2
@@ -284,13 +285,34 @@ def _face_boxes(img):
     out = []
     for f in (faces if faces is not None else []):
         x, y, fw, fh = [int(v / scale) for v in f[:4]]
-        out.append((x, y, fw, fh))
+        out.append((x, y, fw, fh, float(f[14]) if len(f) > 14 else 1.0))
     return out
+
+
+def _face_boxes(img):
+    """Back-compat: bboxes only."""
+    return [b[:4] for b in _face_boxes_scored(img)]
+
+
+def _confirm_face(img, box):
+    """Second opinion on a low-confidence candidate: re-detect on a 4x
+    upscaled crop around it. Genuine tiny faces re-detect; the texture noise
+    the tiled sweep loves (night foliage, building windows) does not. Returns
+    the best score found in the crop (0.0 = nothing)."""
+    import cv2
+    H, W = img.shape[:2]
+    x, y, w, h = box
+    m = int(2.0 * max(w, h))
+    crop = img[max(0, y - m):min(H, y + h + m), max(0, x - m):min(W, x + w + m)]
+    if crop.size == 0:
+        return 0.0
+    up = cv2.resize(crop, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+    return max((s for *_, s in _face_boxes_scored(up)), default=0.0)
 
 
 def _face_boxes_tiled(img, tile=1536, overlap=256):
     """Native-resolution tiled sweep for tiny faces (distant figures in wide
-    shots). Only used when the whole-frame pass finds nothing."""
+    shots)."""
     H, W = img.shape[:2]
     boxes = []
     step = tile - overlap
@@ -309,6 +331,22 @@ def _face_boxes_tiled(img, tile=1536, overlap=256):
     return out
 
 
+def _all_face_boxes(img):
+    """Whole-frame pass PLUS the tiled sweep, merged. The whole-frame pass has
+    the last word on big faces; tiled-only additions (tiny distant figures the
+    downscaled pass misses) must survive _confirm_face, which kills the
+    sweep's texture false-positives while keeping real faces (verified: a real
+    34px face confirms at 0.7, night-foliage hits at 0.0)."""
+    boxes = _face_boxes(img)
+    for cand in _face_boxes_tiled(img):
+        if any(abs(cand[0] - b[0]) < max(30, b[2]) and abs(cand[1] - b[1]) < max(30, b[3])
+               for b in boxes):
+            continue   # already covered by the whole-frame pass
+        if _confirm_face(img, cand) >= 0.45:
+            boxes.append(cand)
+    return boxes
+
+
 def blur_faces_file(src, dst):
     """Write a copy of src to dst with every detected face pixelated.
     Returns the face count (0 = wrote a plain copy; caller may warn)."""
@@ -317,17 +355,17 @@ def blur_faces_file(src, dst):
     data = np.fromfile(str(src), dtype=np.uint8)   # path-safe on SMB
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:
-        shutil.copy2(src, dst)
+        if Path(src) != Path(dst):   # in-place re-blur: leave the file alone
+            shutil.copy2(src, dst)
         return -1
-    boxes = _face_boxes(img)
-    if not boxes:
-        boxes = _face_boxes_tiled(img)
+    boxes = _all_face_boxes(img)
     H, W = img.shape[:2]
     for (x, y, w, h) in boxes:
-        # Small pad so the ellipse inscribed below still covers chin/forehead;
-        # the pixelation itself is confined to a feathered face-shaped oval
+        # Generous pad so the ellipse inscribed below swallows chin, forehead
+        # and the top of the neck (identifying tattoos live there); the
+        # pixelation itself is confined to a feathered face-shaped oval
         # instead of stamping the whole padded rectangle.
-        pad = int(0.15 * max(w, h))
+        pad = int(0.3 * max(w, h))
         x0, y0 = max(0, x - pad), max(0, y - pad)
         x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
         roi = img[y0:y1, x0:x1]
@@ -347,7 +385,8 @@ def blur_faces_file(src, dst):
     ok, buf = cv2.imencode(src.suffix if src.suffix.lower() in ('.jpg', '.jpeg', '.png') else '.jpg',
                            img, [cv2.IMWRITE_JPEG_QUALITY, 96])
     if not ok:
-        shutil.copy2(src, dst)
+        if Path(src) != Path(dst):
+            shutil.copy2(src, dst)
         return -1
     buf.tofile(str(dst))
     return len(boxes)
@@ -357,11 +396,87 @@ def sanitize(name):
     return re.sub(r'[\\/:*?"<>|]', '_', name).strip() or 'untitled'
 
 
-def sync_post_dir(dest_dir, plan):
+def _file_md5(path):
+    h = hashlib.md5()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# Lightroom rename suffixes (AI denoise, edits, virtual copies). Same shape as
+# tools/sync_post_edits.py: stripping them yields the "core id" both names share.
+_LR_SUFFIX_RE = re.compile(
+    r'(-(Enhanced-NR|Enhanced-SR|Enhanced|Edit|NR|SR|HDR|Pano)|-\d+)+$', re.I)
+
+
+def _core_id(filename):
+    stem = os.path.splitext(os.path.basename(str(filename)))[0]
+    stem = re.sub(r'^\d{2,3}_', '', stem)          # NN_ post prefix, if any
+    return _LR_SUFFIX_RE.sub('', stem).lower()
+
+
+def _capture_id(path):
+    """EXIF capture identity (DateTimeOriginal, SubSec, body serial) — what
+    truly pins a shot when Lightroom renamed the file. None if unreadable."""
+    try:
+        out = subprocess.run(
+            ['exiftool', '-j', '-DateTimeOriginal', '-SubSecTimeOriginal', '-SerialNumber',
+             str(path)], capture_output=True, text=True, timeout=60)
+        d = json.loads(out.stdout or '[]')[0]
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        return None
+    if not d.get('DateTimeOriginal'):
+        return None
+    return (d['DateTimeOriginal'], str(d.get('SubSecTimeOriginal', '')),
+            str(d.get('SerialNumber', '')))
+
+
+def _adopt_renamed_exports(dest_dir, plan, planned_names):
+    """Loose image files in the post folder that are a planned photo under a
+    different name — a re-edit exported as e.g. X-Enhanced-NR.jpg or X-2.jpg.
+    Matched by core id (LR suffixes stripped), confirmed by EXIF capture
+    identity against the drive source. Returns {source_name: loose_path}."""
+    loose = [f for f in dest_dir.iterdir()
+             if f.is_file() and f.suffix.lower() in SOURCE_EXTS
+             and f.name not in planned_names and not f.name.startswith('.')
+             and not re.match(r'^removed_', f.name)]
+    if not loose:
+        return {}
+    by_core = {}
+    for _, _, src, _ in plan:
+        by_core.setdefault(_core_id(src.name), []).append(src)
+    adopted = {}
+    for f in loose:
+        cands = by_core.get(_core_id(f.name), [])
+        if len(cands) != 1:
+            if len(cands) > 1:
+                print(f'   ⚠️  {f.name}: matches several photos in this post, leaving it alone')
+            continue
+        src = cands[0]
+        a, b = _capture_id(f), _capture_id(src)
+        if a is None or b is None or a[0] != b[0] or (a[1] and b[1] and a[1] != b[1]) \
+                or (a[2] and b[2] and a[2] != b[2]):
+            print(f'   ⚠️  {f.name}: name matches {src.name} but the EXIF capture '
+                  'identity does not, leaving it alone')
+            continue
+        adopted[src.name] = f
+    return adopted
+
+
+def sync_post_dir(dest_dir, plan, reblur=False):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
     only genuinely new photos are copied from the drive. Returns (copied,
-    renamed)."""
+    renamed). reblur=True regenerates every blur-flagged copy from its source
+    (use after the blur algorithm changes).
+
+    Every copy we write is fingerprinted (md5 in .pull_state.json). A local
+    NN_ file whose content no longer matches was replaced by hand - typically
+    a Lightroom re-export after re-editing the original. Those local edits are
+    kept, but if the photo is blur-flagged the fresh export has an unblurred
+    face, so it is re-blurred IN PLACE (the re-edit survives; only the face
+    pixelation is reapplied)."""
     planned = {dst.name for _, _, _, dst in plan}
 
     # Local NN_<file>s that are no longer at their planned name, keyed by base
@@ -386,13 +501,56 @@ def sync_post_dir(dest_dir, plan):
     except (OSError, ValueError):
         state = {}
     blurred = state.setdefault('blurred', {})
+    hashes = state.setdefault('hashes', {})   # md5 of each copy as we wrote it, by source name
+
+    # Re-edits exported under a Lightroom-renamed filename (X-Enhanced-NR, X-2, ...)
+    adopted = _adopt_renamed_exports(dest_dir, plan, planned)
 
     copied = renamed = 0
     for i, ref, src, dst in plan:
         want_blur = bool(ref.get('blur'))
         have_blur = bool(blurred.get(src.name, False))
+        if src.name in adopted:
+            new = adopted.pop(src.name)
+            dst.unlink(missing_ok=True)
+            new.rename(dst)
+            print(f'   ⇢ {dst.name}: adopted re-edited export {new.name}')
+            if want_blur:
+                n = blur_faces_file(dst, dst)
+                print(f'   🙂🚫 {dst.name}: ' + (
+                    f'{n} face(s) pixelated' if n > 0 else (
+                        'no faces found, check manually' if n == 0
+                        else 'decode failed, check manually')))
+            blurred[src.name] = want_blur
+            hashes[src.name] = _file_md5(dst)
+            copied += 1
+            continue
+        if reblur and want_blur and dst.exists():
+            dst.unlink(missing_ok=True)   # regenerate from source (missing_ok: SMB dir cache can be stale)
+            have_blur = False
         if dst.exists() and have_blur == want_blur:
-            continue   # right place, right content; local edits never clobbered
+            rec = hashes.get(src.name)
+            if rec is None:
+                # pulled before fingerprinting existed: adopt what's there
+                hashes[src.name] = _file_md5(dst)
+                continue
+            cur = _file_md5(dst)
+            if cur == rec:
+                continue   # right place, right content
+            if not want_blur:
+                hashes[src.name] = cur   # local re-edit kept, just remember it
+                continue
+            # blur-flagged copy was replaced (re-edit re-exported over it):
+            # re-blur the NEW content in place so the re-edit survives.
+            print(f'   ⟳ {dst.name}: replaced locally since last pull, re-blurring in place...')
+            n = blur_faces_file(dst, dst)
+            print(f'   🙂🚫 {dst.name}: ' + (
+                f'{n} face(s) pixelated' if n > 0 else (
+                    'no faces found, left as is, check manually' if n == 0
+                    else 'decode failed, left as is, check manually')))
+            hashes[src.name] = _file_md5(dst)
+            copied += 1
+            continue
         if parked.get(src.name):
             tmp = parked[src.name].pop(0)
             if have_blur == want_blur:
@@ -401,8 +559,7 @@ def sync_post_dir(dest_dir, plan):
                 print(f'   ↷ {dst.name}: reordered')
                 continue
             tmp.unlink()   # blur state changed: regenerate below
-        if dst.exists():
-            dst.unlink()
+        dst.unlink(missing_ok=True)
         try:
             mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
         except OSError:
@@ -419,6 +576,7 @@ def sync_post_dir(dest_dir, plan):
             print(f'   ⇣ {dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
         blurred[src.name] = want_blur
+        hashes[src.name] = _file_md5(dst)
         copied += 1
     state_path.write_text(json.dumps(state, indent=1))
 
@@ -681,7 +839,7 @@ def cmd_pull(args):
             continue
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        copied, renamed = sync_post_dir(dest_dir, plan)
+        copied, renamed = sync_post_dir(dest_dir, plan, reblur=getattr(args, 'reblur', False))
         manifest = {
             'name': post['name'],
             'version': doc.get('version'),
@@ -1111,6 +1269,8 @@ def main():
     p.add_argument('--local', action='store_true',
                    help='Pull from the local dev server instead of the live site')
     p.add_argument('--dry-run', action='store_true', help='Print the copy plan only')
+    p.add_argument('--reblur', action='store_true',
+                   help='Regenerate every blur-flagged copy from its source (after blur changes)')
     p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
     p.set_defaults(func=cmd_pull)
 

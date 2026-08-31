@@ -941,13 +941,30 @@ def emit_curated_set(picks, name):
                 ok = render_personal(src, d / f'{pid}.webp', edge) and ok
             if not ok:
                 continue
+            # Keep a copy of the backup original alongside the renders: the
+            # backup share is mounted ad hoc, and post.py pull needs a stable
+            # original to hand to Lightroom long after the mount is gone.
+            odir = trip_dir / 'originals'
+            odir.mkdir(parents=True, exist_ok=True)
+            if not (odir / src.name).exists():
+                # copyfile, not copy2: chflags on SMB-sourced files fails.
+                shutil.copyfile(src, odir / src.name)
+                st = src.stat()
+                os.utime(odir / src.name, (st.st_atime, st.st_mtime))
             entries.append({'t': CURATED_TRIP, 'i': pid, 'g': 2})
             manifest.append({'id': pid, 'timestamp': pk['ts'],
                              'thumbnail': f'thumbnails/{pid}.webp',
-                             'display': f'display/{pid}.webp'})
+                             'display': f'display/{pid}.webp',
+                             'original': f'originals/{src.name}',
+                             'src': str(src)})
     if manifest:
-        (trip_dir / 'manifest.json').write_text(json.dumps(
-            {'trip': CURATED_TRIP, 'photos': manifest}, indent=2))
+        # Merge over previous runs — a re-emit must not orphan photos that
+        # older post drafts still reference by id.
+        mpath = trip_dir / 'manifest.json'
+        photos = {p['id']: p for p in (load(mpath) or {}).get('photos', [])}
+        photos.update((p['id'], p) for p in manifest)
+        mpath.write_text(json.dumps(
+            {'trip': CURATED_TRIP, 'photos': list(photos.values())}, indent=2))
     data = load(CURATED_SETS) or {}
     data[name] = entries
     CURATED_SETS.parent.mkdir(parents=True, exist_ok=True)

@@ -118,7 +118,11 @@ window.PhoneCompanion = (function () {
         const idx = await j(`/phone/trips/index.json?t=${Date.now()}`);
         const times = cameraPhotos.map(c => c.ts);
         const out = [];
-        for (const t of idx.trips) {
+        // A non-trip bucket spans a whole month, so it overlaps the date window of
+        // any trip in that month and would otherwise pour the between-trips camera
+        // roll into a post's companion. Same toggle as the map and galleries.
+        const trips = window.NonTrip ? window.NonTrip.filterTrips(idx.trips) : idx.trips;
+        for (const t of trips) {
             const start = parseTs(`${t.dates.start}T00:00:00`) - HARD_CAP;
             const end = parseTs(`${t.dates.end}T23:59:59`) + HARD_CAP;
             if (!times.some(ts => ts >= start && ts <= end)) continue;

@@ -80,7 +80,11 @@
             const basePath = (VIEW_CONFIG.basePath || '') + (phoneLib ? 'phone/' : '');
             const response = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
             const data = await response.json();
-            allSidebarTrips = data.trips || [];
+            // Phone library: hide non-trip month buckets unless the Non-trip filter
+            // is on, so the year nav matches what the map and galleries show.
+            allSidebarTrips = window.NonTrip
+                ? window.NonTrip.filterTrips(data.trips || [])
+                : (data.trips || []);
 
             // Locked visitors never see non-public trips in the year nav, whatever
             // the page mode — previously only the all-trips map filtered, so trip/

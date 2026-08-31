@@ -224,6 +224,11 @@ img { display: block; }
 .yearbar button { background: none; border: 0; padding: 4px 0; cursor: pointer; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 14px; color: var(--muted); border-bottom: 1px solid transparent; transition: color .2s, border-color .2s; }
 .yearbar button:hover { color: var(--text); }
 .yearbar button.active { color: var(--text); border-bottom-color: var(--text); }
+/* Non-trip filter: same bar and same type as the year buttons, pushed to the
+   end because it toggles an extra set in rather than picking one year. */
+.yearbar__toggle { margin-left: auto; }
+/* Map top-bar filter showing an applied (non-default) selection. */
+.year-filter-btn--active { color: var(--text); border-color: var(--text); }
 
 /* ---------- photo grid: JS-computed justified rows (exact sizes set inline) ---------- */
 .photo-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 26px; }

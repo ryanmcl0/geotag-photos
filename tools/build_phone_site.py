@@ -7,6 +7,13 @@ Writes: web/phone/trips/index.json                (same shape as web/trips/)
         web/phone/trips/phone-<slug>/manifest.json
         web/phone/trips/phone-<slug>/{display,thumbnails} -> NAS symlinks
 
+Two kinds of bucket land here. Trip buckets ("<year>-<trip>") come from a trip's
+Phone folder. Non-trip buckets ("misc-<YYYY>-<MM>", from compress_nontrip.py) are
+everything else on the phone, grouped by capture month; they are marked
+"nontrip": true in both the manifest and the index so the site can filter them
+out, and carry per-source tag counts so a source can be switched off wholesale in
+local_browse/nontrip_sources.json without recompressing anything.
+
 Everything under web/phone/ is git-ignored and excluded from deploy; this
 dataset only ever exists on machines with the NAS mounted. Trip ids are
 prefixed "phone-" so they can never collide with camera trip ids (Posts
@@ -21,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+NONTRIP_CONFIG = PROJECT_ROOT / "local_browse" / "nontrip_sources.json"
 NAS = Path("/Volumes/RYAN/phone_browse")
 OUT = PROJECT_ROOT / "web" / "phone" / "trips"
 CLUSTER_RADIUS_M = 1000
@@ -83,6 +91,33 @@ def video_timestamps(phone_dir: Path):
     return out, {str(f.relative_to(phone_dir)): f.stat().st_size for f in vids}
 
 
+def enabled_tags() -> set | None:
+    """Source tags allowed into the build, or None if the config is absent (in
+    which case nothing is filtered). Disabling a source here hides every photo
+    carrying its tag on the next build — the compressed files stay on the NAS, so
+    re-enabling it costs one rebuild rather than another compression pass."""
+    if not NONTRIP_CONFIG.exists():
+        return None
+    cfg = json.loads(NONTRIP_CONFIG.read_text())
+    return {s["tag"] for s in cfg.get("sources", []) if s.get("enabled", True)}
+
+
+MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+          "August", "September", "October", "November", "December"]
+
+
+def nontrip_name(slug: str, rows: list) -> tuple[str, str]:
+    """('2024', 'March 2024') from 'misc-2024-03'.
+
+    'misc-unknown' holds the photos whose capture month could not be established
+    from filename, EXIF or mtime. It has no year of its own, so it borrows the
+    year of its earliest photo purely so the year nav has somewhere to put it."""
+    if slug == "misc-unknown":
+        return rows[0]["date"][:4], "Undated"
+    _, year, month = slug.split("-")
+    return year, f"{MONTHS[int(month) - 1]} {year}"
+
+
 def clean_trip_name(src_path: str, slug: str) -> tuple[str, str]:
     """('2026', 'Norway') from a source path like /Volumes/RYAN/2026/04.26 Norway/Phone/x.jpg"""
     parts = Path(src_path).parts
@@ -128,16 +163,23 @@ def main():
     if not manifests:
         sys.exit("no phone manifests found (is the NAS mounted?)")
 
+    allowed = enabled_tags()
     trips_index = []
     for mpath in manifests:
         slug = mpath.stem
         if slug.startswith("_"):
             continue
         rows = [json.loads(l) for l in mpath.read_text().splitlines() if l.strip()]
+        is_nontrip = slug.startswith("misc-")
+        if is_nontrip and allowed is not None:
+            rows = [r for r in rows if r.get("tag") in allowed]
         if not rows:
             continue
         rows.sort(key=lambda r: r["date"])
-        year, disp_name = clean_trip_name(rows[0]["src"], slug)
+        if is_nontrip:
+            year, disp_name = nontrip_name(slug, rows)
+        else:
+            year, disp_name = clean_trip_name(rows[0]["src"], slug)
         trip_id = f"phone-{slug}"
         tdir = OUT / trip_id
         tdir.mkdir(parents=True, exist_ok=True)
@@ -157,15 +199,22 @@ def main():
                 "ar": round(r["w"] / r["h"], 3) if r.get("h") else 1.5,
             })
 
-        phone_dir = Path(rows[0]["src"]).parent
-        # .strip(): a "Phone " folder (one trip on the drive had the trailing
-        # space) would otherwise walk this loop all the way to the drive root and
-        # then rglob the entire NAS looking for videos.
-        while phone_dir.name.strip().lower() != "phone" and phone_dir != phone_dir.parent:
-            phone_dir = phone_dir.parent
-        vid_ts, vid_sizes = video_timestamps(phone_dir)
-        videos = [{"file": rel, "timestamp": iso(ts), "bytes": vid_sizes[rel]}
-                  for rel, ts in sorted(vid_ts.items(), key=lambda kv: kv[1])]
+        # Non-trip buckets have no Phone folder to walk up to, and their photos
+        # come from several roots at once, so there is no single directory whose
+        # videos belong to the bucket. Walking anyway would climb to the drive
+        # root and rglob the whole NAS. Trip buckets keep the existing behaviour.
+        phone_dir = None
+        videos = []
+        if not is_nontrip:
+            phone_dir = Path(rows[0]["src"]).parent
+            # .strip(): a "Phone " folder (one trip on the drive had the trailing
+            # space) would otherwise walk this loop all the way to the drive root
+            # and then rglob the entire NAS looking for videos.
+            while phone_dir.name.strip().lower() != "phone" and phone_dir != phone_dir.parent:
+                phone_dir = phone_dir.parent
+            vid_ts, vid_sizes = video_timestamps(phone_dir)
+            videos = [{"file": rel, "timestamp": iso(ts), "bytes": vid_sizes[rel]}
+                      for rel, ts in sorted(vid_ts.items(), key=lambda kv: kv[1])]
 
         clusters = cluster_photos(photos)
         countries = []
@@ -182,8 +231,9 @@ def main():
             countries = [cc for cc, _ in weighted.most_common()]
 
         dates = {"start": photos[0]["timestamp"][:10], "end": photos[-1]["timestamp"][:10]}
+        tag_counts = Counter(r["tag"] for r in rows if r.get("tag"))
         manifest = {
-            "trip_name": f"{year} {disp_name}",
+            "trip_name": disp_name if is_nontrip else f"{year} {disp_name}",
             "dates": dates,
             "countries": countries,
             "source": {"photos_path": str(Path(rows[0]["src"]).parent), "gpx_path": None},
@@ -194,6 +244,8 @@ def main():
             "clusters": clusters,
             "videos": videos,
             "skipped": [],
+            "nontrip": is_nontrip,
+            "tags": dict(tag_counts),
         }
         (tdir / "manifest.json").write_text(json.dumps(manifest))
         # app.js unconditionally fetches route.geojson; an empty collection
@@ -215,7 +267,7 @@ def main():
 
         trips_index.append({
             "id": trip_id,
-            "name": f"{year} {disp_name}",
+            "name": disp_name if is_nontrip else f"{year} {disp_name}",
             "year": int(year),
             "dates": dates,
             "photo_count": len(photos),
@@ -223,14 +275,23 @@ def main():
             "countries": countries,
             "public": True,
             "path": f"trips/{trip_id}",
+            "nontrip": is_nontrip,
+            "tags": dict(tag_counts),
         })
         print(f"{trip_id}: {len(photos)} photos, {len(videos)} videos, "
-              f"{len(clusters)} clusters, {countries}")
+              f"{len(clusters)} clusters, {countries}"
+              + (f"  [non-trip: {dict(tag_counts)}]" if is_nontrip else ""))
 
     trips_index.sort(key=lambda t: t["dates"]["start"], reverse=True)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "index.json").write_text(json.dumps({"trips": trips_index}))
-    print(f"\nindex.json: {len(trips_index)} phone trips")
+    n_nt = sum(1 for t in trips_index if t["nontrip"])
+    p_nt = sum(t["photo_count"] for t in trips_index if t["nontrip"])
+    p_tr = sum(t["photo_count"] for t in trips_index if not t["nontrip"])
+    print(f"\nindex.json: {len(trips_index) - n_nt} trips ({p_tr} photos) + "
+          f"{n_nt} non-trip months ({p_nt} photos)")
+    if allowed is not None:
+        print(f"enabled non-trip sources: {sorted(allowed)}")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,13 @@
     // keyed by trip id. Trips without an entry auto-pick from their manifest.
     let COVERS = {};
 
+    // Unfiltered index, kept so the non-trip toggle can re-render from source.
+    let ALL_TRIPS = [];
+
+    function applyNonTrip(trips) {
+        return window.NonTrip ? window.NonTrip.filterTrips(trips) : trips;
+    }
+
     function unlocked() {
         return window.Unlock ? window.Unlock.unlocked() : false;
     }
@@ -176,6 +183,25 @@
             buttons.push(btn);
             yearbar.appendChild(btn);
         });
+
+        // Phone library only: a filter for the non-trip month buckets, sitting in
+        // the same bar as the years so it reads as one of the site's filters
+        // rather than a mode switch. "Active" (underlined) means the extra photos
+        // are being shown, matching how a selected year looks. Re-renders from
+        // ALL_TRIPS rather than reloading, so it behaves like the year buttons.
+        if (window.NonTrip && window.NonTrip.active && window._hasNonTrip) {
+            const nt = el('button', 'yearbar__toggle', 'Non-trip');
+            nt.type = 'button';
+            nt.classList.toggle('active', window.NonTrip.shown());
+            nt.title = window.NonTrip.shown()
+                ? 'Hide the photos that belong to no trip'
+                : 'Also show the photos that belong to no trip';
+            nt.addEventListener('click', () => {
+                window.NonTrip.setShown(!window.NonTrip.shown());
+                render(applyNonTrip(ALL_TRIPS));
+            });
+            yearbar.appendChild(nt);
+        }
         app.appendChild(yearbar);
 
         const io = makeCoverLoader();
@@ -223,7 +249,8 @@
         try {
             const res = await fetch(`${DATA_BASE}trips/index.json?t=${Date.now()}`);
             const data = await res.json();
-            render(data.trips || []);
+            ALL_TRIPS = data.trips || [];
+            render(applyNonTrip(ALL_TRIPS));
         } catch (e) {
             app.innerHTML = '<p class="gallery-empty">Could not load galleries.</p>';
         }

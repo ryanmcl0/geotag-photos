@@ -48,12 +48,26 @@ const MAX_WAITLIST_PER_POST = 40;
 // assigned once on creation and never reused, so it survives reorders.
 // account marks which IG account the post is for (free string, client cycles
 // through its known handles).
+// noHighlight opts a draft out of the public Highlights page (/api/highlights).
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
     num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
+    noHighlight?: boolean;
 }
-interface PostsDoc { version: number; updated: string | null; posts: Post[] }
+// Doc-level switches for the Highlights page. highlightsEnabled is the master
+// feature flag (absent/false = the page doesn't exist anywhere on the site);
+// highlightsIg/highlightsXhs pick which platform's drafts feed it (absent = on).
+interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean }
+const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs'];
+interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings }
+
+function validSettings(s: unknown): s is Settings | undefined {
+    if (s === undefined) return true;
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    return Object.entries(s).every(([k, v]) =>
+        SETTINGS_KEYS.includes(k) && typeof v === 'boolean');
+}
 
 function validPosts(posts: unknown): posts is Post[] {
     if (!Array.isArray(posts) || posts.length > 200) return false;
@@ -70,6 +84,7 @@ function validPosts(posts: unknown): posts is Post[] {
             (ph.map === undefined || MAP_STYLES.includes(ph.map))) &&
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
+        ((p as Post).noHighlight === undefined || typeof (p as Post).noHighlight === 'boolean') &&
         ((p as Post).caption === undefined ||
             (typeof (p as Post).caption === 'string' && (p as Post).caption!.length <= 4000)) &&
         ((p as Post).song === undefined ||
@@ -144,13 +159,14 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
     if (context.request.method === 'PUT') {
         const raw = await context.request.text();
         if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 });
-        let body: { baseVersion?: unknown; posts?: unknown };
+        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown };
         try {
             body = JSON.parse(raw);
         } catch {
             return new Response('Bad request', { status: 400 });
         }
-        if (typeof body.baseVersion !== 'number' || !validPosts(body.posts)) {
+        if (typeof body.baseVersion !== 'number' || !validPosts(body.posts) ||
+            !validSettings(body.settings)) {
             return new Response('Bad request', { status: 400 });
         }
         const current = await readDoc();
@@ -162,6 +178,10 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
             updated: new Date().toISOString(),
             posts: body.posts
         };
+        // A PUT without settings (post.py mirror, older clients) must not wipe
+        // the stored switches — absent means "unchanged", not "reset".
+        const settings = body.settings !== undefined ? body.settings : current.settings;
+        if (settings && Object.keys(settings).length) next.settings = settings;
         await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });

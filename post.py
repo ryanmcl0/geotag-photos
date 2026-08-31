@@ -807,7 +807,9 @@ def cmd_pull(args):
         dest_dir = Path(args.dest) / name
         tag = f"#{post['num']} " if post.get('num') else ''
         acct = f" @{post['account']}" if post.get('account') else ''
-        print(f"── {tag}{post['name']}{acct} ({len(post['photos'])} photos) → {dest_dir}")
+        n_wait = len(post.get('waitlist') or [])
+        wait_txt = f", {n_wait} waitlisted" if n_wait else ''
+        print(f"── {tag}{post['name']}{acct} ({len(post['photos'])} photos{wait_txt}) → {dest_dir}")
         plan = []
         for i, ref in enumerate(post['photos'], 1):
             src, why = resolve_source(ref['trip'], ref['id'])
@@ -832,6 +834,9 @@ def cmd_pull(args):
                 if ref.get('map'):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
                           f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
+            for i, ref in enumerate(post.get('waitlist') or [], 1):
+                src, why = resolve_source(ref['trip'], ref['id'])
+                print(f"   Waitlist {i:02d} {src or why}  →  {dest_dir / 'Waitlist'}")
             for i, ref in enumerate(post.get('phone') or [], 1):
                 src, why = resolve_phone(ref)
                 print(f"   Phone {i:02d} {src or why}  →  {dest_dir / 'Phone'}")
@@ -893,6 +898,35 @@ def cmd_pull(args):
         except Exception as e:
             if marked:
                 print(f"   ⚠️  map cards not rendered: {e}")
+
+        # Demoted photos -> <post>/Waitlist/. Still attached to the post but
+        # out of the carousel, so they are pulled (blur marks honoured, same
+        # re-edit/adoption rules) into their own subfolder rather than dropped.
+        wait_refs = post.get('waitlist') or []
+        if wait_refs:
+            wait_dir = dest_dir / 'Waitlist'
+            wait_plan = []
+            for i, ref in enumerate(wait_refs, 1):
+                src, why = resolve_source(ref['trip'], ref['id'])
+                if src is None:
+                    print(f"   ⚠️  Waitlist {i:02d} {ref['trip']}/{ref['id']}: {why}")
+                    unresolved += 1
+                    continue
+                wait_plan.append((i, ref, src, wait_dir / f'{i:02d}_{src.name}'))
+            if wait_plan:
+                wait_dir.mkdir(parents=True, exist_ok=True)
+                wcopied, wrenamed = sync_post_dir(wait_dir, wait_plan,
+                                                  reblur=getattr(args, 'reblur', False))
+                manifest['waitlist'] = [
+                    {'order': i, 'trip': ref['trip'], 'id': ref['id'],
+                     'source': str(src), 'copied_to': str(dst)}
+                    for i, ref, src, dst in wait_plan]
+                (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+                wparts = [f'{wcopied} copied']
+                if wrenamed:
+                    wparts.append(f'{wrenamed} reordered')
+                wparts.append(f'{len(wait_plan) - wcopied - wrenamed} already up to date')
+                print(f"   ✓ Waitlist/ ({len(wait_plan)} photos): {', '.join(wparts)}")
 
         # Behind-the-scenes phone selections -> <post>/Phone/ (originals,
         # photos and videos alike, resolved via the phone_browse manifests).

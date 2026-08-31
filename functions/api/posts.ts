@@ -30,6 +30,16 @@ const MAP_STYLES = ['route', 'pin', 'china'];
 // Behind-the-scenes items from the local-only phone library: {trip, id}
 // photos or {trip, file} videos. Uncapped (not part of the IG carousel).
 interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
+// Photos previously removed from the post (newest first), kept so the manager
+// can offer them back; the client caps the list and drops re-added entries.
+interface HistoryRef {
+    trip: string; id?: string; file?: string; ar?: number; blur?: boolean;
+    map?: 'route' | 'pin' | 'china'; phone?: boolean; waitlist?: boolean; removed?: string;
+}
+const MAX_HISTORY_PER_POST = 100;
+// Demoted photos: still attached to the post but outside the carousel, so they
+// do NOT count toward the platform cap (unlike phone items on xhs).
+const MAX_WAITLIST_PER_POST = 40;
 // platform: 'ig' (default) or 'xhs'. On xhs the phone items are part of the
 // carousel, so photos+phone together are capped at 18; on ig the phone bucket
 // stays behind-the-scenes and uncapped. posted marks published drafts.
@@ -38,12 +48,26 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 // assigned once on creation and never reused, so it survives reorders.
 // account marks which IG account the post is for (free string, client cycles
 // through its known handles).
+// noHighlight opts a draft out of the public Highlights page (/api/highlights).
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
-    num?: number; account?: string;
+    num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
+    noHighlight?: boolean;
 }
-interface PostsDoc { version: number; updated: string | null; posts: Post[] }
+// Doc-level switches for the Highlights page. highlightsEnabled is the master
+// feature flag (absent/false = the page doesn't exist anywhere on the site);
+// highlightsIg/highlightsXhs pick which platform's drafts feed it (absent = on).
+interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean }
+const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs'];
+interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings }
+
+function validSettings(s: unknown): s is Settings | undefined {
+    if (s === undefined) return true;
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    return Object.entries(s).every(([k, v]) =>
+        SETTINGS_KEYS.includes(k) && typeof v === 'boolean');
+}
 
 function validPosts(posts: unknown): posts is Post[] {
     if (!Array.isArray(posts) || posts.length > 200) return false;
@@ -60,6 +84,7 @@ function validPosts(posts: unknown): posts is Post[] {
             (ph.map === undefined || MAP_STYLES.includes(ph.map))) &&
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
+        ((p as Post).noHighlight === undefined || typeof (p as Post).noHighlight === 'boolean') &&
         ((p as Post).caption === undefined ||
             (typeof (p as Post).caption === 'string' && (p as Post).caption!.length <= 4000)) &&
         ((p as Post).song === undefined ||
@@ -76,7 +101,28 @@ function validPosts(posts: unknown): posts is Post[] {
             (p as Post).phone!.every(ph =>
                 ph && typeof ph === 'object' &&
                 typeof ph.trip === 'string' && ph.trip.startsWith('phone-') &&
-                (typeof ph.id === 'string' || typeof ph.file === 'string')))));
+                (typeof ph.id === 'string' || typeof ph.file === 'string')))) &&
+        ((p as Post).waitlist === undefined || (
+            Array.isArray((p as Post).waitlist) &&
+            (p as Post).waitlist!.length <= MAX_WAITLIST_PER_POST &&
+            (p as Post).waitlist!.every(ph =>
+                ph && typeof ph === 'object' &&
+                typeof ph.trip === 'string' && typeof ph.id === 'string' &&
+                (ph.blur === undefined || typeof ph.blur === 'boolean') &&
+                (ph.map === undefined || MAP_STYLES.includes(ph.map))))) &&
+        ((p as Post).history === undefined || (
+            Array.isArray((p as Post).history) &&
+            (p as Post).history!.length <= MAX_HISTORY_PER_POST &&
+            (p as Post).history!.every(h =>
+                h && typeof h === 'object' &&
+                typeof h.trip === 'string' &&
+                (typeof h.id === 'string' || typeof h.file === 'string') &&
+                (h.blur === undefined || typeof h.blur === 'boolean') &&
+                (h.map === undefined || MAP_STYLES.includes(h.map)) &&
+                (h.phone === undefined || typeof h.phone === 'boolean') &&
+                (h.waitlist === undefined || typeof h.waitlist === 'boolean') &&
+                (h.removed === undefined ||
+                    (typeof h.removed === 'string' && h.removed.length <= 40))))));
 }
 
 export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWORD: string }> = async (context) => {
@@ -113,13 +159,14 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
     if (context.request.method === 'PUT') {
         const raw = await context.request.text();
         if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 });
-        let body: { baseVersion?: unknown; posts?: unknown };
+        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown };
         try {
             body = JSON.parse(raw);
         } catch {
             return new Response('Bad request', { status: 400 });
         }
-        if (typeof body.baseVersion !== 'number' || !validPosts(body.posts)) {
+        if (typeof body.baseVersion !== 'number' || !validPosts(body.posts) ||
+            !validSettings(body.settings)) {
             return new Response('Bad request', { status: 400 });
         }
         const current = await readDoc();
@@ -131,6 +178,10 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
             updated: new Date().toISOString(),
             posts: body.posts
         };
+        // A PUT without settings (post.py mirror, older clients) must not wipe
+        // the stored switches — absent means "unchanged", not "reset".
+        const settings = body.settings !== undefined ? body.settings : current.settings;
+        if (settings && Object.keys(settings).length) next.settings = settings;
         await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });

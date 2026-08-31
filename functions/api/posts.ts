@@ -30,6 +30,13 @@ const MAP_STYLES = ['route', 'pin', 'china'];
 // Behind-the-scenes items from the local-only phone library: {trip, id}
 // photos or {trip, file} videos. Uncapped (not part of the IG carousel).
 interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
+// Photos previously removed from the post (newest first), kept so the manager
+// can offer them back; the client caps the list and drops re-added entries.
+interface HistoryRef {
+    trip: string; id?: string; file?: string; ar?: number; blur?: boolean;
+    map?: 'route' | 'pin' | 'china'; phone?: boolean; removed?: string;
+}
+const MAX_HISTORY_PER_POST = 100;
 // platform: 'ig' (default) or 'xhs'. On xhs the phone items are part of the
 // carousel, so photos+phone together are capped at 18; on ig the phone bucket
 // stays behind-the-scenes and uncapped. posted marks published drafts.
@@ -41,7 +48,7 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
-    num?: number; account?: string;
+    num?: number; account?: string; history?: HistoryRef[];
 }
 interface PostsDoc { version: number; updated: string | null; posts: Post[] }
 
@@ -76,7 +83,19 @@ function validPosts(posts: unknown): posts is Post[] {
             (p as Post).phone!.every(ph =>
                 ph && typeof ph === 'object' &&
                 typeof ph.trip === 'string' && ph.trip.startsWith('phone-') &&
-                (typeof ph.id === 'string' || typeof ph.file === 'string')))));
+                (typeof ph.id === 'string' || typeof ph.file === 'string')))) &&
+        ((p as Post).history === undefined || (
+            Array.isArray((p as Post).history) &&
+            (p as Post).history!.length <= MAX_HISTORY_PER_POST &&
+            (p as Post).history!.every(h =>
+                h && typeof h === 'object' &&
+                typeof h.trip === 'string' &&
+                (typeof h.id === 'string' || typeof h.file === 'string') &&
+                (h.blur === undefined || typeof h.blur === 'boolean') &&
+                (h.map === undefined || MAP_STYLES.includes(h.map)) &&
+                (h.phone === undefined || typeof h.phone === 'boolean') &&
+                (h.removed === undefined ||
+                    (typeof h.removed === 'string' && h.removed.length <= 40))))));
 }
 
 export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWORD: string }> = async (context) => {

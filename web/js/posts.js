@@ -264,6 +264,7 @@ window.Posts = (function () {
                 if (!post.phone) post.phone = [];
                 post.phone.push(cleanPhoneRef(ref));
                 havePhone.add(keyOf(ref));
+                unhistory(post, keyOf(ref));   // it's back in: drop it from History
                 added++; phoneAdded++;
                 return;
             }
@@ -271,6 +272,7 @@ window.Posts = (function () {
             if (countOf(post) >= cap) { hitCap = true; return; }
             post.photos.push(cleanRef(ref));
             have.add(keyOf(ref));
+            unhistory(post, keyOf(ref));   // it's back in: drop it from History
             added++;
         });
         return { added, dupes, hitCap, phoneAdded, count: countOf(post), cap };
@@ -292,7 +294,9 @@ window.Posts = (function () {
     // ---------- Small UI primitives ----------
 
     let toastTimer;
-    function toast(msg) {
+    /** action = {label, fn}: renders a button in the toast (e.g. Undo) and
+     *  keeps it up longer so there is time to press it. */
+    function toast(msg, action) {
         let el = document.getElementById('posts-toast');
         if (!el) {
             el = document.createElement('div');
@@ -300,9 +304,49 @@ window.Posts = (function () {
             document.body.appendChild(el);
         }
         el.textContent = msg;
+        el.classList.toggle('has-action', !!action);
+        if (action) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'posts-toast-action';
+            btn.textContent = action.label;
+            btn.addEventListener('click', () => {
+                el.classList.remove('visible');
+                clearTimeout(toastTimer);
+                action.fn();
+            });
+            el.appendChild(btn);
+        }
         el.classList.add('visible');
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => el.classList.remove('visible'), 2200);
+        toastTimer = setTimeout(() => el.classList.remove('visible'), action ? 6000 : 2200);
+    }
+
+    /* ---------- removal history ----------
+     *
+     * Every photo taken out of a draft is remembered on the post itself
+     * (post.history, newest first, synced with the doc), so the card's
+     * History dropdown can offer it back later. Undo in the removal toast is
+     * the fast path; adding the photo back through ANY add flow also clears
+     * its history entry. The full ref is kept (ar/blur/map survive), so a
+     * restored photo comes back with its marks intact.
+     */
+    const HISTORY_MAX = 100;
+    function rememberRemoval(post, ref, isPhone) {
+        if (!post.history) post.history = [];
+        const k = keyOf(ref);
+        const i = post.history.findIndex(h => keyOf(h) === k);
+        if (i !== -1) post.history.splice(i, 1);
+        const entry = { ...ref, removed: new Date().toISOString() };
+        if (isPhone) entry.phone = true;
+        post.history.unshift(entry);
+        if (post.history.length > HISTORY_MAX) post.history.length = HISTORY_MAX;
+    }
+    function unhistory(post, key) {
+        if (!post.history) return;
+        const i = post.history.findIndex(h => keyOf(h) === key);
+        if (i !== -1) post.history.splice(i, 1);
+        if (!post.history.length) delete post.history;
     }
 
     /** Refs that already live in ANOTHER post (drafts, not auto suggestions):
@@ -1542,13 +1586,34 @@ window.Posts = (function () {
                 rm.style.cssText = 'position:absolute;top:3px;right:3px;background:rgba(0,0,0,.65);' +
                     'color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px';
                 rm.addEventListener('click', () => {
+                    const what = ref.id ? 'photo' : 'video';
+                    if (!confirm(`Remove this ${what} from the Phone section of "${post.name}"?`
+                        + (set !== 'auto' ? ` It stays in the card's History.` : ''))) return;
+                    let at = -1;
                     M(posts => {
                         const pp = posts.find(x => x.id === post.id);
                         if (!pp || !pp.phone) return;
                         const i = pp.phone.findIndex(r => keyOf(r) === keyOf(ref));
-                        if (i !== -1) pp.phone.splice(i, 1);
+                        if (i === -1) return;
+                        at = i;
+                        const gone = pp.phone.splice(i, 1)[0];
+                        if (set !== 'auto') rememberRemoval(pp, gone, true);
                         if (!pp.phone.length) delete pp.phone;
-                    }).then(() => renderManager(root));
+                    }).then(okSave => {
+                        renderManager(root);
+                        if (!okSave) return;
+                        toast(`Removed from "${post.name}" (Phone)`, { label: 'Undo', fn: () => {
+                            M(posts => {
+                                const pp = posts.find(x => x.id === post.id);
+                                if (!pp) return;
+                                if ((pp.phone || []).some(r => keyOf(r) === keyOf(ref))) return;
+                                if (platformOf(pp) === 'xhs' && countOf(pp) >= capOf(pp)) return;
+                                if (!pp.phone) pp.phone = [];
+                                pp.phone.splice(Math.min(Math.max(at, 0), pp.phone.length), 0, { ...ref });
+                                unhistory(pp, keyOf(ref));
+                            }).then(() => renderManager(root));
+                        } });
+                    });
                 });
                 cell.appendChild(rm);
                 pstrip.appendChild(cell);
@@ -1556,7 +1621,91 @@ window.Posts = (function () {
             det.append(sum, pstrip);
             card.appendChild(det);
         }
+
+        // Previously-removed photos, offered back (see rememberRemoval).
+        if (set === 'main' && post.history && post.history.length) {
+            const det = document.createElement('details');
+            det.className = 'posts-history';
+            const sum = document.createElement('summary');
+            sum.textContent = `History (${post.history.length})`;
+            sum.title = 'Photos previously removed from this post: add them back or forget them';
+            const hstrip = document.createElement('div');
+            hstrip.className = 'posts-strip posts-history-strip';
+            post.history.forEach(entry => hstrip.appendChild(renderHistoryCell(root, post, entry)));
+            det.append(sum, hstrip);
+            card.appendChild(det);
+        }
         return card;
+    }
+
+    /** One History entry: greyed thumb + "add back" / "forget". Restoring
+     *  keeps the ref's marks (ar/blur/map) and returns phone items to the
+     *  Phone bucket; caps are respected with a toast instead of a save. */
+    function renderHistoryCell(root, post, entry) {
+        const isPhone = !!entry.phone || (entry.trip && entry.trip.startsWith('phone-'));
+        const cell = document.createElement('div');
+        cell.className = 'posts-history-cell';
+        const when = entry.removed ? `Removed ${new Date(entry.removed).toLocaleDateString()}` : 'Removed';
+        if (entry.file) {   // phone video: no thumbnail to show
+            const vid = document.createElement('span');
+            vid.className = 'posts-history-video';
+            vid.textContent = '▶ ' + entry.file.split('/').pop().slice(0, 14);
+            vid.title = when;
+            cell.appendChild(vid);
+        } else {
+            const img = document.createElement('img');
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.alt = '';
+            img.title = when;
+            img.src = window.Gallery ? Gallery.photoUrl(entry, 'thumbnails') : '';
+            img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+            cell.appendChild(img);
+        }
+        const actions = document.createElement('div');
+        actions.className = 'posts-history-actions';
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.textContent = '+';
+        back.title = isPhone ? 'Add back to the Phone section' : 'Add back to the post';
+        back.addEventListener('click', () => {
+            const result = {};
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const { removed, phone, ...ref } = entry;
+                const k = keyOf(ref);
+                if (isPhone) {
+                    if (!(p.phone || []).some(r => keyOf(r) === k)) {
+                        if (platformOf(p) === 'xhs' && countOf(p) >= capOf(p)) { result.full = true; return; }
+                        if (!p.phone) p.phone = [];
+                        p.phone.push(ref);
+                    }
+                } else if (!p.photos.some(r => keyOf(r) === k)) {
+                    if (countOf(p) >= capOf(p)) { result.full = true; return; }
+                    p.photos.push(ref);
+                }
+                unhistory(p, k);
+                result.ok = true;
+            }).then(okSave => {
+                renderManager(root);
+                if (result.full) toast(`"${post.name}" is full (${countOf(post)}/${capOf(post)})`);
+                else if (okSave && result.ok) toast(`Added back to "${post.name}"`);
+            });
+        });
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.textContent = '✕';
+        forget.title = 'Forget (drop from History)';
+        forget.addEventListener('click', () => {
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (p) unhistory(p, keyOf(entry));
+            }).then(() => renderManager(root));
+        });
+        actions.append(back, forget);
+        cell.appendChild(actions);
+        return cell;
     }
 
     function renderThumb(root, post, ref, idx, set) {
@@ -1641,12 +1790,31 @@ window.Posts = (function () {
         const rm = document.createElement('button');
         rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove from post';
         rm.addEventListener('click', () => {
+            if (!confirm(set === 'auto'
+                ? `Remove this photo from "${post.name}"?`
+                : `Remove this photo from "${post.name}"? It stays in the card's History.`)) return;
+            const at = idx;
             M(posts => {
                 const p = posts.find(x => x.id === post.id);
                 if (!p) return;
                 const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
-                if (i !== -1) p.photos.splice(i, 1);
-            }).then(() => renderManager(root));
+                if (i === -1) return;
+                const gone = p.photos.splice(i, 1)[0];
+                // Auto suggestions are regenerated wholesale, so no History there.
+                if (set !== 'auto') rememberRemoval(p, gone, false);
+            }).then(okSave => {
+                renderManager(root);
+                if (!okSave) return;
+                toast(`Removed from "${post.name}"`, { label: 'Undo', fn: () => {
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p || p.photos.some(ph => keyOf(ph) === keyOf(ref))) return;
+                        if (countOf(p) >= capOf(p)) return;   // filled up meanwhile
+                        p.photos.splice(Math.min(at, p.photos.length), 0, { ...ref });
+                        unhistory(p, keyOf(ref));
+                    }).then(() => renderManager(root));
+                } });
+            });
         });
         controls.append(left, rm, right);
 

@@ -14,6 +14,7 @@ interface Env {
     CF_ALL_PASSWORD: string;
     CF_POSTS_PASSWORD: string;
     ASSETS: Fetcher;
+    PHOTOS_BUCKET: R2Bucket;
 }
 
 const hex = (buf: ArrayBuffer) =>
@@ -48,6 +49,32 @@ function tripFlags(context: EventContext<Env, string, unknown>): Promise<Record<
         tripFlagsCache = { at: Date.now(), data };
     }
     return tripFlagsCache.data;
+}
+
+// The Highlights page is an owner-flagged feature: settings.highlightsEnabled in
+// the posts doc (_state/posts.json), flipped from the posts manager. While off the
+// feature must not exist at all — /highlights 404s and the nav links baked into
+// the static HTML are stripped — so the flag is read here, cached like tripFlags
+// (an isolate may live long past a flip). Missing doc / read error = off.
+const HIGHLIGHTS_TTL_MS = 5 * 60_000;
+let highlightsCache: { at: number; data: Promise<boolean> } | null = null;
+
+function highlightsEnabled(context: EventContext<Env, string, unknown>): Promise<boolean> {
+    if (!highlightsCache || Date.now() - highlightsCache.at > HIGHLIGHTS_TTL_MS) {
+        const data = (async () => {
+            try {
+                const obj = await context.env.PHOTOS_BUCKET.get('_state/posts.json');
+                if (!obj) return false;
+                const doc = await obj.json() as { settings?: { highlightsEnabled?: boolean } };
+                return doc.settings?.highlightsEnabled === true;
+            } catch {
+                highlightsCache = null;
+                return false;
+            }
+        })();
+        highlightsCache = { at: Date.now(), data };
+    }
+    return highlightsCache.data;
 }
 
 // gallery_highlights.json is id lists only — the gallery page renders just the ids
@@ -179,7 +206,27 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         }
     }
 
-    const response = await context.next();
+    // Highlights feature flag: while off the page never existed — its JS/CSS
+    // included, so even a guessed asset URL reveals nothing. (/api/highlights
+    // makes the same check itself and 404s too.)
+    if (path === '/highlights' || path === '/highlights.html' ||
+        path === '/js/highlights.js' || path === '/css/highlights.css') {
+        if (!(await highlightsEnabled(context))) {
+            return new Response('Not found', { status: 404 });
+        }
+    }
+
+    let response = await context.next();
+
+    // While Highlights is off, strip its nav links out of every HTML page so the
+    // site looks exactly as it did before the feature existed. The links stay in
+    // the static files; turning the flag on simply stops removing them.
+    const contentType = response.headers.get('Content-Type') || '';
+    if (contentType.includes('text/html') && !(await highlightsEnabled(context))) {
+        response = new HTMLRewriter()
+            .on('a[href$="highlights.html"]', { element(el) { el.remove(); } })
+            .transform(response);
+    }
 
     // Local dev (serve.sh): never serve anything the browser cached, so edits to
     // HTML/CSS/JS/images always show on reload. Production keeps its real caching.

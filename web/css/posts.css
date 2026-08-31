@@ -312,6 +312,15 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   cursor: pointer; white-space: nowrap; user-select: none;
 }
 .posts-posted-toggle input { accent-color: #22c55e; width: 15px; height: 15px; cursor: pointer; }
+/* Highlights opt-out tick: amber so it reads as a "keep off" flag, not a done state */
+.posts-nohl-toggle input { accent-color: #d97706; }
+/* Highlights feature switches under the tabs: master flag + per-tab platform */
+.posts-hl-controls { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; margin: 0 0 16px; }
+.posts-hl-platform {
+  display: flex; align-items: center; gap: 8px; color: #aaa;
+  font-size: 13px; cursor: pointer; user-select: none; width: fit-content;
+}
+.posts-hl-platform input { accent-color: #22c55e; width: 15px; height: 15px; cursor: pointer; }
 .posts-card-collapsed { padding: 10px 16px; }
 .posts-card-collapsed.posts-card-posted { opacity: .72; }
 .posts-card-collapsed .posts-card-bar { margin-bottom: 0; }

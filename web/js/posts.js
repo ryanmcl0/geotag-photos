@@ -150,18 +150,22 @@ window.Posts = (function () {
         const get = () => (set === 'auto' ? autoDoc : doc);
         const run = async () => {
             if (!get()) throw new Error('posts unavailable');
-            fn(get().posts);
+            fn(get().posts, get());
             const url = '/api/posts' + (set === 'auto' ? '?set=auto' : '');
+            // Doc-level settings ride along on every save (the API keeps the
+            // stored ones when the field is absent, so this only matters for
+            // mutations that change them).
             const put = () => fetch(url, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ baseVersion: get().version, posts: get().posts })
+                body: JSON.stringify({ baseVersion: get().version, posts: get().posts,
+                                       settings: get().settings || {} })
             });
             let r = await put();
             if (r.status === 409) {
                 const fresh = await r.json();
                 if (set === 'auto') autoDoc = fresh; else doc = fresh;
-                fn(get().posts);
+                fn(get().posts, get());
                 r = await put();
             }
             if (!r.ok) throw new Error('save failed (' + r.status + ')');
@@ -922,6 +926,47 @@ window.Posts = (function () {
             return;
         }
 
+        // Highlights feature controls. The master switch is the whole feature:
+        // while off, the site has no Highlights page at all (middleware 404s it
+        // and strips its nav links; the API 404s). Only once it is on do the
+        // per-platform switch (absent = on) and the per-post "No Highlights"
+        // ticks apply, so they only render then.
+        {
+            const st = doc.settings || {};
+            const controls = document.createElement('div');
+            controls.className = 'posts-hl-controls';
+            const check = (label, checked, title, onChange) => {
+                const row = document.createElement('label');
+                row.className = 'posts-hl-platform';
+                if (title) row.title = title;
+                const sw = document.createElement('input');
+                sw.type = 'checkbox';
+                sw.checked = checked;
+                sw.addEventListener('change', () => onChange(sw.checked));
+                row.append(sw, document.createTextNode(' ' + label));
+                return row;
+            };
+            const setSetting = (key, val) => mutate((posts, d) => {
+                const s = d.settings || (d.settings = {});
+                if (val === undefined) delete s[key]; else s[key] = val;
+                if (!Object.keys(s).length) delete d.settings;
+            }).then(() => renderManager(root));
+            controls.appendChild(check('Enable Highlights page',
+                st.highlightsEnabled === true,
+                'Public page of coverflow galleries built from these posts. ' +
+                'Off: the page does not exist anywhere on the site. ' +
+                'Flips may take up to 5 minutes to reach every visitor.',
+                on => setSetting('highlightsEnabled', on ? true : undefined)));
+            if (st.highlightsEnabled === true) {
+                const key = activeTab === 'xhs' ? 'highlightsXhs' : 'highlightsIg';
+                controls.appendChild(check(
+                    `Show ${activeTab === 'xhs' ? 'Xiaohongshu' : 'Instagram'} posts on it`,
+                    st[key] !== false, '',
+                    on => setSetting(key, on ? undefined : false)));
+            }
+            root.appendChild(controls);
+        }
+
         // Unposted first (what still needs work), posted ones collapsed below;
         // the stored order is untouched, this is display order only.
         const list = doc.posts.filter(p => platformOf(p) === activeTab)
@@ -1405,6 +1450,27 @@ window.Posts = (function () {
             bar.appendChild(dupBtn);
             postedLbl.append(tick, document.createTextNode(' Posted'));
             bar.appendChild(postedLbl);
+            // Highlights opt-out: ticked drafts never feed the public
+            // Highlights page (/api/highlights reads the flag server-side).
+            // Only shown while the feature's master switch is on.
+            if ((doc.settings || {}).highlightsEnabled === true) {
+                const hlLbl = document.createElement('label');
+                hlLbl.className = 'posts-posted-toggle posts-nohl-toggle';
+                hlLbl.title = 'Exclude this post from the Highlights page';
+                const hlTick = document.createElement('input');
+                hlTick.type = 'checkbox';
+                hlTick.checked = !!post.noHighlight;
+                hlTick.addEventListener('change', () => {
+                    const on = hlTick.checked;
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p) return;
+                        if (on) p.noHighlight = true; else delete p.noHighlight;
+                    }).then(() => renderManager(root));
+                });
+                hlLbl.append(hlTick, document.createTextNode(' No Highlights'));
+                bar.appendChild(hlLbl);
+            }
             // Reorder arrows: move the card among its visible neighbours.
             const group = doc.posts.filter(p => platformOf(p) === platformOf(post) && !!p.posted === !!post.posted);
             const gi = group.findIndex(p => p.id === post.id);

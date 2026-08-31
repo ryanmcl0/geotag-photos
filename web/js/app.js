@@ -69,6 +69,7 @@ async function init() {
     await loadTripData();
     initLightbox();
     initYearFilter();
+    initNonTripFilter();
     initCountryFilter();
     initRouteFilter();
     syncControlsLayout();
@@ -336,6 +337,35 @@ function clampMenuToViewport(menu) {
         menu.style.transform = 'none';
         menu.style.zIndex    = '2000';
     });
+}
+
+/**
+ * Phone library only: a "Non-trip" filter button in the same top bar as the year
+ * and country filters, so it looks and sits like the site's other filters. Toggling
+ * reloads: the map builds its layers once from the index at load, so re-rendering in
+ * place would mean tearing down and rebuilding every trip layer.
+ */
+function initNonTripFilter() {
+    document.querySelectorAll('.nontrip-filter-wrapper').forEach(w => w.remove());
+    if (!window.NonTrip || !window.NonTrip.active || !window._hasNonTrip) return;
+
+    const on = window.NonTrip.shown();
+    const wrapper = document.createElement('div');
+    wrapper.className = 'year-filter-wrapper nontrip-filter-wrapper';
+    const btn = document.createElement('button');
+    btn.className = 'year-filter-btn' + (on ? ' year-filter-btn--active' : '');
+    btn.textContent = on ? 'All photos' : 'Trips only';
+    btn.title = on
+        ? 'Showing trips plus everything else on the phone'
+        : 'Showing trip photos only — click to include the rest of the phone library';
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        window.NonTrip.setShown(!on);
+        location.reload();
+    });
+    wrapper.appendChild(btn);
+    L.DomEvent.disableClickPropagation(wrapper);
+    getTopFilterBar().appendChild(wrapper);
 }
 
 function initYearFilter() {
@@ -962,7 +992,8 @@ async function loadTripData() {
 
         const indexResponse = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
         const index = await indexResponse.json();
-        allTripsMeta = index.trips;
+        // Phone library: hide non-trip month buckets unless the Non-trip filter is on.
+        allTripsMeta = window.NonTrip ? window.NonTrip.filterTrips(index.trips) : index.trips;
 
         let trips = [...allTripsMeta];
 
@@ -1207,6 +1238,7 @@ async function unlockAllAccess() {
     }
 
     initYearFilter();        // 2018 etc. are entirely private — surface them now
+    initNonTripFilter();
     rebuildCountryFilter();
     syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
     syncVisibleTripLayers({ fit: true });   // filters, paging chain, counts, lightbox
@@ -1248,6 +1280,7 @@ async function lockAllAccess() {
     }
 
     initYearFilter();        // drop years that were only private
+    initNonTripFilter();
     rebuildCountryFilter();
     syncControlsLayout();     // re-home the rebuilt pills (mobile panel vs desktop bar)
     syncVisibleTripLayers({ fit: true });   // filters, paging chain, counts, lightbox

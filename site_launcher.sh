@@ -1,49 +1,66 @@
 #!/bin/bash
-# Photo Map (local) launcher: starts serve.sh (wrangler pages dev) if it isn't
-# already up, then opens the site. Same idea as video_browse/launcher.sh, but for
-# the main site, so People/Posts and the other localhost-only features work.
-# The repo is resolved from this script's own location, so the .app wrapper and
-# the checkout can live anywhere.
+# Photo Map (local) launcher: opens the local site, cold-starting serve.sh
+# (wrangler pages dev) first if it isn't already up.
+#
+# This script is the source of truth. The Desktop "Photo Map (Local).app" is an
+# AppleScript applet (built by make_photomap_app.sh) that does nothing but run
+# it, so edits here take effect on the next launch with no rebuild or re-sign.
+# The applet must stay a compiled applet: an app whose executable is a bare
+# shell script runs as /bin/bash, and tccd silently denies Documents access to
+# platform binaries instead of showing the Allow prompt — serve.sh then dies
+# with no output at all (this bit us on 2026-09-01).
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT=8788
 URL="http://localhost:$PORT/"
-
-# Finder launches a .app with a bare PATH (/usr/bin:/bin:...), which has no node,
-# so npx/wrangler would not be found. Add the usual Homebrew locations.
+# Outside Documents so launches are diagnosable even when the TCC grant is
+# missing — local_browse/ is unreachable in exactly that failure mode.
+LOG="$HOME/Library/Logs/PhotoMapLocal.log"
+# Finder/applet launches get a bare PATH (/usr/bin:/bin:...), which has no
+# node, so npx/wrangler would not be found. Add the usual Homebrew locations.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-alert() {   # non-blocking notification; falls back to nothing on failure
-  osascript -e "display notification \"$1\" with title \"Photo Map (local)\"" >/dev/null 2>&1 || true
-}
+say() { echo "$(date '+%F %T') $1" >>"$LOG"; }
+alert() { osascript -e "display notification \"$1\" with title \"Photo Map (local)\"" >/dev/null 2>&1 || true; }
 
-cd "$REPO" || exit 1
-mkdir -p local_browse
-LOG=local_browse/serve_site.log
-LAUNCHLOG=local_browse/launcher.log
-echo "$(date '+%F %T') launched (pid $$)" >>"$LAUNCHLOG"
-
-if ! curl -s -o /dev/null --max-time 2 "$URL"; then
-  alert "Starting the local server…"
-  nohup ./serve.sh >>"$LOG" 2>&1 &
-  # wrangler takes a while on a cold start (bundling the middleware + Functions)
-  for _ in $(seq 1 120); do
-    if curl -s -o /dev/null --max-time 1 "$URL"; then break; fi
-    sleep 0.5
-  done
-  if ! curl -s -o /dev/null --max-time 2 "$URL"; then
-    alert "Server did not start — see local_browse/serve_site.log"
-    open -a Console "$REPO/$LOG" 2>/dev/null || open "$REPO/$LOG"
-    exit 1
-  fi
+say "launched"
+if curl -s -o /dev/null --max-time 2 "$URL"; then
+  open "$URL" && say "server up — opened new tab" || { say "open failed"; alert "Could not open the browser"; }
+  exit 0
 fi
 
-open "$URL" && echo "$(date '+%F %T') opened $URL in browser" >>"$LAUNCHLOG" \
-  || { echo "$(date '+%F %T') open failed" >>"$LAUNCHLOG"; alert "Could not open the browser, see local_browse/launcher.log"; }
+say "server down — cold start via $REPO"
+alert "Starting the local server…"
+if ! cd "$REPO" 2>>"$LOG"; then
+  say "cd failed"
+  alert "Repo not reachable at $REPO"
+  exit 1
+fi
+mkdir -p local_browse 2>>"$LOG"
+# Touch the log first: this is the call that hits the Documents TCC check, so a
+# denial is caught and reported here instead of serve.sh dying silently.
+if ! { : >>local_browse/serve_site.log; } 2>>"$LOG"; then
+  say "cannot write local_browse/serve_site.log (Documents permission denied?)"
+  alert "No access to Documents — allow Photo Map (Local) in System Settings > Privacy & Security > Files & Folders"
+  exit 1
+fi
+nohup ./serve.sh >>local_browse/serve_site.log 2>&1 &
+# wrangler takes a while on a cold start (bundling the middleware + Functions)
+for _ in $(seq 1 120); do
+  curl -s -o /dev/null --max-time 1 "$URL" && break
+  sleep 0.5
+done
+if ! curl -s -o /dev/null --max-time 2 "$URL"; then
+  say "server did not start"
+  alert "Server did not start — see local_browse/serve_site.log"
+  open -a Console "$REPO/local_browse/serve_site.log" 2>/dev/null || open "$REPO/local_browse/serve_site.log"
+  exit 1
+fi
+open "$URL" && say "cold start ok — opened new tab"
 
-# People and Posts serve phone photos through symlinks into the Tailscale drive.
-# Without it those pages load but every phone thumbnail 404s, so flag it — after
-# opening the site, and with a bounded wait, because a stale SMB mount makes even
-# a stat hang and that must never hold up the launch.
+# People and Posts serve phone photos through symlinks into the Tailscale
+# drive. Without it those pages load but every phone thumbnail 404s, so flag
+# it — after opening the site, and with a bounded wait, because a stale SMB
+# mount makes even a stat hang and that must never hold up the launch.
 ( [ -e /Volumes/RYAN/phone_browse ] ) & probe=$!
 for _ in $(seq 1 8); do kill -0 "$probe" 2>/dev/null || break; sleep 0.5; done
 if kill -0 "$probe" 2>/dev/null; then

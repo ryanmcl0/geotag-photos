@@ -858,6 +858,10 @@ window.Posts = (function () {
         });
     }
 
+    // Posts whose Phone <details> is open: renderManager rebuilds every card
+    // on each edit, so without this a ⇩/✕ inside the section would collapse it.
+    const phoneOpen = new Set();
+
     // Which manager tab is showing: 'ig' / 'xhs' (hand-made drafts by
     // platform) or 'auto' (suggestions from tools/auto_curate_posts.py).
     let activeTab = 'ig';
@@ -1635,6 +1639,11 @@ window.Posts = (function () {
         if (post.phone && post.phone.length) {
             const det = document.createElement('details');
             det.style.cssText = 'margin-top:8px';
+            det.open = phoneOpen.has(post.id);
+            det.addEventListener('toggle', () => {
+                if (det.open) phoneOpen.add(post.id);
+                else phoneOpen.delete(post.id);
+            });
             const sum = document.createElement('summary');
             sum.textContent = `Phone (${post.phone.length})`;
             sum.style.cssText = 'cursor:pointer;opacity:.75;font-size:13px';

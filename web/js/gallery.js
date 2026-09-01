@@ -76,8 +76,31 @@ window.Gallery = (function () {
     img.replaceWith(d);
   }
 
+  /**
+   * Shared lightbox navigation across several renderGrid calls (the trip
+   * gallery's per-day sections): each grid registers its displayed order, and
+   * a click opens the lightbox over the concatenation of all sections instead
+   * of just the clicked one — so arrow keys cross the date banners.
+   */
+  function createNav() {
+    const sections = [];
+    return {
+      register() {
+        const s = { order: [] };
+        sections.push(s);
+        return s;
+      },
+      locate(photo) {
+        const list = [];
+        sections.forEach(s => list.push(...s.order));
+        return { list, index: list.indexOf(photo) };
+      }
+    };
+  }
+
   function renderGrid(container, photos, opts) {
     opts = opts || {};
+    const section = opts.nav ? opts.nav.register() : null;
     container.innerHTML = '';
     if (!photos || !photos.length) {
       const empty = document.createElement('p');
@@ -158,6 +181,7 @@ window.Gallery = (function () {
 
       }
 
+      if (section) section.order = order;
       rows.forEach(({ row, sumAr }, ri) => {
         let h = (width - GAP * (row.length - 1)) / sumAr;
         if (ri === rows.length - 1 && h > TARGET_H * 1.18) h = TARGET_H; // sparse last row
@@ -176,7 +200,14 @@ window.Gallery = (function () {
           img.alt = '';
           img.src = photoUrl(p, 'thumbnails');
           cell.appendChild(img);
-          cell.addEventListener('click', () => openLightbox(order, order.indexOf(p)));
+          cell.addEventListener('click', () => {
+            if (section) {
+              const { list, index } = opts.nav.locate(p);
+              openLightbox(list, index);
+            } else {
+              openLightbox(order, order.indexOf(p));
+            }
+          });
           rowEl.appendChild(cell);
         });
         grid.appendChild(rowEl);
@@ -314,5 +345,5 @@ window.Gallery = (function () {
     document.body.appendChild(ov);
   }
 
-  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar };
+  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar, createNav };
 })();

@@ -1714,6 +1714,52 @@ window.Posts = (function () {
                     });
                 });
                 cell.appendChild(rm);
+                // Same soft "take it out" as the carousel's ⇩: park the phone
+                // photo on the waitlist instead of dropping it (photos only —
+                // the waitlist renders thumbnails, which videos don't have).
+                if (set === 'main' && ref.id) {
+                    const demote = document.createElement('button');
+                    demote.type = 'button';
+                    demote.textContent = '⇩';
+                    demote.title = 'Demote to the waitlist (keeps it on this post, out of the Phone section)';
+                    demote.style.cssText = 'position:absolute;top:3px;right:30px;background:rgba(0,0,0,.65);' +
+                        'color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px';
+                    demote.addEventListener('click', () => {
+                        let at = -1;
+                        const result = {};
+                        M(posts => {
+                            const pp = posts.find(x => x.id === post.id);
+                            if (!pp || !pp.phone) return;
+                            const i = pp.phone.findIndex(r => keyOf(r) === keyOf(ref));
+                            if (i === -1) return;
+                            if (waitOf(pp).length >= WAITLIST_MAX) { result.full = true; return; }
+                            at = i;
+                            const moved = pp.phone.splice(i, 1)[0];
+                            if (!pp.phone.length) delete pp.phone;
+                            if (!pp.waitlist) pp.waitlist = [];
+                            pp.waitlist.push(moved);
+                            result.ok = true;
+                        }).then(okSave => {
+                            renderManager(root);
+                            if (result.full) { toast(`Waitlist is full (${WAITLIST_MAX})`); return; }
+                            if (!okSave || !result.ok) return;
+                            toast(`Waitlisted in "${post.name}" (from Phone)`, { label: 'Undo', fn: () => {
+                                M(posts => {
+                                    const pp = posts.find(x => x.id === post.id);
+                                    if (!pp) return;
+                                    const wi = waitOf(pp).findIndex(r => keyOf(r) === keyOf(ref));
+                                    if (wi === -1) return;
+                                    if (platformOf(pp) === 'xhs' && countOf(pp) >= capOf(pp)) return;
+                                    const back = pp.waitlist.splice(wi, 1)[0];
+                                    if (!pp.waitlist.length) delete pp.waitlist;
+                                    if (!pp.phone) pp.phone = [];
+                                    pp.phone.splice(Math.min(at, pp.phone.length), 0, back);
+                                }).then(() => renderManager(root));
+                            } });
+                        });
+                    });
+                    cell.appendChild(demote);
+                }
                 pstrip.appendChild(cell);
             });
             det.append(sum, pstrip);
@@ -1783,10 +1829,11 @@ window.Posts = (function () {
 
         const actions = document.createElement('div');
         actions.className = 'posts-wait-actions';
+        const isPhone = !!(ref.trip && ref.trip.startsWith('phone-'));
         const up = document.createElement('button');
         up.type = 'button';
         up.textContent = '⇧';
-        up.title = 'Promote back into the post';
+        up.title = isPhone ? 'Promote back into the Phone section' : 'Promote back into the post';
         up.addEventListener('click', () => {
             const result = {};
             mutate(posts => {
@@ -1794,15 +1841,25 @@ window.Posts = (function () {
                 if (!p) return;
                 const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
                 if (wi === -1) return;
-                if (countOf(p) >= capOf(p)) { result.full = true; return; }
+                // Phone refs return to the Phone bucket, which only counts
+                // against the cap on XHS; carousel refs need a free slot.
+                if (isPhone ? (platformOf(p) === 'xhs' && countOf(p) >= capOf(p))
+                            : countOf(p) >= capOf(p)) { result.full = true; return; }
                 const back = p.waitlist.splice(wi, 1)[0];
                 if (!p.waitlist.length) delete p.waitlist;
-                p.photos.push(back);
+                if (isPhone) {
+                    if (!p.phone) p.phone = [];
+                    p.phone.push(back);
+                } else {
+                    p.photos.push(back);
+                }
                 result.ok = true;
             }).then(okSave => {
                 renderManager(root);
                 if (result.full) toast(`"${post.name}" is full (${countOf(post)}/${capOf(post)})`);
-                else if (okSave && result.ok) toast(`Promoted into "${post.name}"`);
+                else if (okSave && result.ok) {
+                    toast(isPhone ? `Promoted into "${post.name}" (Phone)` : `Promoted into "${post.name}"`);
+                }
             });
         });
         const rm = document.createElement('button');
@@ -1819,7 +1876,7 @@ window.Posts = (function () {
                 if (wi === -1) return;
                 const gone = p.waitlist.splice(wi, 1)[0];
                 if (!p.waitlist.length) delete p.waitlist;
-                rememberRemoval(p, { ...gone, waitlist: true }, false);
+                rememberRemoval(p, { ...gone, waitlist: true }, isPhone);
             }).then(okSave => {
                 renderManager(root);
                 if (!okSave) return;

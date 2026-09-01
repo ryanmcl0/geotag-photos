@@ -1640,8 +1640,12 @@ window.Posts = (function () {
             sum.style.cssText = 'cursor:pointer;opacity:.75;font-size:13px';
             const pstrip = document.createElement('div');
             pstrip.className = 'posts-strip';
+            // web/phone/ never deploys, so away from the local site every
+            // thumbnail here would 404 into a broken-image icon: keep the
+            // count in the summary but swap the strip for a note.
+            const phoneLocal = !!(window.Gallery && Gallery.isLocal);
             const photoRefs = post.phone.filter(r => r.id);
-            post.phone.forEach(ref => {
+            (phoneLocal ? post.phone : []).forEach(ref => {
                 const cell = document.createElement('div');
                 cell.style.cssText = 'position:relative;flex:0 0 auto';
                 if (ref.id) {
@@ -1762,6 +1766,13 @@ window.Posts = (function () {
                 }
                 pstrip.appendChild(cell);
             });
+            if (!phoneLocal) {
+                const note = document.createElement('p');
+                note.textContent = '📱 Phone photos are stored on the local machine only. ' +
+                    'Open the local site to view and manage them.';
+                note.style.cssText = 'opacity:.65;font-size:12.5px;margin:6px 0 2px';
+                pstrip.appendChild(note);
+            }
             det.append(sum, pstrip);
             card.appendChild(det);
         }
@@ -1804,18 +1815,31 @@ window.Posts = (function () {
     function renderWaitCell(root, post, ref) {
         const cell = document.createElement('div');
         cell.className = 'posts-wait-cell';
-        const img = document.createElement('img');
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        img.alt = '';
-        img.title = 'On the waitlist';
-        img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
-        img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
-        img.addEventListener('click', () => {
-            if (window.Gallery) Gallery.openLightbox(waitOf(post), waitOf(post).indexOf(ref),
-                { defaultPostId: post.id });
-        });
-        cell.appendChild(img);
+        const isPhone = !!(ref.trip && ref.trip.startsWith('phone-'));
+        if (isPhone && !(window.Gallery && Gallery.isLocal)) {
+            // Phone thumbnails only exist on the local site; a 📱 tile beats
+            // the generic 🔒 the error fallback would show.
+            const ph = document.createElement('div');
+            ph.textContent = '📱';
+            ph.title = 'Waitlisted phone photo. Only viewable on the local site.';
+            ph.style.cssText = 'width:100%;height:100%;border-radius:5px;background:#26262c;' +
+                'border:1px dashed #55555f;display:flex;align-items:center;' +
+                'justify-content:center;font-size:26px';
+            cell.appendChild(ph);
+        } else {
+            const img = document.createElement('img');
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.alt = '';
+            img.title = 'On the waitlist';
+            img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
+            img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+            img.addEventListener('click', () => {
+                if (window.Gallery) Gallery.openLightbox(waitOf(post), waitOf(post).indexOf(ref),
+                    { defaultPostId: post.id });
+            });
+            cell.appendChild(img);
+        }
 
         if (ref.blur || ref.map) {
             const mark = document.createElement('span');
@@ -1829,7 +1853,6 @@ window.Posts = (function () {
 
         const actions = document.createElement('div');
         actions.className = 'posts-wait-actions';
-        const isPhone = !!(ref.trip && ref.trip.startsWith('phone-'));
         const up = document.createElement('button');
         up.type = 'button';
         up.textContent = '⇧';

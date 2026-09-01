@@ -75,6 +75,9 @@
             return;
         }
 
+        // One shared nav so the lightbox's arrows run through every section in
+        // page order, not just the clicked day's photos.
+        const nav = Gallery.createNav();
         groups.forEach(g => {
             const banner = document.createElement('div');
             banner.className = 'gallery-date-banner';
@@ -84,7 +87,7 @@
             container.appendChild(banner);
             const sub = document.createElement('div');
             container.appendChild(sub);
-            Gallery.renderGrid(sub, g.photos, opts);
+            Gallery.renderGrid(sub, g.photos, Object.assign({}, opts, { nav }));
         });
     }
 

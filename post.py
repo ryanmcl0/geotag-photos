@@ -748,6 +748,13 @@ def resolve_phone(ref):
     return (src, None) if src.exists() else (None, f'missing: {src}')
 
 
+def resolve_wait(ref):
+    """Waitlist refs are carousel or phone photos; pick the right resolver."""
+    if ref['trip'].startswith('phone-'):
+        return resolve_phone(ref)
+    return resolve_source(ref['trip'], ref['id'])
+
+
 def sync_phone_dir(phone_dir, plan):
     """Mirror the plan into <post>/Phone/: copy new, drop unselected copies."""
     phone_dir.mkdir(parents=True, exist_ok=True)
@@ -858,7 +865,7 @@ def cmd_pull(args):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
                           f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
             for i, ref in enumerate(post.get('waitlist') or [], 1):
-                src, why = resolve_source(ref['trip'], ref['id'])
+                src, why = resolve_wait(ref)
                 print(f"   Waitlist {i:02d} {src or why}  →  {dest_dir / 'Waitlist'}")
             for i, ref in enumerate(post.get('phone') or [], 1):
                 src, why = resolve_phone(ref)
@@ -930,7 +937,7 @@ def cmd_pull(args):
             wait_dir = dest_dir / 'Waitlist'
             wait_plan = []
             for i, ref in enumerate(wait_refs, 1):
-                src, why = resolve_source(ref['trip'], ref['id'])
+                src, why = resolve_wait(ref)
                 if src is None:
                     print(f"   ⚠️  Waitlist {i:02d} {ref['trip']}/{ref['id']}: {why}")
                     unresolved += 1

@@ -345,5 +345,6 @@ window.Gallery = (function () {
     document.body.appendChild(ov);
   }
 
-  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar, createNav };
+  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar, createNav,
+           isLocal: LOCAL };
 })();

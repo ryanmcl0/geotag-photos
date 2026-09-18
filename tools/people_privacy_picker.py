@@ -145,7 +145,9 @@ def build_candidates(only=None):
     for key, person in roster.items():
         if only and key != only:
             continue
-        pairs = sorted({p for c in person['clusters'] for p in by_cluster.get(c, set())})
+        pairs = sorted({p for c in person['clusters'] for p in by_cluster.get(c, set())}
+                       | {(slug, pid) for slug, ids in person['additional_photos'].items()
+                          for pid in ids})
         if not pairs:
             continue
         scores = face_scores(person['clusters'])
@@ -168,6 +170,7 @@ def build_candidates(only=None):
             'hide': person['hide'],
             'clusters': person['clusters'],
             'photos': photos,
+            'n_existing_keep': sum(1 for p in photos if p['keep']),
             'n_weak': sum(1 for p in photos if p['sim'] is not None and p['sim'] < WEAK_SIM),
         }
     return cands, roster
@@ -185,6 +188,9 @@ header.top{position:sticky;top:0;z-index:20;background:var(--panel);
 header.top h1{font-size:16px;margin:0;font-weight:600}
 header.top .sub{color:var(--muted);font-size:12px;flex-basis:100%;margin:0}
 header.top .sub b{color:#ccc;font-weight:600}
+.trip-filter{display:flex;align-items:center;gap:7px;color:#aaa;font-size:12px}
+.trip-filter select{background:#26262a;color:#eee;border:1px solid var(--line);border-radius:6px;
+  padding:5px 8px;font:inherit;max-width:min(360px,70vw)}
 .pill{background:#26262a;color:var(--muted);border:1px solid var(--line);border-radius:12px;
   padding:4px 12px;font-size:12px;cursor:pointer}
 .pill:hover{color:#ddd}
@@ -197,18 +203,7 @@ header.top .sub b{color:#ccc;font-weight:600}
 .sec h2{font-size:16px;margin:0 0 4px;font-weight:600}
 .sec .meta{color:var(--muted);font-size:12px;margin-bottom:12px}
 .sec .meta .clusters{color:#555;font-family:ui-monospace,Menlo,monospace;font-size:11px}
-.sec .willhide{color:var(--warn)}
-.sec[data-tier="false"] .willhide{color:var(--ok)}
-
-.tiers{display:flex;gap:7px;align-items:center;margin:0 0 10px;flex-wrap:wrap}
-.tiers button.on[data-tier="false"]{color:var(--ok);border-color:var(--ok)}
-.tiers button.on[data-tier="gated"]{color:var(--warn);border-color:var(--warn)}
-.tiers button.on[data-tier="blocked"]{color:var(--bad);border-color:var(--bad)}
-.tiers .help{color:var(--muted);font-size:12px}
-.bulk{display:flex;gap:7px;align-items:center;margin:0 0 12px;flex-wrap:wrap}
-.bulk .lbl{color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
 .cell{position:relative;background:#000;border-radius:5px;overflow:hidden;aspect-ratio:3/2;
   cursor:pointer;border:2px solid transparent}
 .cell img{width:100%;height:100%;object-fit:cover;display:block;background:#222}
@@ -221,25 +216,30 @@ header.top .sub b{color:#ccc;font-weight:600}
 .cell .gate{position:absolute;top:4px;right:4px;font-size:10px;background:rgba(0,0,0,.7);
   border-radius:3px;padding:1px 4px;color:var(--warn)}
 /* State badge: the cell says what WILL happen, rather than making you infer it. */
-.cell .state{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;
-  font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
-  padding:4px 10px;border-radius:999px;display:none}
-.cell .open{position:absolute;bottom:4px;right:4px;z-index:4;width:22px;height:22px;
-  border-radius:50%;background:rgba(0,0,0,.65);color:#fff;text-decoration:none;display:none;
+.cell .state{position:absolute;top:5px;right:30px;z-index:3;font-size:9px;letter-spacing:.07em;
+  text-transform:uppercase;font-weight:700;padding:3px 6px;border-radius:4px;display:none}
+.cell .open{position:absolute;bottom:4px;right:4px;z-index:4;width:26px;height:26px;
+  border:0;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;text-decoration:none;display:none;
   align-items:center;justify-content:center;font-size:12px}
 .cell:hover .open{display:flex}
 .cell .open:hover{background:var(--blue)}
-/* Visible tier: nothing is happening to any of these, so leave them plain. */
-.sec[data-tier="gated"] .cell:not(.keep) img,
-.sec[data-tier="blocked"] .cell:not(.keep) img{opacity:.3;filter:grayscale(.75)}
-.sec[data-tier="gated"] .cell:not(.keep),
-.sec[data-tier="blocked"] .cell:not(.keep){border-color:#3a2020}
-.sec[data-tier="gated"] .cell:not(.keep) .state,
-.sec[data-tier="blocked"] .cell:not(.keep) .state{display:block;background:rgba(90,20,20,.9);color:#ffb4b4}
-.sec[data-tier="gated"] .cell.keep,.sec[data-tier="blocked"] .cell.keep{border-color:var(--ok)}
-.sec[data-tier="gated"] .cell.keep .state,.sec[data-tier="blocked"] .cell.keep .state{
-  display:block;background:rgba(20,70,35,.9);color:#a8ecbd}
+.cell:not(.keep) img{opacity:.72;filter:grayscale(.35)}
+.cell:not(.keep){border-color:#3a2020}
+.cell:not(.keep) .state{display:block;background:rgba(90,20,20,.9);color:#ffb4b4}
+.cell.keep{border-color:var(--ok)}
+.cell.keep .state{display:block;background:rgba(20,70,35,.94);color:#a8ecbd}
 .cell:hover{outline:2px solid var(--blue)}
+.cell.filter-hidden{display:none}
+@media(max-width:600px){.grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}}
+
+.viewer{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.94);display:none;
+  align-items:center;justify-content:center;padding:28px;cursor:zoom-out}
+.viewer.show{display:flex}
+.viewer img{display:block;max-width:100%;max-height:100%;object-fit:contain;cursor:default}
+.viewer button{position:fixed;top:14px;right:16px;background:rgba(20,20,20,.9);color:#fff;
+  border:1px solid #555;border-radius:50%;width:36px;height:36px;font-size:22px;cursor:pointer}
+.viewer .label{position:fixed;bottom:14px;left:16px;color:#ddd;font-size:12px;
+  background:rgba(20,20,20,.8);border-radius:4px;padding:5px 8px}
 
 .applybar{position:fixed;right:16px;bottom:16px;z-index:50;background:var(--panel);
   border:1px solid var(--line);border-radius:10px;padding:13px 15px;display:flex;
@@ -255,12 +255,13 @@ body.f-public .cell[data-pub="0"],body.f-gated .cell[data-pub="1"]{display:none}
 """
 
 PAGE_JS = """
-const WEAK = __WEAK__;
 const state = {};
+let viewerCells = [];
+let viewerIndex = -1;
 document.querySelectorAll('.sec').forEach(sec => {
   state[sec.dataset.key] = {
     tier: sec.dataset.tier,
-    keep: new Set([...sec.querySelectorAll('.cell.keep')].map(c => c.dataset.ref)),
+    keep: new Set(JSON.parse(sec.dataset.existingKeeps || '[]')),
   };
 });
 
@@ -273,44 +274,43 @@ function serialise() {
 }
 const orig = JSON.stringify(serialise());
 
-/* Counts are always over what the filter is actually showing, so the numbers on
-   screen and the numbers in the buttons can never disagree. */
-function shownCells(sec) {
-  return [...sec.querySelectorAll('.cell')].filter(c => c.offsetParent !== null);
-}
-
 function refresh() {
-  let total = 0;
+  let restoring = 0;
   document.querySelectorAll('.sec').forEach(sec => {
     const s = state[sec.dataset.key];
-    sec.dataset.tier = s.tier;
-    sec.querySelectorAll('.tiers .pill').forEach(b =>
-      b.classList.toggle('on', b.dataset.tier === s.tier));
-    sec.querySelectorAll('.cell').forEach(c =>
-      c.classList.toggle('keep', s.keep.has(c.dataset.ref)));
-    const shown = shownCells(sec);
-    const hiding = s.tier === 'false' ? 0
-      : shown.filter(c => !s.keep.has(c.dataset.ref)).length;
-    total += hiding;
-    sec.querySelector('.willhide').textContent = s.tier === 'false'
-      ? 'nothing hidden'
-      : hiding + ' of the ' + shown.length + ' shown will be hidden';
-    sec.querySelector('.shown').textContent = shown.length;
+    const cells = [...sec.querySelectorAll('.cell')];
+    const selected = cells.filter(c => s.keep.has(c.dataset.ref));
+    cells.forEach(c => {
+      const keep = s.keep.has(c.dataset.ref);
+      c.classList.toggle('keep', keep);
+      c.querySelector('.state').textContent = keep ? 'Will restore' : 'Hidden';
+    });
+    restoring += selected.length;
+    sec.querySelector('.selection').textContent = selected.length
+      ? selected.length + ' selected to restore' : 'nothing selected yet';
   });
   document.getElementById('count').innerHTML =
-    '<b>' + total + '</b> photo' + (total === 1 ? '' : 's') + ' would be hidden';
+    '<b>' + restoring + '</b> photo' + (restoring === 1 ? '' : 's') + ' selected to restore';
   document.getElementById('apply').disabled = JSON.stringify(serialise()) === orig;
 }
 
-document.querySelectorAll('.tiers .pill').forEach(b => b.addEventListener('click', () => {
-  const sec = b.closest('.sec');
-  state[sec.dataset.key].tier = b.dataset.tier;
-  sec.querySelector('.tierhelp').textContent = b.dataset.help;
-  refresh();
-}));
+const tripFilter = document.getElementById('trip-filter');
+tripFilter.addEventListener('change', () => {
+  const trip = tripFilter.value;
+  document.querySelectorAll('.cell').forEach(cell =>
+    cell.classList.toggle('filter-hidden', Boolean(trip) && cell.dataset.trip !== trip));
+});
 
 document.querySelectorAll('.grid').forEach(grid => grid.addEventListener('click', e => {
-  if (e.target.closest('.open')) return;      // the ⤢ link opens the full size
+  const open = e.target.closest('.open');
+  if (open) {
+    e.preventDefault();
+    const cell = open.closest('.cell');
+    viewerCells = [...document.querySelectorAll('.cell')].filter(c => c.offsetParent !== null);
+    viewerIndex = viewerCells.indexOf(cell);
+    showViewer();
+    return;
+  }
   const cell = e.target.closest('.cell');
   if (!cell) return;
   e.preventDefault();
@@ -320,25 +320,30 @@ document.querySelectorAll('.grid').forEach(grid => grid.addEventListener('click'
   refresh();
 }));
 
-/* Bulk actions operate on what is visible, matching the counts. */
-document.querySelectorAll('.bulk .pill').forEach(b => b.addEventListener('click', () => {
-  const sec = b.closest('.sec');
-  const s = state[sec.dataset.key];
-  shownCells(sec).forEach(c => {
-    const weak = c.classList.contains('weak');
-    if (b.dataset.act === 'weak' && weak) s.keep.add(c.dataset.ref);
-    if (b.dataset.act === 'all') s.keep.add(c.dataset.ref);
-    if (b.dataset.act === 'none') s.keep.delete(c.dataset.ref);
-  });
-  refresh();
-}));
+function showViewer() {
+  const cell = viewerCells[viewerIndex];
+  if (!cell) return;
+  const viewer = document.getElementById('viewer');
+  document.getElementById('viewer-image').src = cell.dataset.display;
+  document.getElementById('viewer-label').textContent =
+    cell.dataset.ref + ' · ' + (viewerIndex + 1) + ' / ' + viewerCells.length;
+  viewer.classList.add('show');
+}
 
-document.querySelectorAll('#filters .pill').forEach(b => b.addEventListener('click', () => {
-  document.body.classList.remove('f-public', 'f-gated');
-  if (b.dataset.filter !== 'all') document.body.classList.add('f-' + b.dataset.filter);
-  document.querySelectorAll('#filters .pill').forEach(x => x.classList.toggle('on', x === b));
-  refresh();
-}));
+document.getElementById('viewer').addEventListener('click', e => {
+  if (e.target.id === 'viewer' || e.target.closest('.close')) e.currentTarget.classList.remove('show');
+});
+document.addEventListener('keydown', e => {
+  const viewer = document.getElementById('viewer');
+  if (e.key === 'Escape') viewer.classList.remove('show');
+  if (!viewer.classList.contains('show')) return;
+  if (e.key === 'ArrowLeft' && viewerIndex > 0) {
+    e.preventDefault(); viewerIndex -= 1; showViewer();
+  }
+  if (e.key === 'ArrowRight' && viewerIndex < viewerCells.length - 1) {
+    e.preventDefault(); viewerIndex += 1; showViewer();
+  }
+});
 
 document.getElementById('apply').addEventListener('click', async () => {
   const msg = document.getElementById('msg');
@@ -346,7 +351,7 @@ document.getElementById('apply').addEventListener('click', async () => {
   try {
     const r = await fetch('/apply', {method: 'POST', body: JSON.stringify({changes: serialise()})});
     const j = await r.json();
-    msg.textContent = j.ok ? (j.message || 'saved') + ' — rebuild and deploy to publish'
+    msg.textContent = j.ok ? (j.message || 'saved') + ' — rebuild locally before deploying'
                            : 'error: ' + j.error;
     if (j.ok) setTimeout(() => location.reload(), 1400);
   } catch (err) { msg.textContent = 'error: ' + err; }
@@ -357,53 +362,40 @@ refresh();
 
 
 def render(cands):
-    total = sum(len(c['photos']) for c in cands.values())
-    weak = sum(c['n_weak'] for c in cands.values())
+    total = sum(len(c['photos']) - c['n_existing_keep'] for c in cands.values())
     P = ['<!doctype html><html lang=en><head><meta charset=utf-8>',
          '<meta name=viewport content="width=device-width,initial-scale=1">',
          '<title>people privacy picker</title>',
          '<link rel=icon href="data:,">',   # else every load logs a favicon 404
          f'<style>{PAGE_CSS}</style></head><body>']
 
-    P.append('<header class=top><h1>people privacy</h1>')
-    P.append('<span class=grp><span class=lbl>show</span><span id=filters>'
-             + ''.join(f'<button class="pill{" on" if v == "all" else ""}" data-filter="{v}">{t}</button>'
-                       for v, t in (('all', 'All photos'), ('public', 'Public only'),
-                                    ('gated', 'Already gated')))
-             + '</span></span>')
-    P.append(f'<p class=sub>Sorted <b>weakest face match first</b>, so wrong attributions come '
-             f'up top. The number on each photo is its similarity to that person&rsquo;s average '
-             f'face &mdash; a real match sits around <b>0.70&ndash;0.90</b>, a detector false '
-             f'positive lands under <b>0.15</b>. Pick a tier, then click any photo to flip it '
-             f'between <b>HIDE</b> and <b>KEEP</b>. Nothing is written until you press Apply. '
-             f'{total} photos, {weak} flagged as weak matches.</p>')
+    P.append('<header class=top><h1>restore hidden people photos</h1>')
+    trips = sorted({(p['trip'], p['trip_name'])
+                    for info in cands.values() for p in info['photos'] if not p['keep']},
+                   key=lambda x: x[1])
+    P.append('<label class=trip-filter>Trip <select id=trip-filter><option value="">All trips</option>'
+             + ''.join(f'<option value="{html.escape(slug)}">{html.escape(name)}</option>'
+                       for slug, name in trips)
+             + '</select></label>')
+    P.append(f'<p class=sub><b>Every photo below is currently hidden.</b> Click a photo to '
+             f'choose it for restoration; selected photos turn green. Use ⤢ to open the image '
+             f'in the full-screen viewer. Nothing changes until you press Apply. '
+             f'{total} currently hidden photos shown.</p>')
     P.append('</header>')
 
     for key, info in cands.items():
         tier = 'false' if info['hide'] is False else info['hide']
-        n = len(info['photos'])
-        P.append(f'<section class=sec data-key="{html.escape(key)}" data-tier="{tier}">')
+        photos = [p for p in info['photos'] if not p['keep']]
+        n = len(photos)
+        existing = [f'{p["trip"]}/{p["id"]}' for p in info['photos'] if p['keep']]
+        P.append(f'<section class=sec data-key="{html.escape(key)}" data-tier="{tier}" '
+                 f'data-existing-keeps="{html.escape(json.dumps(existing), quote=True)}">')
         P.append(f'<h2>{html.escape(info["label"])}</h2>')
-        P.append(f'<div class=meta><span class=shown>{n}</span> of {n} photos shown · '
-                 f'<span class=willhide></span> · {info["n_weak"]} weak · '
-                 f'<span class=clusters>{html.escape(" ".join(info["clusters"]))}</span></div>')
-
-        P.append('<div class=tiers><span class=lbl style="color:#666;font-size:11px;'
-                 'text-transform:uppercase;letter-spacing:.06em">tier</span>')
-        for value, label in TIERS:
-            v = 'false' if value is False else value
-            on = ' on' if v == tier else ''
-            P.append(f'<button class="pill{on}" data-tier="{v}" '
-                     f'data-help="{html.escape(TIER_HELP[value])}">{label}</button>')
-        P.append(f'<span class="help tierhelp">{html.escape(TIER_HELP[info["hide"]])}</span></div>')
-
-        P.append('<div class=bulk><span class=lbl>keep</span>'
-                 f'<button class=pill data-act="weak">Keep all {info["n_weak"]} weak matches</button>'
-                 '<button class=pill data-act="all">Keep everything shown</button>'
-                 '<button class=pill data-act="none">Clear keeps</button></div>')
+        P.append(f'<div class=meta>{n} currently hidden · <span class=selection></span> · '
+                 f'{len(existing)} already restored (not shown)</div>')
 
         P.append('<div class=grid>')
-        for ph in info['photos']:
+        for ph in photos:
             ref = f'{ph["trip"]}/{ph["id"]}'
             weak_cls = ' weak' if ph['sim'] is not None and ph['sim'] < WEAK_SIM else ''
             cls = 'cell' + (' keep' if ph['keep'] else '') + weak_cls
@@ -413,11 +405,11 @@ def render(cands):
             gate = '' if ph['pub'] else '<span class=gate title="already gated or in a private trip">🔒</span>'
             P.append(
                 f'<div class="{cls}" data-ref="{html.escape(ref)}" '
-                f'data-pub="{1 if ph["pub"] else 0}" title="{html.escape(ref)}">'
+                f'data-trip="{html.escape(ph["trip"])}" data-display="{html.escape(ph["disp"])}" '
+                f'title="{html.escape(ref)}">'
                 f'{sim}{gate}'
                 f'<span class=state></span>'
-                f'<a class=open href="{html.escape(ph["disp"])}" target=_blank rel=noopener '
-                f'title="open full size">⤢</a>'
+                f'<button class=open type=button title="open full-screen viewer">⤢</button>'
                 f'<img loading=lazy src="{html.escape(ph["thumb"])}" alt="{html.escape(ph["id"])}">'
                 f'<span class=cap>{html.escape(ph["trip_name"])}</span></div>')
         P.append('</div></section>')
@@ -426,6 +418,8 @@ def render(cands):
              '<button class=apply id=apply disabled>Apply</button>'
              '<span class=msg id=msg>Tier and keep-picks are saved to config/people.json.</span>'
              '</div>')
+    P.append('<div class=viewer id=viewer><button class=close type=button aria-label="Close">×</button>'
+             '<img id=viewer-image alt=""><span class=label id=viewer-label></span></div>')
     P.append(f'<script>{PAGE_JS.replace("__WEAK__", str(WEAK_SIM))}</script></body></html>')
     return '\n'.join(P)
 

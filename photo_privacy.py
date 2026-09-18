@@ -13,7 +13,7 @@ express that, so this module:
          labelled per visit session by config/bridge_visits.json (from
          analyze_bridge_visits.py); sessions/photos without a label stay
          unlisted (fail-closed). Drone aerials are always listed,
-       - plus manual force_public / force_private overrides
+       - plus manual force_public / force_private / force_blocked overrides
          (config/photo_privacy.json, gitignored),
        - plus photos showing a person switched off in the people roster
          (config/people_private.json, resolved from face clusters by
@@ -290,6 +290,7 @@ def compute_private_map(echo=lambda *a: None) -> dict:
     overrides = load_overrides()
     force_public = {k: set(v) for k, v in (overrides.get('force_public') or {}).items()}
     force_private = {k: set(v) for k, v in (overrides.get('force_private') or {}).items()}
+    force_blocked = {k: set(v) for k, v in (overrides.get('force_blocked') or {}).items()}
     section_rules = load_section_rules(overrides)
     people_gated, people_blocked = load_people_private()
 
@@ -316,8 +317,8 @@ def compute_private_map(echo=lambda *a: None) -> dict:
         # subject to force_public (including '*'): hiding a person is a decision about
         # someone else, so it outranks a whitelist written for roof/bridge reasons.
         # The person-specific escape hatch is `keep_public` in config/people.json.
-        people_priv = ((people_gated.get(slug, set()) | people_blocked.get(slug, set()))
-                       & all_ids)
+        people_priv = ((people_gated.get(slug, set()) | people_blocked.get(slug, set())
+                       | force_blocked.get(slug, set())) & all_ids)
         if slug in pfp:
             # inverse rule: ONLY the allowlist is public; everything else is gated.
             allow = pfp[slug] & all_ids
@@ -387,15 +388,18 @@ def compute_private_map(echo=lambda *a: None) -> dict:
 
 
 def compute_blocked_map(echo=lambda *a: None) -> dict:
-    """trip slug → set of photo ids hidden from EVERY tier (the `blocked` people tier).
+    """trip slug → ids hidden from EVERY tier, including manual force_blocked picks.
 
     Unlike the gated map this covers private trips too: a private trip is still
     viewable with See All, and `blocked` means nobody sees the photo there either.
     Restricted to ids that actually exist in the trip's full manifest.
     """
-    _, blocked = load_people_private()
+    _, people_blocked = load_people_private()
+    overrides = load_overrides()
+    manual_blocked = {k: set(v) for k, v in (overrides.get('force_blocked') or {}).items()}
     out = {}
-    for slug, ids in blocked.items():
+    for slug in set(people_blocked) | set(manual_blocked):
+        ids = people_blocked.get(slug, set()) | manual_blocked.get(slug, set())
         trip_dir = WEB_TRIPS / slug
         if not trip_dir.is_dir():
             continue
@@ -667,13 +671,16 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
     # the explicit opt-ins.
     private_slugs = {s for s, pub in trip_public.items() if not pub}
     people_gated, people_blocked = load_people_private()
+    manual_blocked = {k: set(v) for k, v in (overrides.get('force_blocked') or {}).items()}
+    blocked_all = {slug: people_blocked.get(slug, set()) | manual_blocked.get(slug, set())
+                   for slug in set(people_blocked) | set(manual_blocked)}
     for trip, ids in cover_serve_map().items():
         if trip in private_slugs:
             continue
         # A hidden person must not leak back through the automatic cover exception:
         # covers are force_public'd wholesale, which would serve their image while the
         # photo is off the map. Drop them and say which tiles need a new cover.
-        hidden_here = ids & (people_gated.get(trip, set()) | people_blocked.get(trip, set()))
+        hidden_here = ids & (people_gated.get(trip, set()) | blocked_all.get(trip, set()))
         if hidden_here:
             echo(f"  ⚠ {trip}: {len(hidden_here)} tile cover(s) show a hidden person — "
                  f"not served; pick another cover ({', '.join(sorted(hidden_here))})")
@@ -682,7 +689,7 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
     # Manual force_public can't rescue a blocked photo either: blocked outranks every
     # allow-list, so strip it from the proxy's serve map as well.
     for trip, ids in list(serve.items()):
-        ids -= people_blocked.get(trip, set())
+        ids -= blocked_all.get(trip, set())
         serve[trip] = ids
     index = {
         # publish-from-private trips are NOT wholesale-private: their gated photos are
@@ -692,7 +699,7 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
         'private_photos': {s: sorted(ids) for s, ids in sorted(private_map.items())},
         # Blocked (the strict people tier): the proxy 404s these for EVERYONE, See All
         # included, and no force_public entry can override them.
-        'blocked_photos': {s: sorted(ids) for s, ids in sorted(people_blocked.items()) if ids},
+        'blocked_photos': {s: sorted(ids) for s, ids in sorted(blocked_all.items()) if ids},
         'force_public': {k: sorted(v) for k, v in sorted(serve.items())},
         # Private standalone pages (middleware gates path == p or path startswith p+'.'):
         # every private blog post, plus the Videos page (fully behind the all-access gate).

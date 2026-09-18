@@ -1079,17 +1079,22 @@ async function loadSingleTrip(trip, basePath) {
     const color = CONFIG.routeColors[colorIndex % CONFIG.routeColors.length];
 
     // Placeholder ("Photos pending") trip: visited but not edited yet, so it has no
-    // manifest/route. Drop a single greyed pin at trip.location and register it like any
+    // manifest/route. Drop greyed pins at trip.location (or trip.locations) and register it like any
     // other trip so it counts toward the on-map country tally (updateTripInfo folds in
     // trip.countries). It has no photo markers, so visibleMarkersForTrip returns [].
     if (trip.pending) {
         const markers = L.featureGroup();
-        if (Array.isArray(trip.location) && trip.location.length === 2) {
-            L.marker(trip.location, { icon: createPendingIcon(), keyboard: false })
-                .bindPopup(`<div class="pending-popup"><strong>${trip.name}</strong>` +
+        const locations = Array.isArray(trip.locations)
+            ? trip.locations
+            : (Array.isArray(trip.location) ? [{ location: trip.location }] : []);
+        locations.forEach(({ name, location }) => {
+            if (!Array.isArray(location) || location.length !== 2) return;
+            const title = name ? `${trip.name} · ${name}` : trip.name;
+            L.marker(location, { icon: createPendingIcon(), keyboard: false })
+                .bindPopup(`<div class="pending-popup"><strong>${title}</strong>` +
                            `<span>Photos pending</span></div>`)
                 .addTo(markers);
-        }
+        });
         // A placeholder can still carry a route (GPX merged, photos not edited yet).
         // Draw the line now; the photo clusters arrive when the trip is processed.
         let route = L.featureGroup();
@@ -1331,13 +1336,13 @@ function updateTripInfo() {
     document.getElementById('photo-count').textContent =
         `${totalPhotos.toLocaleString()} photos`;
 
-    // Countries visited but still entirely off the map. Albania, Belgium, Bosnia, Croatia,
-    // Luxembourg, Netherlands and Tunisia now have placeholder pins (config/trips.json
+    // Countries visited but still entirely off the map. Albania, Belgium, Bosnia, Bulgaria,
+    // Croatia, Luxembourg, Netherlands and Tunisia now have placeholder pins (config/trips.json
     // pending trips), so they count as "on map" and have moved out of this list.
     const PENDING_COUNTRIES = [
         'Ireland','Montenegro','Slovakia',
     ];
-    const TOTAL_COUNTRIES = 55;
+    const TOTAL_COUNTRIES = 56;
 
     const sorted = [...uniqueCountries].map(countryName).sort();
     const onMap = uniqueCountries.size;

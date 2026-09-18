@@ -16,7 +16,8 @@ Roster (config/people.json, gitignored — it names real people):
         "label": "Display Name",
         "clusters": ["p1", "p4"],          # face cluster ids from clusters.json
         "hide": false,                     # false | "gated" | "blocked"
-        "keep_public": {"<slug>": ["<id>"]}   # per-photo escape hatch
+        "keep_public": {"<slug>": ["<id>"]},  # per-photo escape hatch
+        "additional_photos": {"<slug>": ["<id>"]}  # hand-assigned photos
     }}}
 
 `hide` tiers:
@@ -59,7 +60,7 @@ def _load(path: Path):
 
 
 def load_roster() -> dict:
-    """key → {label, clusters, hide, keep_public}. Missing file = empty roster."""
+    """key → person rules, including hand-assigned photos. Missing file = empty roster."""
     data = _load(ROSTER)
     if data is None:
         return {}
@@ -76,6 +77,7 @@ def load_roster() -> dict:
             'clusters': [str(c) for c in (ent.get('clusters') or [])],
             'hide': hide,
             'keep_public': {s: set(v) for s, v in (ent.get('keep_public') or {}).items()},
+            'additional_photos': {s: set(v) for s, v in (ent.get('additional_photos') or {}).items()},
         }
     return out
 
@@ -88,6 +90,7 @@ def roster_digest(roster: dict) -> str:
             'clusters': sorted(v['clusters']),
             'hide': v['hide'],
             'keep_public': {s: sorted(ids) for s, ids in sorted(v['keep_public'].items())},
+            'additional_photos': {s: sorted(ids) for s, ids in sorted(v['additional_photos'].items())},
         }
         for k, v in sorted(roster.items()) if v['hide']
     }
@@ -155,6 +158,7 @@ def resolve(roster: dict) -> tuple[dict, dict]:
         photos = set()
         for cid in person['clusters']:
             photos |= by_cluster.get(cid, set())
+        photos |= {(slug, pid) for slug, ids in person['additional_photos'].items() for pid in ids}
         kept = {(s, i) for s, ids in person['keep_public'].items() for i in ids}
         effective = photos - kept
         detail[key] = {

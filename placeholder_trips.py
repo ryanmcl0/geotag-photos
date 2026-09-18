@@ -10,7 +10,8 @@ galleries-index.js, sidebar.js). It still counts toward the on-map country tally
 it carries `countries`.
 
 Each pending entry in trips.json carries: name, dates {start,end}, countries (ISO-3166
-alpha-2), location [lat, lon] for the map pin, and the block (public/private) it lives in.
+alpha-2), and either location [lat, lon] or locations [{name, location}] for its map pin(s),
+plus the block (public/private) it lives in.
 
 To publish a placeholder for real: add its edits/gpx/raws paths and delete the placeholder
 fields (pending/dates/countries/location), then process it normally. The slug is
@@ -72,6 +73,7 @@ def _build_entry(trip: dict, is_public: bool) -> dict:
         'countries': trip.get('countries', []),
         'pending': True,
         'location': trip.get('location'),
+        'locations': trip.get('locations'),
         'public': bool(is_public),
     }
     # A placeholder can still have a route: a trip back from the road with its GPX

@@ -51,6 +51,7 @@ web/20*/
 # ── Credentials / local config ────────────────────────────────────────────────
 .env.deploy
 wrangler.toml
+site-access-qr.png
 
 # ── Local docs & agent context (personal paths/data, never public) ───────────
 docs/

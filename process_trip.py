@@ -1452,6 +1452,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
     <link rel="stylesheet" href="../css/styles.css"/>
+    <script defer src="/js/analytics.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -1530,6 +1531,7 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
     <link rel="stylesheet" href="../../css/styles.css"/>
+    <script defer src="/js/analytics.js"></script>
 </head>
 <body>
     <div class="app-container">

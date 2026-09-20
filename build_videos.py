@@ -145,6 +145,7 @@ def build() -> None:
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Videos · Ryan's Travels</title>
     <link rel="stylesheet" href="css/site.css"/>
+    <script defer src="/js/analytics.js"></script>
 </head>
 <body>
 {NAV}

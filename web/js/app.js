@@ -1412,6 +1412,11 @@ function buildMarkerLayer(manifest, hasGpx) {
         // maxWidth overrides Leaflet's 300px default ceiling so the wider
         // cluster popup (see .cluster-popup in styles.css) isn't clamped.
         marker.bindPopup(() => buildMarkerPopup(marker), { maxWidth: 560 });
+        marker.on('click', () => {
+            if (window.SiteAnalytics) SiteAnalytics.track('map_marker_click', {
+                trip: manifest.tripId, cluster: String(cluster.id || cluster.photo_ids[0])
+            });
+        });
         marker.photoData = photos;
         marker.locationName = cluster.location;
         marker.country = cluster.country || null;
@@ -2302,6 +2307,7 @@ function openGallery(photo) {
     });
 
     gallery.init();
+    if (window.SiteAnalytics) SiteAnalytics.attachLightbox(gallery, 'map');
     addDoubleTapDragZoom(gallery, pswpEl);
     addWheelZoom(gallery, pswpEl);
     if (window.Posts) Posts.attachLightbox(gallery, pswpEl);

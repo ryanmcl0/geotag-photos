@@ -714,8 +714,11 @@
       if (window.Unlock && !window.Unlock.unlocked()) window.Unlock.open({});
       return;
     }
-    if (!subId) return renderFacet(tile);
     const s = subById(tile, subId);
+    if (window.SiteAnalytics) SiteAnalytics.track('collection_view', {
+      collection: COLL, facet: tile.id, section: s ? s.id : ''
+    });
+    if (!subId) return renderFacet(tile);
     const extra = hash.split('/')[2];
     // reference imagery (renders/mockups) hangs off pending bridge rows
     if (s && extra === 'renders' && (s.renders || []).length) return renderBridgeRenders(tile, s);

@@ -71,7 +71,20 @@ export CF_CDN_BASE_URL="https://travel-photos.account-id.r2.cloudflarestorage.co
 
 # Optional: Password protect the site
 export CF_SITE_PASSWORD="your-secret-password"
+
+# Optional: let a generated QR invitation pass the site password gate
+export CF_QR_ACCESS_TOKEN="a-long-random-token"
 ```
+
+To create a high-resolution QR invitation and generate this token automatically:
+
+```bash
+venv/bin/python tools/create_site_access_qr.py
+```
+
+The ignored `site-access-qr.png` file is the private invitation. The deploy script
+publishes `CF_QR_ACCESS_TOKEN` as a Pages secret; generate and deploy a replacement
+to revoke the old QR code without changing the normal site password.
 
 Then load it:
 

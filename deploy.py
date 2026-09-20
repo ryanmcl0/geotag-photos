@@ -17,6 +17,8 @@ Environment variables (set in .env.deploy):
   CF_SITE_PASSWORD   Password to protect the site (optional). Set to "" and
                      redeploy to remove the gate entirely (leave unset to
                      skip touching this secret).
+  CF_QR_ACCESS_TOKEN Separate token embedded in the site-access QR code
+                     (optional). Set to "" and redeploy to revoke QR access.
   CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional).
                      Same "" convention as CF_SITE_PASSWORD.
   CF_POSTS_PASSWORD  Password for the owner-only Posts feature (optional;
@@ -715,6 +717,7 @@ def main():
 
     config = DeployConfig()
     password = os.getenv('CF_SITE_PASSWORD')
+    qr_access_token = os.getenv('CF_QR_ACCESS_TOKEN')
     all_password = os.getenv('CF_ALL_PASSWORD')
     posts_password = os.getenv('CF_POSTS_PASSWORD')
 
@@ -727,6 +730,7 @@ def main():
     if config.git_repo:
         print(f"   Git Repo: {config.git_repo}")
     print(f"   Auth:     {'password protected' if password else 'none'}")
+    print(f"   QR access: {'enabled' if qr_access_token else 'off'}")
     print(f"   All-access: {'password protected' if all_password else 'none'}")
     print(f"   Posts:    {'password protected' if posts_password else 'off'}")
     if args.dry_run:
@@ -853,15 +857,21 @@ def main():
     # alone; a var that's explicitly set to "" deletes the secret (removes the gate).
     if not args.skip_pages:
         site_password_in_env = 'CF_SITE_PASSWORD' in os.environ
+        qr_access_token_in_env = 'CF_QR_ACCESS_TOKEN' in os.environ
         all_password_in_env = 'CF_ALL_PASSWORD' in os.environ
         posts_password_in_env = 'CF_POSTS_PASSWORD' in os.environ
-        if (password or all_password or posts_password
-                or site_password_in_env or all_password_in_env or posts_password_in_env):
+        if (password or qr_access_token or all_password or posts_password
+                or site_password_in_env or qr_access_token_in_env
+                or all_password_in_env or posts_password_in_env):
             print("🔐 Setting password secrets...")
             if password:
                 deployer.set_secret('CF_SITE_PASSWORD', password, dry_run=args.dry_run)
             elif site_password_in_env:
                 deployer.delete_secret('CF_SITE_PASSWORD', dry_run=args.dry_run)
+            if qr_access_token:
+                deployer.set_secret('CF_QR_ACCESS_TOKEN', qr_access_token, dry_run=args.dry_run)
+            elif qr_access_token_in_env:
+                deployer.delete_secret('CF_QR_ACCESS_TOKEN', dry_run=args.dry_run)
             if all_password:
                 deployer.set_secret('CF_ALL_PASSWORD', all_password, dry_run=args.dry_run)
             elif all_password_in_env:

@@ -11,6 +11,7 @@ const ACCESS = ACCESS_INDEX as {
 
 interface Env {
     CF_SITE_PASSWORD: string;
+    CF_QR_ACCESS_TOKEN: string;
     CF_ALL_PASSWORD: string;
     CF_POSTS_PASSWORD: string;
     ASSETS: Fetcher;
@@ -129,7 +130,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         return m ? m.split('=').slice(1).join('=') : null;
     };
 
-    if (context.request.method === 'POST' && ['/auth', '/auth-all', '/auth-posts'].includes(path)) {
+    if (context.request.method === 'POST' && ['/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path)) {
         const ip = context.request.headers.get('CF-Connecting-IP') || 'local';
         const retry = authRetryAfter(ip);
         if (retry) {
@@ -138,6 +139,34 @@ export const onRequest: PagesFunction<Env> = async (context) => {
                 headers: { 'Retry-After': String(retry) }
             });
         }
+    }
+
+    // QR invitations use a separate, revocable bearer token. The browser reads it
+    // from the URL fragment on /login (fragments never reach the server), sends it
+    // here in a POST body, then replaces the URL with /. The real site password is
+    // therefore never embedded in the QR code or exposed to an invited visitor.
+    if (path === '/auth-qr' && context.request.method === 'POST') {
+        const sitePassword = context.env.CF_SITE_PASSWORD;
+        const qrToken = context.env.CF_QR_ACCESS_TOKEN;
+        const formData = await context.request.formData();
+        const submitted = formData.get('token') as string;
+
+        if (sitePassword && qrToken && submitted && submitted === qrToken) {
+            const isSecure = url.protocol === 'https:';
+            const token = await tokenFor(sitePassword);
+            return new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-store',
+                    'Set-Cookie': `site_auth=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
+                }
+            });
+        }
+        return new Response(JSON.stringify({ ok: false }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+        });
     }
 
     if (path === '/auth-all' && context.request.method === 'POST') {
@@ -186,7 +215,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     const sitePassword = context.env.CF_SITE_PASSWORD;
     const allPassword = context.env.CF_ALL_PASSWORD;
-    const isAuthPath = ['/login', '/login.html', '/auth', '/auth-all', '/auth-posts'].includes(path);
+    const isAuthPath = ['/login', '/login.html', '/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path);
 
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {

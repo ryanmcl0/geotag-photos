@@ -83,6 +83,12 @@
             font-size: 13px;
             margin-bottom: 12px;
         }
+
+        .qr-status {
+            color: #d1d5db;
+            font-size: 14px;
+            margin-bottom: 14px;
+        }
     </style>
 </head>
 <body>
@@ -101,5 +107,37 @@
             <button type="submit">Enter</button>
         </form>
     </div>
+    <script>
+        // A QR invitation stores its token in the fragment so it is not sent in
+        // the initial request, browser history, referrers, or ordinary access logs.
+        // Exchange it for the normal HttpOnly login cookie, then clean the URL.
+        (async () => {
+            const token = new URLSearchParams(location.hash.slice(1)).get('qr');
+            if (!token) return;
+
+            history.replaceState(null, '', location.pathname);
+            const form = document.querySelector('form');
+            const status = document.createElement('div');
+            status.className = 'qr-status';
+            status.setAttribute('role', 'status');
+            status.textContent = 'Opening your invitation…';
+            form.before(status);
+            form.hidden = true;
+
+            try {
+                const response = await fetch('/auth-qr', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ token })
+                });
+                if (!response.ok) throw new Error('Invalid invitation');
+                location.replace('/');
+            } catch {
+                status.className = 'error';
+                status.textContent = 'This invitation is invalid or has been replaced.';
+                form.hidden = false;
+            }
+        })();
+    </script>
 </body>
 </html>

@@ -499,6 +499,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
+    <script defer src="/js/analytics.js"></script>
 </head>
 <body>
 {nav}
@@ -554,6 +555,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
     <title>Blogs · Ryan's Travels</title>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
+    <script defer src="/js/analytics.js"></script>
 </head>
 <body>
 {nav}

@@ -96,6 +96,7 @@ tools/blog_migration/
 web/blogs/
 web/blogs.html
 web/videos.html
+ANALYTICS.md
 
 # Privacy audit galleries (tools/public_photo_audit.py [--private])
 _public_photo_audit.html

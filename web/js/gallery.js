@@ -297,6 +297,7 @@ window.Gallery = (function () {
     });
     addWheelZoom(gallery, pswpEl);
     gallery.init();
+    if (window.SiteAnalytics) SiteAnalytics.attachLightbox(gallery, 'gallery');
     if (window.Posts) Posts.attachLightbox(gallery, pswpEl, opts);
   }
 

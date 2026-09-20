@@ -84,7 +84,8 @@ venv/bin/python tools/create_site_access_qr.py
 
 The ignored `site-access-qr.png` file is the private invitation. The deploy script
 publishes `CF_QR_ACCESS_TOKEN` as a Pages secret; generate and deploy a replacement
-to revoke the old QR code without changing the normal site password.
+to revoke the old QR code without changing the normal site password. See
+[QR_ACCESS.md](QR_ACCESS.md) for rotation, revocation, and session invalidation.
 
 Then load it:
 

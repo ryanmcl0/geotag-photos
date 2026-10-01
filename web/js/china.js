@@ -57,9 +57,11 @@
 
   // Tile covers render ~900px wide — use the 2160px display webp (lazy-loaded),
   // not the 400px thumbnail, or covers look soft.
+  // A cover can also be a plain site asset ({src}) — e.g. a phone photo copied
+  // into previews/ as a bridge's public thumbnail.
   function imgTag(cover) {
     return cover ? `<img class="tile-img" loading="lazy" alt="" onerror="Gallery.lockedCover(this)"
-      src="${Gallery.photoUrl(cover, 'display')}">` : '';
+      src="${cover.src ? esc(cover.src) : Gallery.photoUrl(cover, 'display')}">` : '';
   }
 
   function setCrumbs(parts) {
@@ -411,13 +413,13 @@
     let flip = false;
     ranked.forEach(s => {
       list.appendChild(buildBridgeRow(tile, s, flip));
-      if (s.done && (s.photos || []).length) flip = !flip;   // alternate photo side
+      if (s.done && bridgePhotoCount(tile, s)) flip = !flip;   // alternate photo side
     });
     if (extras.length) {
       list.appendChild(el('div', 'bridge-extras-head', 'Also visited'));
       extras.forEach(s => {
         list.appendChild(buildBridgeRow(tile, s, flip));
-        if (s.done && (s.photos || []).length) flip = !flip;
+        if (s.done && bridgePhotoCount(tile, s)) flip = !flip;
       });
     }
     app.appendChild(list);
@@ -476,20 +478,56 @@
     return wrap;
   }
 
+  // The public preview ships counts, not photo lists.
+  const bridgePhotoCount = (tile, s) => tile.preview ? (s.count || 0) : (s.photos || []).length;
+
+  // "N photos · 🔒 See All" on preview rows: the count is real, the gallery is
+  // behind the password. Unlocking reloads into the full page.
+  function bridgeUnlockLine(n) {
+    const line = el('div', 'bridge-count', `${n} photos · `);
+    const a = el('a', 'bridge-unlock', '🔒 See All');
+    a.href = '#';
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.Unlock) window.Unlock.open({});
+    });
+    line.appendChild(a);
+    return line;
+  }
+
   function buildBridgeRow(tile, s, flip) {
     const rank = s.rank != null ? s.rank : '·';
     const metaBits = [];
     if (s.height_m) metaBits.push(`${s.height_m} m`);
     if (s.province) metaBits.push(s.province);
-    const hasPhotos = s.done && (s.photos || []).length;
+    const hasPhotos = s.done && bridgePhotoCount(tile, s);
+
+    if (tile.preview && hasPhotos) {
+      const row = el('div', 'bridge-row bridge-row--preview' + (flip ? ' bridge-row--flip' : ''));
+      row.innerHTML = `
+        <div class="bridge-rank">${esc(String(rank))}</div>
+        <div class="bridge-text">
+          <div class="bridge-name">${esc(s.title)}</div>
+          ${s.name_zh ? `<div class="bridge-zh">${esc(s.name_zh)}</div>` : ''}
+          <div class="bridge-meta">${esc(metaBits.join(' · '))}</div>
+        </div>
+        <div class="bridge-media">${s.cover ? imgTag(s.cover)
+          : '<div class="tile-cover-locked"><span class="pad">🔒</span>See All</div>'}</div>`;
+      row.querySelector('.bridge-text').appendChild(bridgeUnlockLine(s.count));
+      const img = row.querySelector('img');
+      if (img) img.classList.remove('tile-img');
+      return row;
+    }
 
     if (!hasPhotos) {
       // A pending bridge can still carry a picked gallery (visited while under
       // construction, e.g. Yalong Liangshan): same compact row, no photo tile,
       // but the whole row links into the gallery and shows the count.
-      const n = (s.photos || []).length;
-      const row = el(n ? 'a' : 'div', 'bridge-row bridge-row--pending');
-      if (n) row.href = `#${tile.id}/${s.id}`;
+      const n = bridgePhotoCount(tile, s);
+      const linked = n && !tile.preview;
+      const row = el(linked ? 'a' : 'div', 'bridge-row bridge-row--pending');
+      if (linked) row.href = `#${tile.id}/${s.id}`;
       metaBits.push(s.pending || 'Pending');
       row.innerHTML = `
         <div class="bridge-rank">${esc(String(rank))}</div>
@@ -498,9 +536,10 @@
           ${s.name_zh ? `<span class="bridge-zh">${esc(s.name_zh)}</span>` : ''}
           <div class="bridge-meta">${esc(metaBits.join(' · '))}</div>
           ${s.highlight ? `<div class="bridge-highlight">★ ${esc(s.highlight)}</div>` : ''}
-          ${n ? `<div class="bridge-count">${n} photos →</div>` : ''}
+          ${linked ? `<div class="bridge-count">${n} photos →</div>` : ''}
         </div>`;
       const text = row.querySelector('.bridge-text');
+      if (n && tile.preview) text.appendChild(bridgeUnlockLine(n));
       if ((s.renders || []).length) {
         // The row itself can be an <a> (linked gallery), so the renders link swallows
         // the click and routes by hand — same trick as the status toggle below.
@@ -753,6 +792,14 @@
     if (!tile) return renderHub();
     if (tile.locked) {
       renderHub();
+      if (window.Unlock && !window.Unlock.unlocked()) window.Unlock.open({});
+      return;
+    }
+    // Public preview (Bridges for locked visitors): the list is open, the
+    // galleries behind it are not. A deep link lands on the list + password prompt.
+    if (tile.preview && subId) {
+      history.replaceState(null, '', `#${tile.id}`);
+      renderFacet(tile);
       if (window.Unlock && !window.Unlock.unlocked()) window.Unlock.open({});
       return;
     }

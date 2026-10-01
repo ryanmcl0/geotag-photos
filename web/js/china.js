@@ -164,6 +164,7 @@
   function renderFacet(tile) {
     if (tile.kind === 'gallery') return renderGalleryView(tile);
     if (tile.kind === 'tiered_tilegroup') return renderTieredTiles(tile);
+    if (tile.kind === 'stories') return renderStories(tile);
     if (tile.id === 'bridges') return renderBridgesRanked(tile);
     setCrumbs([{ label: DATA.title, href: '#' }, { label: tile.title }]);
     app.innerHTML = '';
@@ -188,6 +189,47 @@
       tile.subtiles.forEach(s => grid.appendChild(buildSubtile(tile, s)));
       observeReveal(grid, '.tile');
     }
+  }
+
+  /* Stories: this collection's slice of blogs.html, same tiles (title, year · km,
+   * words · photos · read time), linking straight to the blog post. Gated blogs
+   * lock behind See All like they do on the Blogs page. */
+  function renderStories(tile) {
+    setCrumbs([{ label: DATA.title, href: '#' }, { label: tile.title }]);
+    app.innerHTML = '';
+    app.appendChild(el('div', 'section-head',
+      `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
+    const grid = el('div', 'tiles blog-tiles');
+    const unlocked = window.Unlock && window.Unlock.unlocked();
+    (tile.subtiles || []).forEach(s => {
+      if (!s.done) {
+        grid.appendChild(el('div', 'tile tile--pending', `
+          <div class="tile-inner"><div class="tile-title">${esc(s.title)}</div>
+            <div class="pending-tag">${esc(s.year)} · ${esc(s.pending || 'Coming soon')}</div></div>`));
+        return;
+      }
+      const locked = !s.public && !unlocked;
+      const card = el('a', 'tile blog-tile' + (locked ? ' tile--locked' : ''));
+      card.href = `blogs/${encodeURIComponent(s.id)}.html`;
+      const st = s.stats || {};
+      const km = st.km ? ` · ${Number(st.km).toLocaleString()} km` : '';
+      card.innerHTML = `${imgTag(s.cover)}${locked ? '<div class="lock-badge">🔒 See All</div>' : ''}
+        <div class="tile-overlay">
+          <div class="tile-title">${esc(s.title)}</div>
+          <div class="tile-sub">${esc(s.year)}${km}</div>
+          <div class="tile-sub blog-tile-stats">${(st.words || 0).toLocaleString()} words · ${(st.photos || 0).toLocaleString()} photos · ${esc(st.read || '')} read</div>
+        </div>`;
+      if (locked) {
+        card.addEventListener('click', e => {
+          if (window.Unlock.unlocked()) return;
+          e.preventDefault();
+          window.Unlock.open({ href: card.getAttribute('href') });
+        });
+      }
+      grid.appendChild(card);
+    });
+    app.appendChild(grid);
+    observeReveal(grid, '.tile');
   }
 
   function paintProvinceTiles(tile, year) {

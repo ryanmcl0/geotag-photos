@@ -354,6 +354,54 @@ def _blogs_for_trip(trip_slug):
             if b.get('status') != 'pending' and trip_slug in (b.get('trips') or [])]
 
 
+def facet_stories(facet, records, echo):
+    """The collection's slice of the Blogs page: every blog (live or pending, in
+    config/blogs.json order) whose trips are mostly inside the collection — a trip
+    counts when at least half its geotagged photos are member records, so Mongolia
+    or India write-ups that clip a border stay off the China page. Live blogs carry
+    the tile metadata build_blogs.py writes to web/blogs/<slug>.json; gated ones
+    keep public=false and are locked client-side exactly like on blogs.html."""
+    path = ROOT / 'config' / 'blogs.json'
+    if not path.exists():
+        return None, []
+    blogs = json.loads(path.read_text()).get('blogs', [])
+    inside = {}
+    for r in records:
+        inside[r['trip']] = inside.get(r['trip'], 0) + 1
+
+    def in_collection(slug):
+        if not inside.get(slug):
+            return False
+        man = photo_privacy.load_full_manifest(WEB_TRIPS / slug) or {}
+        geo = sum(1 for p in man.get('photos', []) if p.get('lat') is not None and p.get('lon') is not None)
+        return geo and inside[slug] / geo >= 0.5
+
+    subtiles = []
+    for b in blogs:
+        if not any(in_collection(t) for t in (b.get('trips') or [])):
+            continue
+        sub = {'id': b['slug'], 'title': b['title'], 'year': b.get('year'),
+               'public': bool(b.get('public'))}
+        meta_path = ROOT / 'web' / 'blogs' / f"{b['slug']}.json"
+        if b.get('status') == 'pending' or not meta_path.exists():
+            sub['pending'] = 'Coming soon'
+        else:
+            meta = json.loads(meta_path.read_text())
+            sub.update(done=True, title=meta.get('title', b['title']),
+                       year=meta.get('year', b.get('year')),
+                       stats=meta.get('stats', {}), cover=meta.get('cover'))
+        subtiles.append(sub)
+    live = [s for s in subtiles if s.get('done')]
+    if not subtiles:
+        return None, []
+    echo(f"  stories: {len(live)} live + {len(subtiles) - len(live)} pending blog(s)")
+    info = f"{len(live)} {'story' if len(live) == 1 else 'stories'}"
+    # Auto cover: the first public blog's own cover (already a {trip,id,ar} ref).
+    first = next((s for s in live if s['public'] and s.get('cover')), None)
+    return {'kind': 'stories', 'infographic': info, 'subtiles': subtiles,
+            'auto_cover': first['cover'] if first else None}, []
+
+
 def facet_roads(facet, records, echo):
     roster = json.loads((ROOT / facet['roster']).read_text())
     by_trip = {}
@@ -966,6 +1014,7 @@ FACET_BUILDERS = {
     'road_trips': facet_roads, 'bridges': facet_bridges,
     'province': facet_provinces, 'rooftopping': facet_roofs,
     'energy': facet_energy, 'highways': facet_highways,
+    'stories': facet_stories,
 }
 
 
@@ -1203,8 +1252,10 @@ def build_collection(coll, do_category, force, private_map):
             continue
         result['id'] = facet['id']
         result['title'] = facet['title']
-        result['cover'] = resolve_cover(cover_spec(coll['id'], facet['id'], facet.get('cover')),
-                                        id_index, pool)
+        result['cover'] = (resolve_cover(cover_spec(coll['id'], facet['id'], facet.get('cover')),
+                                         id_index, pool)
+                           or result.get('auto_cover'))
+        result.pop('auto_cover', None)
         apply_subtile_covers(result, id_index)
         _mark_pending(result, rule)
         tiles.append(result)
@@ -1245,6 +1296,11 @@ def build_collection(coll, do_category, force, private_map):
             continue
         if facet['type'] == 'ai':
             pub_tiles.append(_filter_tile_refs(full_tile, pub_ref_set))
+            continue
+        if facet.get('rule') == 'stories':
+            # Same tiles as blogs.html for everyone: gated blogs stay listed and
+            # lock client-side, rather than vanishing with their private trips.
+            pub_tiles.append(copy.deepcopy(full_tile))
             continue
         result, pool = FACET_BUILDERS[facet['rule']](facet, pub_records, quiet)
         result['id'] = facet['id']

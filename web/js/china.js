@@ -450,7 +450,8 @@
     // it hijacks the page scroll whenever the pointer crosses the map mid-scroll
     mapEl.addEventListener('mouseenter', () => map.scrollWheelZoom.enable());
     mapEl.addEventListener('mouseleave', () => map.scrollWheelZoom.disable());
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    // Esri World Street Map: keyless (CARTO basemaps need an API key since Sep 2026)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 18 }).addTo(map);
 
     const pin = colour => L.divIcon({

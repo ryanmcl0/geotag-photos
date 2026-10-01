@@ -481,20 +481,9 @@
   // The public preview ships counts, not photo lists.
   const bridgePhotoCount = (tile, s) => tile.preview ? (s.count || 0) : (s.photos || []).length;
 
-  // "N photos · 🔒 See All" on preview rows: the count is real, the gallery is
-  // behind the password. Unlocking reloads into the full page.
-  function bridgeUnlockLine(n) {
-    const line = el('div', 'bridge-count', `${n} photos · `);
-    const a = el('a', 'bridge-unlock', '🔒 See All');
-    a.href = '#';
-    a.addEventListener('click', e => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (window.Unlock) window.Unlock.open({});
-    });
-    line.appendChild(a);
-    return line;
-  }
+  // Preview rows show the real (full) count; the galleries open via the nav's
+  // See All, not a per-row link.
+  const bridgeCountLine = n => el('div', 'bridge-count', `${n} photos`);
 
   function buildBridgeRow(tile, s, flip) {
     const rank = s.rank != null ? s.rank : '·';
@@ -513,8 +502,8 @@
           <div class="bridge-meta">${esc(metaBits.join(' · '))}</div>
         </div>
         <div class="bridge-media">${s.cover ? imgTag(s.cover)
-          : '<div class="tile-cover-locked"><span class="pad">🔒</span>See All</div>'}</div>`;
-      row.querySelector('.bridge-text').appendChild(bridgeUnlockLine(s.count));
+          : '<div class="tile-cover-locked"><span class="pad">🔒</span>Locked</div>'}</div>`;
+      row.querySelector('.bridge-text').appendChild(bridgeCountLine(s.count));
       const img = row.querySelector('img');
       if (img) img.classList.remove('tile-img');
       return row;
@@ -539,7 +528,7 @@
           ${linked ? `<div class="bridge-count">${n} photos →</div>` : ''}
         </div>`;
       const text = row.querySelector('.bridge-text');
-      if (n && tile.preview) text.appendChild(bridgeUnlockLine(n));
+      if (n && tile.preview) text.appendChild(bridgeCountLine(n));
       if ((s.renders || []).length) {
         // The row itself can be an <a> (linked gallery), so the renders link swallows
         // the click and routes by hand — same trick as the status toggle below.

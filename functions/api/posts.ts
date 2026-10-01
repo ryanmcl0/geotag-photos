@@ -55,11 +55,13 @@ interface Post {
     num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
     noHighlight?: boolean;
 }
-// Doc-level switches for the Highlights page. highlightsEnabled is the master
+// Doc-level owner switches. highlightsEnabled is the Highlights page's master
 // feature flag (absent/false = the page doesn't exist anywhere on the site);
 // highlightsIg/highlightsXhs pick which platform's drafts feed it (absent = on).
-interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean }
-const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs'];
+// bridgesPreview opens the China Bridges page to locked visitors as a
+// gallery-less preview (absent = on; false = the original locked tile).
+interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean; bridgesPreview?: boolean }
+const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs', 'bridgesPreview'];
 interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings }
 
 function validSettings(s: unknown): s is Settings | undefined {

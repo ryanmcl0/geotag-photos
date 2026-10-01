@@ -955,6 +955,12 @@ window.Posts = (function () {
                 if (val === undefined) delete s[key]; else s[key] = val;
                 if (!Object.keys(s).length) delete d.settings;
             }).then(() => renderManager(root));
+            controls.appendChild(check('Public Bridges preview (China)',
+                st.bridgesPreview !== false,
+                'On: visitors without the See All password can open the China Bridges ' +
+                'page, one public thumbnail per bridge and no galleries. Off: the tile is ' +
+                'locked as before. Flips may take up to 5 minutes to reach every visitor.',
+                on => setSetting('bridgesPreview', on ? undefined : false)));
             controls.appendChild(check('Enable Highlights page',
                 st.highlightsEnabled === true,
                 'Public page of coverflow galleries built from these posts. ' +

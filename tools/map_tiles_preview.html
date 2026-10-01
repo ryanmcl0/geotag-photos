@@ -1,0 +1,161 @@
+<!doctype html>
+<!--
+  Map tile comparison: CARTO (API key required since 23 Sep 2026) vs keyless Esri
+  layers, all maps synced, with the China bridge roster pinned on top.
+
+  Serve from the repo root so the pins can load from the build output:
+      python3 -m http.server 8790 --bind 127.0.0.1
+      open http://127.0.0.1:8790/tools/map_tiles_preview.html
+  Pins come from web/collections/china.all.json (run ./build_collections.py first);
+  without it the maps still render, just without pins.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="darkreader-lock">
+<title>Map Tiles Preview</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#111; --panel:#1b1b1d; --fg:#eee; --muted:#9a9a9f; --line:#2c2c30; --pick:#5ad17e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  header { position:sticky; top:0; z-index:1000; background:var(--panel); border-bottom:1px solid var(--line); padding:12px 18px; }
+  h1 { margin:0 0 4px; font-size:17px; font-weight:600; }
+  .sub { color:var(--muted); font-size:13px; max-width:1100px; }
+  .bar { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; align-items:center; }
+  .bar button { background:#26262a; color:var(--fg); border:1px solid var(--line); border-radius:14px; padding:4px 12px; font-size:12px; cursor:pointer; }
+  .bar button.on { border-color:#4a9eff; }
+  .bar .lbl { color:var(--muted); font-size:12px; margin-right:4px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); margin:22px 18px 8px; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:14px; padding:0 18px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .card .head { padding:9px 12px; display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
+  .card .name { font-weight:600; }
+  .card .tag { font-size:11px; color:var(--muted); }
+  .card .tag.now { color:#e0a24a; }
+  .card .tag.rec { color:var(--pick); }
+  .card .note { padding:0 12px 10px; color:var(--muted); font-size:12px; }
+  .map { height:380px; background:#ddd; }
+  footer { color:var(--muted); font-size:12px; padding:20px 18px 40px; }
+  @media (max-width:520px) { .grid { grid-template-columns:1fr; padding:0 16px; } .map { height:300px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Map tiles: CARTO (now keyed) vs Esri (no key)</h1>
+  <div class="sub">Every map is in sync: pan or zoom any one and the rest follow. Pins are the real bridge roster (green = visited, red = not yet).
+    CARTO started requiring an API key on 23 Sep 2026, so the CARTO panels show what visitors get today. Voyager's real look can't be shown any more: it was a light, muted pastel street map.</div>
+  <div class="bar"><span class="lbl">Jump to</span>
+    <button data-v="26.6,106.3,6" class="on">Guizhou bridges</button>
+    <button data-v="34,103,4">All China</button>
+    <button data-v="41.5,84,6">Xinjiang</button>
+    <button data-v="51.507,-0.12,12">London (city)</button>
+    <button data-v="46,10,5">Europe</button>
+    <button data-v="25,60,2">World (main map default)</button>
+  </div>
+</header>
+
+<h2>Street basemap (bridges map, blog maps, main map "Streets")</h2>
+<div class="grid" id="streets"></div>
+
+<h2>Labels over satellite (main map "Satellite")</h2>
+<div class="grid" id="sat"></div>
+
+<footer>Esri layers are the same free, keyless ArcGIS Online tile services the site already uses for satellite imagery (attribution required, which the layer sets).</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+const esri = p => ESRI + p + '/MapServer/tile/{z}/{y}/{x}';
+const CARTO_VOY = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+const CARTO_LABELS = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png';
+
+const PANELS = {
+  streets: [
+    { name: 'CARTO Voyager', tag: 'current, broken without a key', cls: 'now',
+      layers: [[CARTO_VOY, {}]], note: 'What the bridges map, blog maps and main-map Streets show right now.' },
+    { name: 'Esri World Street Map', tag: 'closest like-for-like', cls: 'rec',
+      layers: [[esri('World_Street_Map'), {}]], note: 'Classic road atlas: more colour and road detail than Voyager. Labels in English across China.' },
+    { name: 'Esri Light Gray Canvas', tag: 'closest to Voyager\'s calm look',
+      layers: [[esri('Canvas/World_Light_Gray_Base'), {}], [esri('Canvas/World_Light_Gray_Reference'), {}]],
+      note: 'Muted grey base + light labels. Pins and routes stand out most. Max zoom 16.' },
+    { name: 'Esri World Topo Map', tag: 'terrain',
+      layers: [[esri('World_Topo_Map'), {}]], note: 'Relief shading with roads. Busier, but shows the gorges the bridges cross.' },
+  ],
+  sat: [
+    { name: 'Satellite + CARTO labels', tag: 'current, labels broken', cls: 'now',
+      layers: [[esri('World_Imagery'), {}], [CARTO_LABELS, {}]],
+      note: 'The label overlay is CARTO, so it now draws the API-key watermark over the imagery.' },
+    { name: 'Satellite + Esri Boundaries & Places', tag: 'keyless replacement', cls: 'rec',
+      layers: [[esri('World_Imagery'), {}], [esri('Reference/World_Boundaries_and_Places'), {}]],
+      note: 'Esri\'s own label overlay for imagery: place names + borders.' },
+    { name: 'Satellite + Esri places + roads', tag: 'option',
+      layers: [[esri('World_Imagery'), {}], [esri('Reference/World_Transportation'), {}], [esri('Reference/World_Boundaries_and_Places'), {}]],
+      note: 'Adds road lines and road labels on top. Useful for road-trip routes, busier.' },
+  ],
+};
+
+const pinIcon = c => L.divIcon({
+  html: `<svg viewBox="0 0 24 34" width="20" height="28"><path fill="${c}" stroke="#fff" stroke-width="1.2" d="M12 1C6.5 1 2 5.4 2 10.9 2 18.3 12 33 12 33s10-14.7 10-22.1C22 5.4 17.5 1 12 1z"/><circle cx="12" cy="10.9" r="3.4" fill="#fff" fill-opacity=".85"/></svg>`,
+  className: '', iconSize: [20, 28], iconAnchor: [10, 27],
+});
+const done = pinIcon('#2e8b46'), todo = pinIcon('#c8392e');
+
+const maps = [];
+let PINS = [];
+let syncing = false;
+function sync(src) {
+  if (syncing) return;
+  syncing = true;
+  maps.forEach(m => { if (m !== src) m.setView(src.getCenter(), src.getZoom(), { animate: false }); });
+  syncing = false;
+}
+
+for (const [gridId, panels] of Object.entries(PANELS)) {
+  const grid = document.getElementById(gridId);
+  panels.forEach(p => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<div class="head"><span class="name">${p.name}</span><span class="tag ${p.cls || ''}">${p.tag}</span></div>
+      <div class="map"></div><div class="note" style="padding-top:8px">${p.note}</div>`;
+    grid.appendChild(card);
+    const m = L.map(card.querySelector('.map'), { scrollWheelZoom: false, attributionControl: false })
+      .setView([26.6, 106.3], 6);
+    p.layers.forEach(([url, opts]) => L.tileLayer(url, { maxZoom: 19, ...opts }).addTo(m));
+    const el = card.querySelector('.map');
+    el.addEventListener('mouseenter', () => m.scrollWheelZoom.enable());
+    el.addEventListener('mouseleave', () => m.scrollWheelZoom.disable());
+    m.on('move zoom', () => sync(m));
+    maps.push(m);
+  });
+}
+
+// Bridge pins from the build output (served from the repo root); optional.
+fetch('../web/collections/china.all.json')
+  .then(r => (r.ok ? r.json() : null))
+  .then(d => {
+    const br = d && d.tiles.find(t => t.id === 'bridges');
+    PINS = ((br && br.subtiles) || []).filter(s => s.lat != null && s.lon != null)
+      .map(s => ({ n: s.title, lat: s.lat, lon: s.lon, done: !!s.done }));
+    maps.forEach(m => PINS.forEach(b =>
+      L.marker([b.lat, b.lon], { icon: b.done ? done : todo }).bindTooltip(b.n).addTo(m)));
+  })
+  .catch(() => {});
+
+// maps are created before the grid finishes laying out; re-measure, then re-centre all
+requestAnimationFrame(() => {
+  maps.forEach(m => m.invalidateSize());
+  maps[0].setView([26.6, 106.3], 6, { animate: false });
+  sync(maps[0]);
+});
+
+document.querySelectorAll('.bar button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.bar button').forEach(x => x.classList.toggle('on', x === b));
+  const [lat, lon, z] = b.dataset.v.split(',').map(Number);
+  maps[0].setView([lat, lon], z);
+  sync(maps[0]);
+}));
+</script>
+</body>
+</html>

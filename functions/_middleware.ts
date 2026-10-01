@@ -57,25 +57,41 @@ function tripFlags(context: EventContext<Env, string, unknown>): Promise<Record<
 // feature must not exist at all — /highlights 404s and the nav links baked into
 // the static HTML are stripped — so the flag is read here, cached like tripFlags
 // (an isolate may live long past a flip). Missing doc / read error = off.
-const HIGHLIGHTS_TTL_MS = 5 * 60_000;
-let highlightsCache: { at: number; data: Promise<boolean> } | null = null;
+const SETTINGS_TTL_MS = 5 * 60_000;
+type OwnerSettings = { highlightsEnabled?: boolean; bridgesPreview?: boolean };
+// null = the doc couldn't be read; each flag decides what that means for it.
+let settingsCache: { at: number; data: Promise<OwnerSettings | null> } | null = null;
 
-function highlightsEnabled(context: EventContext<Env, string, unknown>): Promise<boolean> {
-    if (!highlightsCache || Date.now() - highlightsCache.at > HIGHLIGHTS_TTL_MS) {
+function ownerSettings(context: EventContext<Env, string, unknown>): Promise<OwnerSettings | null> {
+    if (!settingsCache || Date.now() - settingsCache.at > SETTINGS_TTL_MS) {
         const data = (async () => {
             try {
                 const obj = await context.env.PHOTOS_BUCKET.get('_state/posts.json');
-                if (!obj) return false;
-                const doc = await obj.json() as { settings?: { highlightsEnabled?: boolean } };
-                return doc.settings?.highlightsEnabled === true;
+                if (!obj) return {};
+                const doc = await obj.json() as { settings?: OwnerSettings };
+                return doc.settings || {};
             } catch {
-                highlightsCache = null;
-                return false;
+                settingsCache = null;
+                return null;
             }
         })();
-        highlightsCache = { at: Date.now(), data };
+        settingsCache = { at: Date.now(), data };
     }
-    return highlightsCache.data;
+    return settingsCache.data;
+}
+
+async function highlightsEnabled(context: EventContext<Env, string, unknown>): Promise<boolean> {
+    return (await ownerSettings(context))?.highlightsEnabled === true;
+}
+
+// Public Bridges preview (China hub): settings.bridgesPreview, ON unless set to
+// false. On, locked visitors get collections/china.preview.json in place of
+// china.json: the Bridges page opens as a gallery-less list, one public thumbnail
+// per bridge. Off (or the doc unreadable), the original locked tile is served and
+// the preview's copied phone thumbnails 404, exactly as before the feature.
+async function bridgesPreviewEnabled(context: EventContext<Env, string, unknown>): Promise<boolean> {
+    const s = await ownerSettings(context);
+    return s !== null && s.bridgesPreview !== false;
 }
 
 // gallery_highlights.json is id lists only — the gallery page renders just the ids
@@ -243,6 +259,18 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         if (!(await highlightsEnabled(context))) {
             return new Response('Not found', { status: 404 });
         }
+    }
+
+    if (path === '/collections/china.json' && await bridgesPreviewEnabled(context)) {
+        const preview = await context.env.ASSETS.fetch(new URL('/collections/china.preview.json', url));
+        if (preview.ok) {
+            const res = new Response(preview.body, preview);
+            res.headers.set('Cache-Control', 'no-store');
+            return res;
+        }
+    }
+    if (path.startsWith('/previews/bridges/') && !(await bridgesPreviewEnabled(context))) {
+        return new Response('Not found', { status: 404 });
     }
 
     let response = await context.next();

@@ -26,8 +26,9 @@
     // Pinch-zoom (Leaflet touchZoom) and the +/- buttons still work.
     const coarse = window.matchMedia('(pointer: coarse)').matches;
     const map = L.map(el, { scrollWheelZoom: false, zoomControl: true, dragging: !coarse });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap, © CARTO', maxZoom: 19,
+    // Esri World Street Map: keyless (CARTO basemaps need an API key since Sep 2026)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles © Esri', maxZoom: 19,
     }).addTo(map);
     el.addEventListener('mouseenter', () => map.scrollWheelZoom.enable());
     el.addEventListener('mouseleave', () => map.scrollWheelZoom.disable());

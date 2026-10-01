@@ -354,6 +354,54 @@ def _blogs_for_trip(trip_slug):
             if b.get('status') != 'pending' and trip_slug in (b.get('trips') or [])]
 
 
+def facet_stories(facet, records, echo):
+    """The collection's slice of the Blogs page: every blog (live or pending, in
+    config/blogs.json order) whose trips are mostly inside the collection — a trip
+    counts when at least half its geotagged photos are member records, so Mongolia
+    or India write-ups that clip a border stay off the China page. Live blogs carry
+    the tile metadata build_blogs.py writes to web/blogs/<slug>.json; gated ones
+    keep public=false and are locked client-side exactly like on blogs.html."""
+    path = ROOT / 'config' / 'blogs.json'
+    if not path.exists():
+        return None, []
+    blogs = json.loads(path.read_text()).get('blogs', [])
+    inside = {}
+    for r in records:
+        inside[r['trip']] = inside.get(r['trip'], 0) + 1
+
+    def in_collection(slug):
+        if not inside.get(slug):
+            return False
+        man = photo_privacy.load_full_manifest(WEB_TRIPS / slug) or {}
+        geo = sum(1 for p in man.get('photos', []) if p.get('lat') is not None and p.get('lon') is not None)
+        return geo and inside[slug] / geo >= 0.5
+
+    subtiles = []
+    for b in blogs:
+        if not any(in_collection(t) for t in (b.get('trips') or [])):
+            continue
+        sub = {'id': b['slug'], 'title': b['title'], 'year': b.get('year'),
+               'public': bool(b.get('public'))}
+        meta_path = ROOT / 'web' / 'blogs' / f"{b['slug']}.json"
+        if b.get('status') == 'pending' or not meta_path.exists():
+            sub['pending'] = 'Coming soon'
+        else:
+            meta = json.loads(meta_path.read_text())
+            sub.update(done=True, title=meta.get('title', b['title']),
+                       year=meta.get('year', b.get('year')),
+                       stats=meta.get('stats', {}), cover=meta.get('cover'))
+        subtiles.append(sub)
+    live = [s for s in subtiles if s.get('done')]
+    if not subtiles:
+        return None, []
+    echo(f"  stories: {len(live)} live + {len(subtiles) - len(live)} pending blog(s)")
+    info = f"{len(live)} {'story' if len(live) == 1 else 'stories'}"
+    # Auto cover: the first public blog's own cover (already a {trip,id,ar} ref).
+    first = next((s for s in live if s['public'] and s.get('cover')), None)
+    return {'kind': 'stories', 'infographic': info, 'subtiles': subtiles,
+            'auto_cover': first['cover'] if first else None}, []
+
+
 def facet_roads(facet, records, echo):
     roster = json.loads((ROOT / facet['roster']).read_text())
     by_trip = {}
@@ -966,6 +1014,7 @@ FACET_BUILDERS = {
     'road_trips': facet_roads, 'bridges': facet_bridges,
     'province': facet_provinces, 'rooftopping': facet_roofs,
     'energy': facet_energy, 'highways': facet_highways,
+    'stories': facet_stories,
 }
 
 
@@ -1150,6 +1199,83 @@ def _locked_stub(facet, full_tile, pub_records, spec):
     return stub
 
 
+BRIDGE_PUBLIC_COVERS = ROOT / 'config' / 'bridge_public_covers.json'
+PHONE_TRIPS = ROOT / 'web' / 'phone' / 'trips'
+BRIDGE_THUMBS = ROOT / 'web' / 'previews' / 'bridges'   # gitignored, deployed, public
+
+
+def _phone_bridge_thumb(sub_id, pick, echo):
+    """A phone photo picked as a bridge's public thumbnail. The phone library is
+    local-only (never deployed), so the picked display webp is copied, downsized,
+    into web/previews/bridges/ (public path) → {src, ar}. Copied once per pick."""
+    from PIL import Image
+    src = PHONE_TRIPS / pick['phone_trip'] / 'display' / f"{pick['id']}.webp"
+    dest = BRIDGE_THUMBS / f"{sub_id}--{pick['id']}.webp"
+    if not dest.exists():
+        if not src.exists():
+            echo(f"  ⚠ bridge preview: phone photo {pick['phone_trip']}/{pick['id']} not found")
+            return None
+        BRIDGE_THUMBS.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as im:
+            im.thumbnail((1600, 1600))
+            im.save(dest, 'WEBP', quality=85)
+    for stale in BRIDGE_THUMBS.glob(f'{sub_id}--*.webp'):   # an earlier, replaced pick
+        if stale != dest:
+            stale.unlink()
+    with Image.open(dest) as im:
+        w, h = im.size
+    return {'src': f'previews/bridges/{dest.name}', 'ar': round(w / h, 3)}
+
+
+def _bridge_preview(full_tile, pub_ref_set, echo):
+    """Bridges tile for locked visitors (facet `public_preview`): the same ranked
+    list + pin map as the full page, but no galleries. Each bridge keeps only ONE
+    public thumbnail — the pick in config/bridge_public_covers.json (a public photo,
+    or a phone photo for bridges with none), else its own cover if public, else the
+    first public landscape — and its photo count. Photo lists never ship, and a
+    private pinned cover is never used, so climb shots stay behind the password.
+    Renders live under /collections/ (gated), so their links are dropped too."""
+    picks = (_load_json(BRIDGE_PUBLIC_COVERS) or {}).get('covers', {})
+    t = copy.deepcopy(full_tile)
+    t['preview'] = True
+    no_thumb = []
+    for s in _all_subtiles(t):
+        photos = s.pop('photos', None) or []
+        s.pop('renders', None)
+        if not photos:
+            continue
+        s['count'] = len(photos)
+        pub = [p for p in photos if (p['trip'], p['id']) in pub_ref_set]
+        pick = picks.get(s['title']) or {}
+        cover = None
+        if pick.get('phone_trip'):
+            cover = _phone_bridge_thumb(s['id'], pick, echo)
+        elif pick:
+            cover = next((p for p in pub if p['id'] == pick.get('id') and p['trip'] == pick.get('trip')), None)
+            if cover is None:
+                echo(f"  ⚠ bridge preview: {s['title']} pick {pick.get('trip')}/{pick.get('id')} "
+                     f"is not a public photo of this bridge — ignored")
+        if cover is None and s.get('cover') and (s['cover'].get('trip'), s['cover'].get('id')) in pub_ref_set:
+            cover = s['cover']
+        if cover is None and pub:
+            cover = next((p for p in pub if p.get('ar', 1) > 1), pub[0])
+        if cover:
+            s['cover'] = {k: cover[k] for k in ('trip', 'id', 'src', 'ar') if k in cover}
+        else:
+            s.pop('cover', None)
+            no_thumb.append(s['title'])
+    if no_thumb:
+        echo(f"  bridges preview: no public thumbnail for {', '.join(no_thumb)}")
+    return t
+
+
+def _load_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def build_collection(coll, do_category, force, private_map):
     click.echo(f"Building collection: {coll['title']}")
     prov_index = ProvinceIndex(ROOT / coll['province_geojson']) if coll.get('province_geojson') else None
@@ -1203,8 +1329,10 @@ def build_collection(coll, do_category, force, private_map):
             continue
         result['id'] = facet['id']
         result['title'] = facet['title']
-        result['cover'] = resolve_cover(cover_spec(coll['id'], facet['id'], facet.get('cover')),
-                                        id_index, pool)
+        result['cover'] = (resolve_cover(cover_spec(coll['id'], facet['id'], facet.get('cover')),
+                                         id_index, pool)
+                           or result.get('auto_cover'))
+        result.pop('auto_cover', None)
         apply_subtile_covers(result, id_index)
         _mark_pending(result, rule)
         tiles.append(result)
@@ -1233,6 +1361,7 @@ def build_collection(coll, do_category, force, private_map):
     full_by_id = {t['id']: t for t in tiles}
     quiet = lambda *a, **k: None
     pub_tiles = []
+    previews = {}   # tile index → its public-preview variant (see china.preview.json below)
     for facet in coll['facets']:
         if facet.get('enabled') is False:
             continue
@@ -1240,11 +1369,27 @@ def build_collection(coll, do_category, force, private_map):
         if full_tile is None:
             continue
         spec = cover_spec(coll['id'], facet['id'], facet.get('cover'))
+        if facet.get('locked') and facet.get('public_preview') and facet.get('rule') == 'bridges':
+            # Open to everyone as a gallery-less preview — but only while the owner
+            # flag is on, so both variants ship: the original locked stub stays in
+            # <id>.json and the preview goes to <id>.preview.json, which the
+            # middleware serves in its place when settings.bridgesPreview allows.
+            stub = _locked_stub(facet, full_tile, pub_records, spec)
+            preview = _bridge_preview(full_tile, pub_ref_set, click.echo)
+            preview['cover'] = stub.get('cover')   # same hub cover either way
+            previews[len(pub_tiles)] = preview
+            pub_tiles.append(stub)
+            continue
         if facet.get('locked'):
             pub_tiles.append(_locked_stub(facet, full_tile, pub_records, spec))
             continue
         if facet['type'] == 'ai':
             pub_tiles.append(_filter_tile_refs(full_tile, pub_ref_set))
+            continue
+        if facet.get('rule') == 'stories':
+            # Same tiles as blogs.html for everyone: gated blogs stay listed and
+            # lock client-side, rather than vanishing with their private trips.
+            pub_tiles.append(copy.deepcopy(full_tile))
             continue
         result, pool = FACET_BUILDERS[facet['rule']](facet, pub_records, quiet)
         result['id'] = facet['id']
@@ -1265,6 +1410,16 @@ def build_collection(coll, do_category, force, private_map):
     locked_n = sum(1 for t in pub_tiles if t.get('locked'))
     click.echo(f"✓ Wrote {pub_path.relative_to(ROOT)} (public: {len(pub_records)}/{len(records)} photos, "
                f"{locked_n} locked tiles)")
+    preview_path = OUT_DIR / f"{coll['id']}.preview.json"
+    if previews:
+        pv_tiles = [previews.get(i, t) for i, t in enumerate(pub_tiles)]
+        preview_path.write_text(json.dumps(
+            {**base, 'hero_cover': resolve_cover(hero_spec, id_index, pub_records),
+             'tiles': pv_tiles}, indent=2, ensure_ascii=False))
+        click.echo(f"✓ Wrote {preview_path.relative_to(ROOT)} (public preview: "
+                   f"{', '.join(pv_tiles[i]['id'] for i in previews)})")
+    elif preview_path.exists():
+        preview_path.unlink()
 
 
 _COVER_IDX = None

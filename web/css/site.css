@@ -472,3 +472,7 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 /* padlock centred in the UPPER area (bottom inset clears the bottom-anchored title
    block) so it never lands on the title/meta — esp. on full-width mobile tiles */
 .tile--locked::before { content: '🔒'; position: absolute; left: 0; right: 0; top: 0; bottom: 42%; z-index: 1; display: flex; align-items: center; justify-content: center; font-size: 40px; opacity: .9; pointer-events: none; }
+
+/* bridges public preview: one thumbnail per row, no gallery link */
+.bridge-row--preview .bridge-media { position: relative; }
+.bridge-row--preview .tile-cover-locked { position: relative; inset: auto; width: 100%; aspect-ratio: 3 / 2; max-width: calc(62vh * 3 / 2); }

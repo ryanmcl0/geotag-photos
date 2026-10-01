@@ -647,8 +647,9 @@ const BASE_LAYERS = {
     streets: {
         label: 'Streets',
         icon: '🗺',
-        url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-        options: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+        // Esri World Street Map: keyless (CARTO basemaps need an API key since Sep 2026)
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+        options: { attribution: 'Tiles &copy; Esri &mdash; Source: Esri, HERE, Garmin, USGS, OpenStreetMap contributors' },
         labels: false
     },
     topo: {
@@ -922,8 +923,9 @@ function setBaseLayer(key) {
     if (labelsLayer) { map.removeLayer(labelsLayer); labelsLayer = null; }
     currentBaseLayer = L.tileLayer(def.url, { ...def.options, maxZoom: CONFIG.maxZoom }).addTo(map);
     if (def.labels) {
+        // Esri's place-name + border overlay for imagery (keyless, like the imagery itself)
         labelsLayer = L.tileLayer(
-            'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
             { maxZoom: CONFIG.maxZoom, pane: 'overlayPane' }
         ).addTo(map);
     }

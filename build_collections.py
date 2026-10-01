@@ -1361,6 +1361,7 @@ def build_collection(coll, do_category, force, private_map):
     full_by_id = {t['id']: t for t in tiles}
     quiet = lambda *a, **k: None
     pub_tiles = []
+    previews = {}   # tile index → its public-preview variant (see china.preview.json below)
     for facet in coll['facets']:
         if facet.get('enabled') is False:
             continue
@@ -1369,11 +1370,15 @@ def build_collection(coll, do_category, force, private_map):
             continue
         spec = cover_spec(coll['id'], facet['id'], facet.get('cover'))
         if facet.get('locked') and facet.get('public_preview') and facet.get('rule') == 'bridges':
-            # Open to everyone as a gallery-less preview; the hub cover stays
-            # the one the locked stub would have shown.
+            # Open to everyone as a gallery-less preview — but only while the owner
+            # flag is on, so both variants ship: the original locked stub stays in
+            # <id>.json and the preview goes to <id>.preview.json, which the
+            # middleware serves in its place when settings.bridgesPreview allows.
+            stub = _locked_stub(facet, full_tile, pub_records, spec)
             preview = _bridge_preview(full_tile, pub_ref_set, click.echo)
-            preview['cover'] = _locked_stub(facet, full_tile, pub_records, spec).get('cover')
-            pub_tiles.append(preview)
+            preview['cover'] = stub.get('cover')   # same hub cover either way
+            previews[len(pub_tiles)] = preview
+            pub_tiles.append(stub)
             continue
         if facet.get('locked'):
             pub_tiles.append(_locked_stub(facet, full_tile, pub_records, spec))
@@ -1405,6 +1410,16 @@ def build_collection(coll, do_category, force, private_map):
     locked_n = sum(1 for t in pub_tiles if t.get('locked'))
     click.echo(f"✓ Wrote {pub_path.relative_to(ROOT)} (public: {len(pub_records)}/{len(records)} photos, "
                f"{locked_n} locked tiles)")
+    preview_path = OUT_DIR / f"{coll['id']}.preview.json"
+    if previews:
+        pv_tiles = [previews.get(i, t) for i, t in enumerate(pub_tiles)]
+        preview_path.write_text(json.dumps(
+            {**base, 'hero_cover': resolve_cover(hero_spec, id_index, pub_records),
+             'tiles': pv_tiles}, indent=2, ensure_ascii=False))
+        click.echo(f"✓ Wrote {preview_path.relative_to(ROOT)} (public preview: "
+                   f"{', '.join(pv_tiles[i]['id'] for i in previews)})")
+    elif preview_path.exists():
+        preview_path.unlink()
 
 
 _COVER_IDX = None

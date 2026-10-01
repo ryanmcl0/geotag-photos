@@ -7,7 +7,8 @@ bridge, never a private photo (see _bridge_preview in build_collections.py). Thi
 picker shows, per bridge that has photos:
 
   - every PUBLIC photo of that bridge (public trip, in the public manifest), or
-  - for bridges with no public photos at all, the PHONE photos from the visit:
+  - for bridges with no public photos at all (and the few in ALSO_PHONE whose
+    public photos are thin), the PHONE photos from the visit:
     phone shots within 5 km of the bridge, plus phone shots taken during the
     camera session (camera files are on UK time, the phone on China time, so the
     window is shifted +8h, padded 90 min either side).
@@ -43,6 +44,8 @@ CONFIG = ROOT / 'config' / 'bridge_public_covers.json'
 PHONE_RADIUS_KM = 5.0
 CAMERA_TO_PHONE = timedelta(hours=8)     # camera UK time → phone China time
 WINDOW_PAD = timedelta(minutes=90)
+# Bridges with only a handful of public photos that also get phone candidates.
+ALSO_PHONE = {'Beipanjiang Duge Bridge', 'Tongzihe Jinrentong Bridge'}
 
 
 def _load(path: Path):
@@ -94,6 +97,36 @@ def load_phone():
     return out
 
 
+def phone_cells(photos, lat, lon, pick, phone, full_cache):
+    """Phone shots near the bridge, or taken during its camera session."""
+    times = sorted(t for t in (parse_ts(full_photos(p['trip'], full_cache).get(p['id'], {}).get('timestamp'))
+                               for p in photos) if t)
+    lo = times[0] + CAMERA_TO_PHONE - WINDOW_PAD if times else None
+    hi = times[-1] + CAMERA_TO_PHONE + WINDOW_PAD if times else None
+    cells = []
+    for pt, p in phone:
+        d = (dist_km(lat, lon, p['lat'], p['lon'])
+             if lat is not None and p.get('lat') is not None else None)
+        t = parse_ts(p.get('timestamp'))
+        near = d is not None and d <= PHONE_RADIUS_KM
+        during = t is not None and lo is not None and lo <= t <= hi
+        if not (near or during):
+            continue
+        cells.append({
+            'kind': 'phone', 'trip': pt, 'id': p['id'],
+            'thumb': f'web/phone/trips/{pt}/{p.get("thumbnail") or "thumbnails/" + p["id"] + ".webp"}',
+            'disp': f'web/phone/trips/{pt}/{p.get("display") or "display/" + p["id"] + ".webp"}',
+            'label': ' · '.join(x for x in ['📱', (p.get('timestamp') or '')[:16].replace('T', ' '),
+                                            f'{d:.1f} km' if d is not None else 'no GPS',
+                                            'near' if near else '', 'during visit' if during else ''] if x),
+            'ts': p.get('timestamp') or '',
+            'auto': False,
+            'sel': pick.get('phone_trip') == pt and pick.get('id') == p['id'],
+        })
+    cells.sort(key=lambda c: c['ts'])
+    return cells
+
+
 def build_candidates():
     full = _load(FULL)
     if not full:
@@ -141,39 +174,18 @@ def build_candidates():
                 })
             cells.sort(key=lambda c: (not c['auto'], c['ts']))
             source = f'{len(pub)} public of {len(photos)}'
-        else:
+        if not pub or s['title'] in ALSO_PHONE:
             if phone is None:
                 phone = load_phone()
-            times = sorted(t for t in (parse_ts(full_photos(p['trip'], full_cache).get(p['id'], {}).get('timestamp'))
-                                       for p in photos) if t)
-            lo = times[0] + CAMERA_TO_PHONE - WINDOW_PAD if times else None
-            hi = times[-1] + CAMERA_TO_PHONE + WINDOW_PAD if times else None
-            for pt, p in phone:
-                d = (dist_km(lat, lon, p['lat'], p['lon'])
-                     if lat is not None and p.get('lat') is not None else None)
-                t = parse_ts(p.get('timestamp'))
-                near = d is not None and d <= PHONE_RADIUS_KM
-                during = t is not None and lo is not None and lo <= t <= hi
-                if not (near or during):
-                    continue
-                cells.append({
-                    'kind': 'phone', 'trip': pt, 'id': p['id'],
-                    'thumb': f'web/phone/trips/{pt}/{p.get("thumbnail") or "thumbnails/" + p["id"] + ".webp"}',
-                    'disp': f'web/phone/trips/{pt}/{p.get("display") or "display/" + p["id"] + ".webp"}',
-                    'label': ' · '.join(x for x in [(p.get('timestamp') or '')[:16].replace('T', ' '),
-                                                    f'{d:.1f} km' if d is not None else 'no GPS',
-                                                    'near' if near else '', 'during visit' if during else ''] if x),
-                    'ts': p.get('timestamp') or '',
-                    'auto': False,
-                    'sel': pick.get('phone_trip') == pt and pick.get('id') == p['id'],
-                })
-            cells.sort(key=lambda c: c['ts'])
-            source = f'no public photos ({len(photos)} private) · {len(cells)} phone photos from the visit'
+            pcells = phone_cells(photos, lat, lon, pick, phone, full_cache)
+            cells += pcells
+            source = (f'{len(pub)} public of {len(photos)} · {len(pcells)} phone photos from the visit' if pub
+                      else f'no public photos ({len(photos)} private) · {len(pcells)} phone photos from the visit')
         if not any(c['sel'] for c in cells):
             for c in cells:
                 c['sel'] = c['auto']
         cands.append({'title': s['title'], 'rank': s.get('rank'), 'source': source,
-                      'phone': not pub, 'cells': cells,
+                      'phone': any(c['kind'] == 'phone' for c in cells), 'cells': cells,
                       'picked': bool(pick)})
     return cands
 

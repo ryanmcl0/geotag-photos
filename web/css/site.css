@@ -99,6 +99,10 @@ img { display: block; }
 
 /* ---------- layout ---------- */
 .wrap { padding: 0 var(--margin) 90px; }
+/* Home page ends on the Galleries reel, which carries its own bottom padding,
+   so drop the page gutter and pull the footer up to it. */
+.wrap--home { padding-bottom: 0; }
+.wrap--home + .landing-footer { margin-top: 24px; }
 
 /* ---------- china masthead (hub title + headline stats) ---------- */
 .china-masthead { margin: 40px 0 6px; }

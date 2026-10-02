@@ -153,16 +153,27 @@ python deploy.py
 
 This only uploads new/changed images, so it's fast (~1-2 min per trip).
 
-## Custom domain (optional)
+## Custom domain
 
-If you want `photos.yourname.com` instead of `travel-maps.pages.dev`:
+The live site is **https://ryanmcl.com** (registered with Cloudflare Registrar,
+attached to the `photo-map-travel` Pages project along with `www.ryanmcl.com`).
 
-1. Point your domain's DNS to Cloudflare
-2. Go to https://dash.cloudflare.com/?to=/:account/pages
-3. Click your project → Settings → Custom domain
-4. Add your domain
+- `functions/_middleware.ts` redirects `photo-map-travel.pages.dev` and
+  `www.ryanmcl.com` to `ryanmcl.com` (301; 308 for non-GET), keeping the path, query
+  and the `#qr=` fragment. Per-deploy preview hosts (`<id>.photo-map-travel.pages.dev`)
+  are not redirected.
+- `CF_SITE_URL` in `.env.deploy` is the site's public address. `deploy.py` (photo URLs
+  baked into manifests), `post.py`, `tools/pull_posts_state.py`,
+  `tools/auto_curate_posts.py` and `tools/create_site_access_qr.py` all read it, and
+  fall back to `https://<CF_PAGES_PROJECT>.pages.dev` when it is unset.
+- QR access codes: `tools/create_site_access_qr.py --keep-token` re-draws the QR for
+  the current token (old codes keep working); without the flag it rotates the token.
+- Login cookies are per host, so the first visit on a new domain asks for the
+  password (or QR) again.
 
-Takes ~5 min to propagate.
+To change domains: buy/attach the new one under Pages → Custom domains, set
+`CF_SITE_URL`, update `CANONICAL_HOST`/`REDIRECT_HOSTS` in the middleware, re-draw the
+QR, then deploy.
 
 ## Tips & Troubleshooting
 

@@ -122,9 +122,11 @@ def posts_url(base, which='main'):
 
 
 def remote_base(env):
+    if env.get('CF_SITE_URL'):
+        return env['CF_SITE_URL'].rstrip('/')
     project = env.get('CF_PAGES_PROJECT')
     if not project:
-        sys.exit('❌ CF_PAGES_PROJECT not set (needed to reach the live site).')
+        sys.exit('❌ CF_SITE_URL / CF_PAGES_PROJECT not set (needed to reach the live site).')
     return f'https://{project}.pages.dev'
 
 

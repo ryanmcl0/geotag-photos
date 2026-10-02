@@ -1458,21 +1458,16 @@ function updateTripInfo() {
     ];
     const TOTAL_COUNTRIES = 56;
 
-    const sorted = [...uniqueCountries].map(countryName).sort();
-    const onMap = uniqueCountries.size;
-    const pending = PENDING_COUNTRIES.length;
+    // One full list: every trip's countries (private ones included; the index
+    // already lists them) plus those still to come, regardless of filters.
+    const names = new Set(PENDING_COUNTRIES);
+    allTripsMeta.forEach(t => (t.countries || []).forEach(c => names.add(countryName(c))));
+    allManifests.forEach(m => (m.clusters || []).forEach(c => { if (c.country) names.add(countryName(c.country)); }));
 
     const summaryEl = document.getElementById('country-summary');
     const countryListEl = document.getElementById('country-list');
-    const availLabelEl = document.getElementById('country-available-label');
-    const pendingLabelEl = document.getElementById('country-pending-label');
-    const pendingListEl = document.getElementById('country-pending-list');
-
     if (summaryEl) summaryEl.textContent = `${TOTAL_COUNTRIES} countries visited`;
-    if (availLabelEl) availLabelEl.textContent = `${onMap} on map`;
-    if (countryListEl) countryListEl.textContent = sorted.join(', ');
-    if (pendingLabelEl) pendingLabelEl.textContent = `${pending} pending`;
-    if (pendingListEl) pendingListEl.textContent = PENDING_COUNTRIES.join(', ');
+    if (countryListEl) countryListEl.textContent = [...names].sort().join(', ');
 }
 
 /**

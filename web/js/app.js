@@ -24,8 +24,15 @@ const CONFIG = {
 
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
-    routeWeight: 3,
-    routeOpacity: 0.9
+    routeWeight: 3.25,
+    routeOpacity: 1,
+    // Dark edge drawn under every route so the line reads on satellite imagery
+    // and next to the markers sitting on it.
+    routeCasing: { color: '#0b0d10', weight: 5, opacity: 0.5 },
+
+    // At this zoom and below the map is an overview: clusters shrink to small
+    // trip-coloured dots and thumbnails/pins step back so the routes lead.
+    overviewMaxZoom: 6
 };
 
 // Global state
@@ -691,6 +698,7 @@ function initMap() {
     initMapStyleControl();
     initDoubleTapZoom();
     initLayerWatchdog();
+    initOverviewMode();
 
     // Re-measure the map whenever iOS changes the viewport (rotation, address
     // bar show/hide, keyboard). Without this Leaflet keeps a stale size and the
@@ -953,8 +961,19 @@ function initMapStyleControl() {
     document.getElementById('map').appendChild(ctrl);
 }
 
-function makeClusterGroup() {
-    return L.markerClusterGroup({
+/**
+ * Flag the map container while zoomed out to overview level; the CSS uses it
+ * to shrink clusters, thumbnails and coverage pins so the routes stay legible.
+ */
+function initOverviewMode() {
+    const el = map.getContainer();
+    const sync = () => el.classList.toggle('map-overview', map.getZoom() <= CONFIG.overviewMaxZoom);
+    sync();
+    map.on('zoomend', sync);
+}
+
+function makeClusterGroup(color) {
+    const group = L.markerClusterGroup({
         maxClusterRadius: zoom => zoom < CONFIG.minClusteringZoom ? 1 : CONFIG.clusterRadius,
         disableClusteringAtZoom: CONFIG.disableClusteringAtZoom,
         spiderfyOnMaxZoom: false,
@@ -962,14 +981,17 @@ function makeClusterGroup() {
         zoomToBoundsOnClick: true,
         animate: true,
         animateAddingMarkers: false,
-        iconCreateFunction: createClusterIcon
+        iconCreateFunction: cluster => createClusterIcon(cluster, color)
     });
+    attachClusterPeek(group, color);
+    return group;
 }
 
 /**
- * Create custom cluster icon
+ * Cluster icon, filled with the trip's route colour so each count reads as part
+ * of its line. The count is the number of places (child markers), not photos.
  */
-function createClusterIcon(cluster) {
+function createClusterIcon(cluster, color) {
     const count = cluster.getChildCount();
     let size = 'small';
 
@@ -977,10 +999,53 @@ function createClusterIcon(cluster) {
     else if (count >= 5) size = 'medium';
 
     return L.divIcon({
-        html: `<div>${count}</div>`,
+        html: `<div style="--trip-color:${color}">${count}</div>`,
         className: `marker-cluster marker-cluster-${size}`,
         iconSize: L.point(40, 40)
     });
+}
+
+/**
+ * Hovering a cluster shows a small grid of thumbnails sampled across its photos,
+ * so you can see what's there without clicking. Pointer devices only: on touch
+ * there is no hover, and a tap still zooms into the cluster as before.
+ */
+const PEEK_MAX_THUMBS = 6;
+
+function attachClusterPeek(group, color) {
+    if (!window.matchMedia('(hover: hover)').matches) return;
+    let tip = null;
+    const close = () => {
+        if (tip) { map.removeLayer(tip); tip = null; }
+    };
+    group.on('clustermouseover', e => {
+        const markers = e.layer.getAllChildMarkers();
+        const photos = markers.flatMap(m => m.photoData || []);
+        if (!photos.length) return;
+        const n = Math.min(PEEK_MAX_THUMBS, photos.length);
+        const thumbs = Array.from({ length: n }, (_, i) => photos[Math.floor(i * photos.length / n)])
+            .map(p => `<img src="${resolveUrl(p.tripPath, p.thumbnail)}" alt="" decoding="async">`)
+            .join('');
+        // Open downward when the cluster is too near the top edge to fit above it.
+        const below = map.latLngToContainerPoint(e.layer.getLatLng()).y < 230;
+        close();
+        tip = L.tooltip({
+            className: 'cluster-peek',
+            direction: below ? 'bottom' : 'top',
+            offset: L.point(0, below ? 16 : -16),
+            opacity: 1
+        })
+            .setLatLng(e.layer.getLatLng())
+            .setContent(
+                `<div class="cluster-peek-card">` +
+                `<div class="cluster-peek-grid cluster-peek-n${Math.min(n, 3)}">${thumbs}</div>` +
+                `<div class="cluster-peek-cap" style="--trip-color:${color}"><i></i>` +
+                `<b>${photos.length} photos · ${markers.length} places</b>` +
+                `<span>${escapeHtml(photos[0].tripName || '')}</span></div></div>`)
+            .addTo(map);
+    });
+    group.on('clustermouseout clusterclick', close);
+    map.on('zoomstart movestart', close);
 }
 
 /**
@@ -1379,22 +1444,30 @@ function formatDate(dateStr) {
  * Build a polyline layer for a trip's GPX route.
  */
 function buildRouteLayer(routeData, color, tripName) {
-    const layer = L.geoJSON(routeData, {
+    const casing = L.geoJSON(routeData, {
+        interactive: false,
+        style: { ...CONFIG.routeCasing, lineCap: 'round', lineJoin: 'round' }
+    });
+    const line = L.geoJSON(routeData, {
         style: {
             color: color,
             weight: CONFIG.routeWeight,
-            opacity: CONFIG.routeOpacity
+            opacity: CONFIG.routeOpacity,
+            lineCap: 'round',
+            lineJoin: 'round'
         }
     });
-    layer.bindTooltip(tripName, { permanent: false, sticky: true });
-    return layer;
+    line.bindTooltip(tripName, { permanent: false, sticky: true });
+    // Casing first so the coloured line draws on top of it.
+    return L.featureGroup([casing, line]);
 }
 
 /**
  * Build a MarkerClusterGroup for a single trip's photos.
  */
 function buildMarkerLayer(manifest, hasGpx) {
-    const group = makeClusterGroup();
+    const color = CONFIG.routeColors[manifest.tripIndex % CONFIG.routeColors.length];
+    const group = makeClusterGroup(color);
     const photoLookup = {};
     manifest.photos.forEach(photo => {
         photo.tripName = manifest.trip_name;

@@ -52,6 +52,7 @@ const loadedTripIds = new Set();
 // photos hidden inside public trips). Shown only while LOCKED. Once unlocked the
 // real photo clusters take their place. See private_coverage.py for what the file
 // does and doesn't contain (coords rounded to ~1 km, no photos, no place names).
+let siteStats = null;            // collections/site_stats.json (landing-page totals)
 let coverageData = null;          // parsed trips/private_coverage.json (fetched once)
 let coverageMarkers = [];         // every coverage marker, pre-built
 let coverageLayer = null;         // cluster group holding the currently-shown subset
@@ -1086,7 +1087,16 @@ async function loadTripData() {
     try {
         let basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
         // ?library=phone -> local-only mirror dataset under web/phone/ (never deployed)
-        if (new URLSearchParams(location.search).get('library') === 'phone') basePath += 'phone/';
+        const phoneLibrary = new URLSearchParams(location.search).get('library') === 'phone';
+        if (!phoneLibrary) {
+            // Landing-page totals for the sidebar; fetched alongside the trips and
+            // applied whenever they arrive (the sidebar is fine without them).
+            fetch(`${basePath}collections/site_stats.json?t=${Date.now()}`)
+                .then(r => (r.ok ? r.json() : null))
+                .then(st => { if (st) { siteStats = st; updateTripInfo(); } })
+                .catch(() => {});
+        }
+        if (phoneLibrary) basePath += 'phone/';
 
         const indexResponse = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
         const index = await indexResponse.json();
@@ -1413,6 +1423,10 @@ function updateTripInfo() {
 
     let titleText = '';
     let subtitleText = '';
+    // Unfiltered all-trips overview: show the all-time totals from the landing
+    // page (site_stats.json), with the photo line reading "shown / every photo".
+    const overview = Boolean(siteStats) && (viewConfig.mode || 'all') === 'all' &&
+        !activeYearFilter && !activeCountryFilter && visibleTrips.length !== 1;
 
     if (viewConfig.mode === 'collection' && viewConfig.filterTitle) {
         titleText = viewConfig.filterTitle;
@@ -1424,15 +1438,17 @@ function updateTripInfo() {
         titleText = `${viewConfig.year}`;
         subtitleText = `${visibleTrips.length} trips`;
     } else {
-        titleText = `${visibleTrips.length} Trips`;
+        titleText = `${overview && siteStats.trips ? siteStats.trips : visibleTrips.length} Trips`;
         subtitleText = '';
     }
 
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
 
-    document.getElementById('photo-count').textContent =
-        `${totalPhotos.toLocaleString()} photos`;
+    const allPhotos = overview ? siteStats.photos : null;
+    document.getElementById('photo-count').textContent = allPhotos && allPhotos !== totalPhotos
+        ? `${totalPhotos.toLocaleString()} / ${allPhotos.toLocaleString()} photos visible`
+        : `${totalPhotos.toLocaleString()} photos`;
 
     // Countries visited but still entirely off the map. Albania, Belgium, Bosnia, Bulgaria,
     // Croatia, Luxembourg, Netherlands and Tunisia now have placeholder pins (config/trips.json

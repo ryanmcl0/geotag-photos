@@ -27,7 +27,8 @@ Environment variables (set in .env.deploy):
   CF_CONFIG_BACKUP_REPO  Path to a private git repo that source-controls
                          config/ (gitignored in this public repo) (optional)
 
-CF_CDN_BASE_URL is auto-derived as https://<pages-project>.pages.dev/photos
+CF_CDN_BASE_URL is auto-derived as <CF_SITE_URL>/photos (CF_SITE_URL defaults to
+https://<pages-project>.pages.dev)
 """
 
 import os
@@ -58,6 +59,8 @@ class DeployConfig:
         self.r2_access_key_id = os.getenv('CF_R2_ACCESS_KEY_ID')
         self.r2_secret_key = os.getenv('CF_R2_SECRET_KEY')
         self.git_repo = os.getenv('CF_PAGES_GIT_REPO')
+        # Public address of the live site (custom domain); pages.dev if unset.
+        self.site_url = (os.getenv('CF_SITE_URL') or f"https://{self.pages_project}.pages.dev").rstrip('/')
 
         missing = [f"CF_{n.upper()}" for n in ['account_id', 'api_token', 'r2_bucket', 'pages_project', 'r2_endpoint', 'r2_access_key_id', 'r2_secret_key']
                    if not getattr(self, n)]
@@ -65,8 +68,10 @@ class DeployConfig:
             print(f"Error: Missing environment variables: {', '.join(missing)}")
             sys.exit(1)
 
-        # CDN base URL: images are served through Pages proxy, not directly from R2
-        self.cdn_base_url = f"https://{self.pages_project}.pages.dev/photos"
+        # CDN base URL: images are served through the Pages proxy, not directly from R2.
+        # Must be the canonical site address: the old pages.dev host redirects, which
+        # would cost every image an extra round trip.
+        self.cdn_base_url = f"{self.site_url}/photos"
 
 
 def sync_public_flags(dry_run: bool = False):
@@ -725,7 +730,7 @@ def main():
     print(f"   Account:  {config.account_id[:8]}...")
     print(f"   Bucket:   {config.r2_bucket}")
     print(f"   Project:  {config.pages_project}")
-    print(f"   Site URL: https://{config.pages_project}.pages.dev")
+    print(f"   Site URL: {config.site_url}")
     print(f"   Photos:   {config.cdn_base_url}")
     if config.git_repo:
         print(f"   Git Repo: {config.git_repo}")
@@ -919,9 +924,9 @@ def main():
         if success:
             print()
             if config.git_repo:
-                print(f"✅ Done! https://{config.pages_project}.pages.dev")
+                print(f"✅ Done! {config.site_url}")
             else:
-                print(f"✅ Done! https://{config.pages_project}.pages.dev")
+                print(f"✅ Done! {config.site_url}")
         else:
             print()
             print("❌ Deployment/Sync failed")

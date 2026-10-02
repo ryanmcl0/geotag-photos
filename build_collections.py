@@ -1537,8 +1537,12 @@ def emit_site_stats(echo):
         stats['flights'] = ts.get('flights', {})
         stats['flown_km'] = ts.get('flown_km')
         stats['flown_time'] = ts.get('flown_time')
+    # Every photo on the site, hidden ones included: a split trip's manifest.json
+    # is only its public view, so count the full manifest.all.json where present.
     stats['photos'] = sum(
-        len(json.loads(mf.read_text()).get('photos', []))
+        len(json.loads((mf.parent / 'manifest.all.json').read_text()
+                       if (mf.parent / 'manifest.all.json').exists() else mf.read_text())
+            .get('photos', []))
         for mf in sorted(WEB_TRIPS.glob('*/manifest.json'))
     )
     wr_path = ROOT / 'config' / 'world_roofs.json'

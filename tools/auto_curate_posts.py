@@ -30,7 +30,7 @@ Run with the project venv (torch lives there):
     ./venv/bin/python tools/auto_curate_posts.py            # build + save JSON
     ./venv/bin/python tools/auto_curate_posts.py --list     # summary only
     ./venv/bin/python tools/auto_curate_posts.py --push local   # -> localhost:8788
-    ./venv/bin/python tools/auto_curate_posts.py --push prod    # -> pages.dev
+    ./venv/bin/python tools/auto_curate_posts.py --push prod    # -> live site (CF_SITE_URL)
 
 First run CLIP-embeds ~11k thumbnails (a few minutes on MPS); embeddings are
 cached in local_browse/clip_embeddings.npz so later runs are instant.
@@ -768,9 +768,9 @@ def push(doc_posts, target, mode='replace', which='auto'):
         base = 'http://localhost:8788'
     elif target == 'prod':
         proj = env.get('CF_PAGES_PROJECT')
-        if not proj:
-            sys.exit('CF_PAGES_PROJECT not set for --push prod')
-        base = f'https://{proj}.pages.dev'
+        if not (env.get('CF_SITE_URL') or proj):
+            sys.exit('CF_SITE_URL / CF_PAGES_PROJECT not set for --push prod')
+        base = (env.get('CF_SITE_URL') or f'https://{proj}.pages.dev').rstrip('/')
     else:
         base = target.rstrip('/')
     url = f'{base}/api/posts' + ('?set=auto' if which == 'auto' else '')

@@ -494,6 +494,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{title} · Ryan's Travels</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -553,6 +554,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Blogs · Ryan's Travels</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
     <script defer src="/js/analytics.js"></script>

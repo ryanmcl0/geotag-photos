@@ -557,7 +557,12 @@ def _private_blogs():
     return [b['slug'] for b in blogs if not b.get('public')]
 
 
-def cover_serve_map() -> dict:
+# tile_covers.json sections whose hand-pinned covers are served even when the
+# photo sits in a private trip (see write_private_index).
+PRIVATE_COVER_SECTIONS = ('provinces',)
+
+
+def cover_serve_map(sections=None) -> dict:
     """Photos referenced as tile covers in config/tile_covers.json, resolved to
     {trip: {ids}}. A locked tile (e.g. an all-private province) may still show a
     cover, so its cover photo must be SERVABLE by the image proxy — but it is a
@@ -566,7 +571,10 @@ def cover_serve_map() -> dict:
     thus the single place to set every cover, locked or not.
 
     Resolution mirrors build_collections' cover lookup: the filepath stem, with the
-    owning trip disambiguated by each trip's source edits directory."""
+    owning trip disambiguated by each trip's source edits directory.
+
+    `sections` limits it to those top-level tile_covers.json sections (and skips
+    the classifications/blog sources), e.g. ('provinces',)."""
     tc_path = ROOT / 'config' / 'tile_covers.json'
     if not tc_path.exists():
         return {}
@@ -574,6 +582,8 @@ def cover_serve_map() -> dict:
         tc = json.loads(tc_path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+    if sections is not None:
+        tc = {k: v for k, v in tc.items() if k in sections}
     specs = []
     def collect(v):
         if isinstance(v, dict):
@@ -589,7 +599,7 @@ def cover_serve_map() -> dict:
     # tile_covers.json, and build_collections resolves those against the FULL
     # index too — so they need the same serve-exception or a private pick 404s.
     cls_path = ROOT / 'config' / 'classifications.json'
-    if cls_path.exists():
+    if sections is None and cls_path.exists():
         try:
             for coll in json.loads(cls_path.read_text()).get('collections', []):
                 collect(coll.get('hero_cover'))
@@ -638,7 +648,7 @@ def cover_serve_map() -> dict:
     # web/blogs/<slug>.json. Merge them directly — an auto-picked cover of a
     # non-public blog lives in that blog's private pseudo-trip and would otherwise
     # 404 on the public blog index (the tile shows it dimmed behind the padlock).
-    for bj in sorted((ROOT / 'web' / 'blogs').glob('*.json')):
+    for bj in ([] if sections is not None else sorted((ROOT / 'web' / 'blogs').glob('*.json'))):
         try:
             cover = json.loads(bj.read_text()).get('cover') or {}
         except (OSError, json.JSONDecodeError):
@@ -669,14 +679,22 @@ def write_private_index(private_map: dict, dry_run=False, echo=lambda *a: None):
     # placeholder — so a private photo can't be stumbled on just because it
     # was picked as a cover. Manual force_public / public_from_private remain
     # the explicit opt-ins.
+    #
+    # Exception: hand-pinned covers in the sections listed in
+    # PRIVATE_COVER_SECTIONS. Those tiles render on the PUBLIC China page as
+    # locked tiles whose whole point is to show the chosen photo behind the
+    # padlock, and each pick is a deliberate per-tile choice (not an auto-pick).
     private_slugs = {s for s, pub in trip_public.items() if not pub}
+    pinned_private = cover_serve_map(sections=PRIVATE_COVER_SECTIONS)
     people_gated, people_blocked = load_people_private()
     manual_blocked = {k: set(v) for k, v in (overrides.get('force_blocked') or {}).items()}
     blocked_all = {slug: people_blocked.get(slug, set()) | manual_blocked.get(slug, set())
                    for slug in set(people_blocked) | set(manual_blocked)}
     for trip, ids in cover_serve_map().items():
         if trip in private_slugs:
-            continue
+            ids = ids & pinned_private.get(trip, set())
+            if not ids:
+                continue
         # A hidden person must not leak back through the automatic cover exception:
         # covers are force_public'd wholesale, which would serve their image while the
         # photo is off the map. Drop them and say which tiles need a new cover.

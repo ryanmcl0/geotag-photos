@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Travel Maps — Login</title>
+    <title>Travel Photography Portfolio — Login</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -30,6 +31,52 @@
             color: #fff;
             margin-bottom: 6px;
             font-weight: 600;
+        }
+
+        /* Heading that turns into a contact note on hover (or tap/focus on touch):
+           both lines share one grid cell, so the box keeps the taller one's height. */
+        .login-title {
+            position: relative;
+            display: grid;
+            cursor: default;
+            outline: none;
+            padding-bottom: 8px;
+            line-height: 1.25;
+        }
+        .login-title > span {
+            grid-area: 1 / 1;
+            transition: opacity .35s ease, transform .35s ease;
+        }
+        .login-title .title-contact {
+            opacity: 0;
+            transform: translateY(10px);
+            pointer-events: none;
+            font-size: 15px;
+            font-weight: 500;
+            color: #d1d5db;
+            align-self: center;
+        }
+        .login-title .title-contact a { color: #fff; text-decoration: none; border-bottom: 1px solid #e11d48; }
+        .login-title::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            height: 2px;
+            width: 100%;
+            background: #e11d48;
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform .4s ease;
+        }
+        .login-title:hover .title-main,
+        .login-title:focus-within .title-main { opacity: 0; transform: translateY(-10px); }
+        .login-title:hover .title-contact,
+        .login-title:focus-within .title-contact { opacity: 1; transform: none; pointer-events: auto; }
+        .login-title:hover::after,
+        .login-title:focus-within::after { transform: scaleX(1); }
+        @media (prefers-reduced-motion: reduce) {
+            .login-title > span, .login-title::after { transition: none; }
         }
 
         p {
@@ -93,7 +140,10 @@
 </head>
 <body>
     <div class="login-container">
-        <h1>Travel Maps</h1>
+        <h1 class="login-title" tabindex="0">
+            <span class="title-main">Travel / Photography / Exploring Portfolio</span>
+            <span class="title-contact">Contact <a href="mailto:ryanmcloughlin20@gmail.com">ryanmcloughlin20@gmail.com</a> for access</span>
+        </h1>
         <p>Enter password to continue</p>
 
         <form method="POST" action="/auth">

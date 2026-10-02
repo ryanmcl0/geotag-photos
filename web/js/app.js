@@ -1727,6 +1727,7 @@ async function loadCoverageData() {
 
 function buildCoverageMarkers() {
     coverageMarkers = [];
+    const canHover = window.matchMedia('(hover: hover)').matches;
     (coverageData.trips || []).forEach(trip => {
         const dates = trip.dates || {};
         const range = dates.start
@@ -1736,11 +1737,19 @@ function buildCoverageMarkers() {
             : '';
         (trip.points || []).forEach(pt => {
             const marker = L.marker([pt.lat, pt.lon], { icon: createCoverageIcon() });
-            marker.bindPopup(
+            const html =
                 `<div class="coverage-popup"><strong>${escapeHtml(trip.name)}</strong>` +
                 (range ? `<span>${range}</span>` : '') +
-                `<span class="coverage-popup-note" aria-label="Locked">🔒</span></div>`
-            );
+                `<span class="coverage-popup-note" aria-label="Locked">🔒</span></div>`;
+            // Hover shows the caption on pointer devices; touch keeps the tap popup.
+            if (canHover) {
+                marker.bindTooltip(html, {
+                    className: 'coverage-tip', direction: 'top',
+                    offset: L.point(0, -30), opacity: 1
+                });
+            } else {
+                marker.bindPopup(html);
+            }
             marker.country = pt.country || null;
             marker.coverageYear = trip.year || null;
             coverageMarkers.push(marker);

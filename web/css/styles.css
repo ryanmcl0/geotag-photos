@@ -373,21 +373,6 @@ details[open] .country-summary::after {
 .country-breakdown {
     margin-top: 6px;
 }
-.country-section-label {
-    font-size: 0.7rem;
-    color: #777;
-    margin-top: 8px;
-    margin-bottom: 2px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.country-section-label--pending {
-    color: #555;
-    margin-top: 10px;
-}
-.country-list--pending {
-    color: #666;
-}
 
 
 /* Hidden gallery container */

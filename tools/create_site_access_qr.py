@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Create or rotate the private QR invitation for the site password gate."""
+"""Create or rotate the private QR invitation for the site password gate.
+
+    ./tools/create_site_access_qr.py              new token: previous QR codes stop
+                                                  working once the secret is published
+    ./tools/create_site_access_qr.py --keep-token re-draw the QR for the current token
+                                                  (e.g. after a domain change); old
+                                                  codes keep working
+"""
 
 from __future__ import annotations
 
 import os
 import re
 import secrets
+import sys
 import tempfile
 from pathlib import Path
 
@@ -44,11 +52,16 @@ def main() -> None:
 
     environment = ENV_PATH.read_text()
     project = env_value(environment, 'CF_PAGES_PROJECT')
-    if not project:
-        raise SystemExit('CF_PAGES_PROJECT is missing from .env.deploy')
+    site_url = env_value(environment, 'CF_SITE_URL')
+    if not (site_url or project):
+        raise SystemExit('CF_SITE_URL / CF_PAGES_PROJECT is missing from .env.deploy')
+    site_url = (site_url or f'https://{project}.pages.dev').rstrip('/')
 
-    token = secrets.token_urlsafe(32)
-    invitation_url = f'https://{project}.pages.dev/login#qr={token}'
+    keep = '--keep-token' in sys.argv[1:]
+    token = env_value(environment, SECRET_NAME) if keep else secrets.token_urlsafe(32)
+    if not token:
+        raise SystemExit(f'--keep-token: no {SECRET_NAME} in .env.deploy yet')
+    invitation_url = f'{site_url}/login#qr={token}'
 
     parameters = cv2.QRCodeEncoder_Params()
     parameters.correction_level = cv2.QRCodeEncoder_CORRECT_LEVEL_H
@@ -67,8 +80,11 @@ def main() -> None:
         environment = environment.rstrip('\n') + '\n' + secret_line + '\n'
 
     atomic_write(OUTPUT_PATH, png.tobytes())
+    print(f'Created {OUTPUT_PATH.resolve()} -> {site_url}/login')
+    if keep:
+        print(f'Kept the existing {SECRET_NAME}: earlier QR codes still work.')
+        return
     atomic_write(ENV_PATH, environment.encode(), ENV_PATH.stat().st_mode)
-    print(f'Created {OUTPUT_PATH.resolve()}')
     print(f'Updated {SECRET_NAME} in .env.deploy (value hidden)')
     print('Run this tool again to create a replacement, then publish the updated')
     print(f'{SECRET_NAME} secret to revoke the previous QR code.')

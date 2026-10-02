@@ -99,6 +99,10 @@ img { display: block; }
 
 /* ---------- layout ---------- */
 .wrap { padding: 0 var(--margin) 90px; }
+/* Home page ends on the Galleries reel, which carries its own bottom padding,
+   so drop the page gutter and pull the footer up to it. */
+.wrap--home { padding-bottom: 0; }
+.wrap--home + .landing-footer { margin-top: 24px; }
 
 /* ---------- china masthead (hub title + headline stats) ---------- */
 .china-masthead { margin: 40px 0 6px; }
@@ -198,15 +202,47 @@ img { display: block; }
 .tile--pending-link:hover .pending-route-link { color: var(--text); }
 .tile--pending-link:hover .tile-title { color: var(--text); }
 
-/* ---------- Galleries call-to-action (home page) ---------- */
-.gallery-cta { display: flex; justify-content: center; margin-top: 30px; }
-.gallery-cta-btn {
+/* ---------- Galleries reel (home page; js/home-galleries.js) ----------
+   A full-width band under the tiles: gallery covers drift past in a looping 3D
+   coverflow. The whole band is one link to the Galleries page. */
+.gallery-reel {
+  position: relative; display: block; margin-top: 8px; padding: 26px 0 22px;
+  background: #121212; text-decoration: none; overflow: hidden;
+}
+.gallery-reel-head { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.gallery-reel-title {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .1em;
+  color: var(--text); font-size: clamp(18px, 1.6vw, 26px); line-height: 1.1;
+}
+.gallery-reel-count {
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .18em;
+  color: #d9d9d9; font-size: 15px; min-height: 1em;
+}
+.gallery-reel-stage {
+  position: relative; height: clamp(220px, 30vw, 400px); margin-top: 14px;
+  perspective: 1400px; perspective-origin: 50% 50%;
+  touch-action: pan-y;   /* vertical page scroll stays native; sideways drags drive the reel */
+}
+.gallery-reel-card {
+  position: absolute; left: 50%; top: 50%; margin: 0; visibility: hidden;
+  transform: translate(-50%, -50%); will-change: transform, opacity;
+  border-radius: 6px; overflow: hidden; background: var(--panel);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+.gallery-reel-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-reel-card.is-empty img { visibility: hidden; }
+.gallery-reel-caption {
+  margin-top: 14px; min-height: 1.3em; text-align: center;
+  font-family: var(--head); text-transform: uppercase; letter-spacing: .14em;
+  color: var(--muted-2); font-size: 13px;
+}
+.gallery-reel-cta {
+  display: table; margin: 14px auto 0; padding: 10px 28px;
   font-family: var(--head); text-transform: uppercase; letter-spacing: .2em;
-  font-size: 16px; color: var(--text); text-decoration: none;
-  padding: 14px 40px; border: 1px solid var(--line);
+  font-size: 13px; color: var(--text); border: 1px solid var(--line);
   transition: background .2s, color .2s, border-color .2s;
 }
-.gallery-cta-btn:hover { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
+.gallery-reel:hover .gallery-reel-cta { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
 
 /* Galleries index: each year heading sticks below the topnav while scrolling
    through that year's tiles, then the next year's heading takes over (each year

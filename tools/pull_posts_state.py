@@ -18,6 +18,8 @@ import sys
 import urllib.request
 
 PROJECT = os.environ.get("CF_PAGES_PROJECT")
+# Live site address (custom domain); falls back to the project's pages.dev host.
+SITE_URL = (os.environ.get("CF_SITE_URL") or (f"https://{PROJECT}.pages.dev" if PROJECT else "")).rstrip("/")
 LOCAL = "http://localhost:8788"
 
 
@@ -39,11 +41,11 @@ def api(base, cookies, method="GET", body=None):
 
 
 def main():
-    if not PROJECT:
-        sys.exit("CF_PAGES_PROJECT not set — source .env.deploy first")
+    if not SITE_URL:
+        sys.exit("CF_SITE_URL / CF_PAGES_PROJECT not set — source .env.deploy first")
     cookies = (f"posts_auth={token('CF_POSTS_PASSWORD')}; "
                f"site_auth={token('CF_SITE_PASSWORD')}")
-    prod = api(f"https://{PROJECT}.pages.dev", cookies)
+    prod = api(SITE_URL, cookies)
     local = api(LOCAL, cookies)
     api(LOCAL, cookies, "PUT", {"baseVersion": local["version"], "posts": prod["posts"]})
     names = ", ".join(p["name"] for p in prod["posts"]) or "(none)"

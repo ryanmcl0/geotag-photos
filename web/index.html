@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Ryan's Travels</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="css/site.css"/>
     <script defer src="/js/analytics.js"></script>
 </head>
@@ -85,7 +86,7 @@
     })();
     </script>
 
-    <main class="wrap">
+    <main class="wrap wrap--home">
         <p class="powered-by">Powered by <a href="https://github.com/ryanmcl0/geotag-photos" target="_blank" rel="noopener">https://github.com/ryanmcl0/geotag-photos</a></p>
         <div class="tiles">
             <!-- Map -->
@@ -126,9 +127,17 @@
             </a>
         </div>
 
-        <div class="gallery-cta">
-            <a class="gallery-cta-btn" href="galleries.html">Galleries</a>
-        </div>
+        <!-- Galleries reel: covers drift past in a looping coverflow (js/home-galleries.js);
+             the whole reel links to the Galleries page. -->
+        <a class="gallery-reel" id="gallery-reel" href="galleries.html" aria-label="Browse all galleries">
+            <div class="gallery-reel-head">
+                <span class="gallery-reel-title">Galleries / Trips</span>
+                <span class="gallery-reel-count"></span>
+            </div>
+            <div class="gallery-reel-stage"></div>
+            <div class="gallery-reel-caption"></div>
+            <span class="gallery-reel-cta">View all galleries</span>
+        </a>
     </main>
 
     <footer class="landing-footer">
@@ -150,6 +159,7 @@
     </footer>
 
     <script src="js/unlock.js"></script>
+    <script src="js/home-galleries.js"></script>
     <script src="js/posts.js"></script>
     <script src="js/nontrip-filter.js"></script>
     <script src="js/phone-mode.js"></script>

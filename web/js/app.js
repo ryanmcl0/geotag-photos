@@ -24,8 +24,15 @@ const CONFIG = {
 
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
-    routeWeight: 3,
-    routeOpacity: 0.9
+    routeWeight: 3.25,
+    routeOpacity: 1,
+    // Dark edge drawn under every route so the line reads on satellite imagery
+    // and next to the markers sitting on it.
+    routeCasing: { color: '#0b0d10', weight: 5, opacity: 0.5 },
+
+    // At this zoom and below the map is an overview: clusters shrink to small
+    // trip-coloured dots and thumbnails/pins step back so the routes lead.
+    overviewMaxZoom: 6
 };
 
 // Global state
@@ -45,6 +52,7 @@ const loadedTripIds = new Set();
 // photos hidden inside public trips). Shown only while LOCKED. Once unlocked the
 // real photo clusters take their place. See private_coverage.py for what the file
 // does and doesn't contain (coords rounded to ~1 km, no photos, no place names).
+let siteStats = null;            // collections/site_stats.json (landing-page totals)
 let coverageData = null;          // parsed trips/private_coverage.json (fetched once)
 let coverageMarkers = [];         // every coverage marker, pre-built
 let coverageLayer = null;         // cluster group holding the currently-shown subset
@@ -689,8 +697,10 @@ function initMap() {
     });
 
     initMapStyleControl();
+    initFitControl();
     initDoubleTapZoom();
     initLayerWatchdog();
+    initOverviewMode();
 
     // Re-measure the map whenever iOS changes the viewport (rotation, address
     // bar show/hide, keyboard). Without this Leaflet keeps a stale size and the
@@ -953,8 +963,49 @@ function initMapStyleControl() {
     document.getElementById('map').appendChild(ctrl);
 }
 
-function makeClusterGroup() {
-    return L.markerClusterGroup({
+/**
+ * "Fit to screen" button under the zoom controls: one click back to the
+ * framing the map opened with (whatever trips the current filters show).
+ */
+function initFitControl() {
+    const FitControl = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd() {
+            const bar = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-fit-control');
+            const btn = L.DomUtil.create('a', '', bar);
+            btn.href = '#';
+            btn.title = 'Fit to screen';
+            btn.setAttribute('role', 'button');
+            btn.setAttribute('aria-label', 'Fit to screen');
+            btn.innerHTML = `
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none"
+                          stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>`;
+            L.DomEvent.disableClickPropagation(bar);
+            L.DomEvent.on(btn, 'click', e => {
+                L.DomEvent.preventDefault(e);
+                fitMapToBounds();
+            });
+            return bar;
+        }
+    });
+    map.addControl(new FitControl());
+}
+
+/**
+ * Flag the map container while zoomed out to overview level; the CSS uses it
+ * to shrink clusters, thumbnails and coverage pins so the routes stay legible.
+ */
+function initOverviewMode() {
+    const el = map.getContainer();
+    const sync = () => el.classList.toggle('map-overview', map.getZoom() <= CONFIG.overviewMaxZoom);
+    sync();
+    map.on('zoomend', sync);
+}
+
+function makeClusterGroup(color) {
+    const group = L.markerClusterGroup({
         maxClusterRadius: zoom => zoom < CONFIG.minClusteringZoom ? 1 : CONFIG.clusterRadius,
         disableClusteringAtZoom: CONFIG.disableClusteringAtZoom,
         spiderfyOnMaxZoom: false,
@@ -962,14 +1013,17 @@ function makeClusterGroup() {
         zoomToBoundsOnClick: true,
         animate: true,
         animateAddingMarkers: false,
-        iconCreateFunction: createClusterIcon
+        iconCreateFunction: cluster => createClusterIcon(cluster, color)
     });
+    attachClusterPeek(group, color);
+    return group;
 }
 
 /**
- * Create custom cluster icon
+ * Cluster icon, filled with the trip's route colour so each count reads as part
+ * of its line. The count is the number of places (child markers), not photos.
  */
-function createClusterIcon(cluster) {
+function createClusterIcon(cluster, color) {
     const count = cluster.getChildCount();
     let size = 'small';
 
@@ -977,10 +1031,53 @@ function createClusterIcon(cluster) {
     else if (count >= 5) size = 'medium';
 
     return L.divIcon({
-        html: `<div>${count}</div>`,
+        html: `<div style="--trip-color:${color}">${count}</div>`,
         className: `marker-cluster marker-cluster-${size}`,
         iconSize: L.point(40, 40)
     });
+}
+
+/**
+ * Hovering a cluster shows a small grid of thumbnails sampled across its photos,
+ * so you can see what's there without clicking. Pointer devices only: on touch
+ * there is no hover, and a tap still zooms into the cluster as before.
+ */
+const PEEK_MAX_THUMBS = 6;
+
+function attachClusterPeek(group, color) {
+    if (!window.matchMedia('(hover: hover)').matches) return;
+    let tip = null;
+    const close = () => {
+        if (tip) { map.removeLayer(tip); tip = null; }
+    };
+    group.on('clustermouseover', e => {
+        const markers = e.layer.getAllChildMarkers();
+        const photos = markers.flatMap(m => m.photoData || []);
+        if (!photos.length) return;
+        const n = Math.min(PEEK_MAX_THUMBS, photos.length);
+        const thumbs = Array.from({ length: n }, (_, i) => photos[Math.floor(i * photos.length / n)])
+            .map(p => `<img src="${resolveUrl(p.tripPath, p.thumbnail)}" alt="" decoding="async">`)
+            .join('');
+        // Open downward when the cluster is too near the top edge to fit above it.
+        const below = map.latLngToContainerPoint(e.layer.getLatLng()).y < 230;
+        close();
+        tip = L.tooltip({
+            className: 'cluster-peek',
+            direction: below ? 'bottom' : 'top',
+            offset: L.point(0, below ? 16 : -16),
+            opacity: 1
+        })
+            .setLatLng(e.layer.getLatLng())
+            .setContent(
+                `<div class="cluster-peek-card">` +
+                `<div class="cluster-peek-grid cluster-peek-n${Math.min(n, 3)}">${thumbs}</div>` +
+                `<div class="cluster-peek-cap" style="--trip-color:${color}"><i></i>` +
+                `<b>${photos.length} photos · ${markers.length} places</b>` +
+                `<span>${escapeHtml(photos[0].tripName || '')}</span></div></div>`)
+            .addTo(map);
+    });
+    group.on('clustermouseout clusterclick', close);
+    map.on('zoomstart movestart', close);
 }
 
 /**
@@ -990,7 +1087,16 @@ async function loadTripData() {
     try {
         let basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
         // ?library=phone -> local-only mirror dataset under web/phone/ (never deployed)
-        if (new URLSearchParams(location.search).get('library') === 'phone') basePath += 'phone/';
+        const phoneLibrary = new URLSearchParams(location.search).get('library') === 'phone';
+        if (!phoneLibrary) {
+            // Landing-page totals for the sidebar; fetched alongside the trips and
+            // applied whenever they arrive (the sidebar is fine without them).
+            fetch(`${basePath}collections/site_stats.json?t=${Date.now()}`)
+                .then(r => (r.ok ? r.json() : null))
+                .then(st => { if (st) { siteStats = st; updateTripInfo(); } })
+                .catch(() => {});
+        }
+        if (phoneLibrary) basePath += 'phone/';
 
         const indexResponse = await fetch(`${basePath}trips/index.json?t=${Date.now()}`);
         const index = await indexResponse.json();
@@ -1317,6 +1423,10 @@ function updateTripInfo() {
 
     let titleText = '';
     let subtitleText = '';
+    // Unfiltered all-trips overview: show the all-time totals from the landing
+    // page (site_stats.json), with the photo line reading "shown / every photo".
+    const overview = Boolean(siteStats) && (viewConfig.mode || 'all') === 'all' &&
+        !activeYearFilter && !activeCountryFilter && visibleTrips.length !== 1;
 
     if (viewConfig.mode === 'collection' && viewConfig.filterTitle) {
         titleText = viewConfig.filterTitle;
@@ -1328,15 +1438,17 @@ function updateTripInfo() {
         titleText = `${viewConfig.year}`;
         subtitleText = `${visibleTrips.length} trips`;
     } else {
-        titleText = `${visibleTrips.length} Trips`;
+        titleText = `${overview && siteStats.trips ? siteStats.trips : visibleTrips.length} Trips`;
         subtitleText = '';
     }
 
     document.getElementById('trip-name').textContent = titleText;
     document.getElementById('trip-dates').textContent = subtitleText;
 
-    document.getElementById('photo-count').textContent =
-        `${totalPhotos.toLocaleString()} photos`;
+    const allPhotos = overview ? siteStats.photos : null;
+    document.getElementById('photo-count').textContent = allPhotos && allPhotos !== totalPhotos
+        ? `${totalPhotos.toLocaleString()} / ${allPhotos.toLocaleString()} photos visible`
+        : `${totalPhotos.toLocaleString()} photos`;
 
     // Countries visited but still entirely off the map. Albania, Belgium, Bosnia, Bulgaria,
     // Croatia, Luxembourg, Netherlands and Tunisia now have placeholder pins (config/trips.json
@@ -1346,21 +1458,16 @@ function updateTripInfo() {
     ];
     const TOTAL_COUNTRIES = 56;
 
-    const sorted = [...uniqueCountries].map(countryName).sort();
-    const onMap = uniqueCountries.size;
-    const pending = PENDING_COUNTRIES.length;
+    // One full list: every trip's countries (private ones included; the index
+    // already lists them) plus those still to come, regardless of filters.
+    const names = new Set(PENDING_COUNTRIES);
+    allTripsMeta.forEach(t => (t.countries || []).forEach(c => names.add(countryName(c))));
+    allManifests.forEach(m => (m.clusters || []).forEach(c => { if (c.country) names.add(countryName(c.country)); }));
 
     const summaryEl = document.getElementById('country-summary');
     const countryListEl = document.getElementById('country-list');
-    const availLabelEl = document.getElementById('country-available-label');
-    const pendingLabelEl = document.getElementById('country-pending-label');
-    const pendingListEl = document.getElementById('country-pending-list');
-
     if (summaryEl) summaryEl.textContent = `${TOTAL_COUNTRIES} countries visited`;
-    if (availLabelEl) availLabelEl.textContent = `${onMap} on map`;
-    if (countryListEl) countryListEl.textContent = sorted.join(', ');
-    if (pendingLabelEl) pendingLabelEl.textContent = `${pending} pending`;
-    if (pendingListEl) pendingListEl.textContent = PENDING_COUNTRIES.join(', ');
+    if (countryListEl) countryListEl.textContent = [...names].sort().join(', ');
 }
 
 /**
@@ -1379,22 +1486,30 @@ function formatDate(dateStr) {
  * Build a polyline layer for a trip's GPX route.
  */
 function buildRouteLayer(routeData, color, tripName) {
-    const layer = L.geoJSON(routeData, {
+    const casing = L.geoJSON(routeData, {
+        interactive: false,
+        style: { ...CONFIG.routeCasing, lineCap: 'round', lineJoin: 'round' }
+    });
+    const line = L.geoJSON(routeData, {
         style: {
             color: color,
             weight: CONFIG.routeWeight,
-            opacity: CONFIG.routeOpacity
+            opacity: CONFIG.routeOpacity,
+            lineCap: 'round',
+            lineJoin: 'round'
         }
     });
-    layer.bindTooltip(tripName, { permanent: false, sticky: true });
-    return layer;
+    line.bindTooltip(tripName, { permanent: false, sticky: true });
+    // Casing first so the coloured line draws on top of it.
+    return L.featureGroup([casing, line]);
 }
 
 /**
  * Build a MarkerClusterGroup for a single trip's photos.
  */
 function buildMarkerLayer(manifest, hasGpx) {
-    const group = makeClusterGroup();
+    const color = CONFIG.routeColors[manifest.tripIndex % CONFIG.routeColors.length];
+    const group = makeClusterGroup(color);
     const photoLookup = {};
     manifest.photos.forEach(photo => {
         photo.tripName = manifest.trip_name;
@@ -1623,6 +1738,7 @@ async function loadCoverageData() {
 
 function buildCoverageMarkers() {
     coverageMarkers = [];
+    const canHover = window.matchMedia('(hover: hover)').matches;
     (coverageData.trips || []).forEach(trip => {
         const dates = trip.dates || {};
         const range = dates.start
@@ -1632,11 +1748,19 @@ function buildCoverageMarkers() {
             : '';
         (trip.points || []).forEach(pt => {
             const marker = L.marker([pt.lat, pt.lon], { icon: createCoverageIcon() });
-            marker.bindPopup(
+            const html =
                 `<div class="coverage-popup"><strong>${escapeHtml(trip.name)}</strong>` +
                 (range ? `<span>${range}</span>` : '') +
-                `<span class="coverage-popup-note">🔒 Private, photos hidden</span></div>`
-            );
+                `<span class="coverage-popup-note" aria-label="Locked">🔒</span></div>`;
+            // Hover shows the caption on pointer devices; touch keeps the tap popup.
+            if (canHover) {
+                marker.bindTooltip(html, {
+                    className: 'coverage-tip', direction: 'top',
+                    offset: L.point(0, -30), opacity: 1
+                });
+            } else {
+                marker.bindPopup(html);
+            }
             marker.country = pt.country || null;
             marker.coverageYear = trip.year || null;
             coverageMarkers.push(marker);

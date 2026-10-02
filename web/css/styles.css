@@ -85,28 +85,6 @@ body {
     color: #1a1a1a;
 }
 
-.sidebar-header h2 a {
-    color: inherit;
-    text-decoration: none;
-}
-
-.sidebar-header h2 a:hover {
-    color: #e11d48;
-}
-
-.sidebar-portfolio-link {
-    display: block;
-    margin-top: 4px;
-    font-size: 0.78rem;
-    color: #999;
-    text-decoration: none;
-}
-
-.sidebar-portfolio-link:hover {
-    color: #e11d48;
-    text-decoration: underline;
-}
-
 .sidebar-note {
     margin-top: 10px;
     font-size: 0.78rem;
@@ -373,21 +351,6 @@ details[open] .country-summary::after {
 .country-breakdown {
     margin-top: 6px;
 }
-.country-section-label {
-    font-size: 0.7rem;
-    color: #777;
-    margin-top: 8px;
-    margin-bottom: 2px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.country-section-label--pending {
-    color: #555;
-    margin-top: 10px;
-}
-.country-list--pending {
-    color: #666;
-}
 
 
 /* Hidden gallery container */
@@ -549,6 +512,7 @@ details[open] .country-summary::after {
    a photo hidden inside a public trip). Never clustered and never a thumbnail, so
    it reads as "been here" without pretending to be a photo marker. */
 .coverage-marker-icon {
+    opacity: 0.85;
     cursor: pointer;
     line-height: 0;
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
@@ -556,8 +520,9 @@ details[open] .country-summary::after {
     transform-origin: 50% 100%;
 }
 .coverage-pin path {
-    fill: #3b82f6;
-    stroke: #ffffff;
+    /* Neutral grey so the pins don't compete with the (blue) route colour. */
+    fill: #64748b;
+    stroke: rgba(255, 255, 255, 0.9);
     stroke-width: 1.6;
 }
 .coverage-pin circle { fill: #ffffff; }
@@ -569,6 +534,14 @@ details[open] .country-summary::after {
 .coverage-popup strong { display: block; margin-bottom: 2px; }
 .coverage-popup span { display: block; color: #8a8f98; font-size: 12px; }
 .coverage-popup-note { margin-top: 3px; font-size: 11px; }
+/* Hover caption for coverage pins (pointer devices; see buildCoverageMarkers). */
+.leaflet-tooltip.coverage-tip {
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 10px;
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+}
 
 
 /* ?mapdebug=1 readout (see initLayerWatchdog) */
@@ -586,17 +559,22 @@ details[open] .country-summary::after {
     white-space: nowrap;
 }
 
-/* Custom cluster markers - clean minimal style */
+/* Custom cluster markers: a dot filled with the trip's route colour (set inline
+   as --trip-color by createClusterIcon), so each count reads as part of its line. */
 .marker-cluster {
     position: absolute;
-    background: rgba(255, 255, 255, 0.95) !important;
-    border: 2px solid #e11d48 !important;
+    background: transparent !important;
+    border: none !important;
     border-radius: 50% !important;
 }
 
 .marker-cluster div {
-    background: transparent !important;
-    color: #1a1a1a !important;
+    background: var(--trip-color, #e11d48) !important;
+    color: #fff !important;
+    border: 2px solid rgba(255, 255, 255, 0.95);
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
     font-weight: 600 !important;
     font-size: 13px !important;
     display: flex;
@@ -625,6 +603,89 @@ details[open] .country-summary::after {
     height: 48px !important;
     margin-left: -24px !important;
     margin-top: -24px !important;
+}
+
+/* Fit-to-screen button under the zoom controls (see initFitControl). */
+.map-fit-control a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #1a1a1a;
+}
+
+/* Overview zoom (see initOverviewMode): clusters shrink to small dots sitting on
+   the route, and thumbnails + coverage pins step back so the lines lead. The
+   coverage pin scales its inner SVG because Leaflet owns the icon's transform. */
+.map-overview .marker-cluster {
+    width: 22px !important;
+    height: 22px !important;
+    margin-left: -11px !important;
+    margin-top: -11px !important;
+}
+.map-overview .marker-cluster div {
+    font-size: 10px !important;
+    border-width: 1.5px;
+}
+.map-overview .photo-marker-wrapper { transform: scale(0.68); }
+.map-overview .coverage-marker-icon svg {
+    transform: scale(0.6);
+    transform-origin: 50% 100%;
+}
+
+/* Cluster hover preview (see attachClusterPeek). The grid sets the card width;
+   the caption truncates rather than widening it. */
+.leaflet-tooltip.cluster-peek {
+    padding: 6px;
+    border: 0;
+    border-radius: 10px;
+    background: rgba(17, 18, 20, 0.94);
+    color: #fff;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+.leaflet-tooltip-top.cluster-peek::before { border-top-color: rgba(17, 18, 20, 0.94); }
+.leaflet-tooltip-bottom.cluster-peek::before { border-bottom-color: rgba(17, 18, 20, 0.94); }
+.cluster-peek-card { width: min-content; }
+.cluster-peek-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 120px);
+    gap: 4px;
+}
+.cluster-peek-n2 { grid-template-columns: repeat(2, 120px); }
+.cluster-peek-n1 { grid-template-columns: 244px; }
+.cluster-peek-grid img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 3 / 2;
+    object-fit: cover;
+    border-radius: 5px;
+    background: #2a2d33;
+}
+.cluster-peek-cap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.cluster-peek-cap i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--trip-color);
+}
+.cluster-peek-cap b { white-space: nowrap; }
+.cluster-peek-cap span {
+    flex: 1;
+    min-width: 0;
+    color: #b8bcc4;
+    font-weight: 500;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Photo popup styling (single-photo clusters) */

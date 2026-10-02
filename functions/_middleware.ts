@@ -137,9 +137,25 @@ function authRetryAfter(ip: string): number {
     return hits.length > AUTH_MAX_HITS ? Math.ceil((AUTH_WINDOW_MS - (now - hits[0])) / 1000) : 0;
 }
 
+// The site's home is ryanmcl.com. The original pages.dev address and the www host
+// send everyone there, keeping the path, query (and the #qr= fragment, which the
+// browser carries across the redirect). Per-deploy preview hosts
+// (<id>.photo-map-travel.pages.dev) are left alone so they stay testable.
+const CANONICAL_HOST = 'ryanmcl.com';
+const REDIRECT_HOSTS = ['photo-map-travel.pages.dev', 'www.ryanmcl.com'];
+
 export const onRequest: PagesFunction<Env> = async (context) => {
     const url = new URL(context.request.url);
     const path = url.pathname;
+
+    if (REDIRECT_HOSTS.includes(url.hostname)) {
+        url.hostname = CANONICAL_HOST;
+        url.protocol = 'https:';
+        url.port = '';
+        // 301 for page loads; 308 keeps the method and body for anything else (e.g. POST /auth).
+        const method = context.request.method;
+        return Response.redirect(url.toString(), method === 'GET' || method === 'HEAD' ? 301 : 308);
+    }
     const cookies = context.request.headers.get('Cookie') || '';
     const cookieVal = (name: string) => {
         const m = cookies.split(';').map(c => c.trim()).find(c => c.startsWith(name + '='));
@@ -232,6 +248,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const sitePassword = context.env.CF_SITE_PASSWORD;
     const allPassword = context.env.CF_ALL_PASSWORD;
     const isAuthPath = ['/login', '/login.html', '/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path);
+    // The tab icon is needed on the login page itself, before anyone is signed in.
+    if (path === '/icons/favicon.svg') return context.next();
 
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {

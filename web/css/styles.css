@@ -85,28 +85,6 @@ body {
     color: #1a1a1a;
 }
 
-.sidebar-header h2 a {
-    color: inherit;
-    text-decoration: none;
-}
-
-.sidebar-header h2 a:hover {
-    color: #e11d48;
-}
-
-.sidebar-portfolio-link {
-    display: block;
-    margin-top: 4px;
-    font-size: 0.78rem;
-    color: #999;
-    text-decoration: none;
-}
-
-.sidebar-portfolio-link:hover {
-    color: #e11d48;
-    text-decoration: underline;
-}
-
 .sidebar-note {
     margin-top: 10px;
     font-size: 0.78rem;

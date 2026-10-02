@@ -571,6 +571,14 @@ details[open] .country-summary::after {
 .coverage-popup strong { display: block; margin-bottom: 2px; }
 .coverage-popup span { display: block; color: #8a8f98; font-size: 12px; }
 .coverage-popup-note { margin-top: 3px; font-size: 11px; }
+/* Hover caption for coverage pins (pointer devices; see buildCoverageMarkers). */
+.leaflet-tooltip.coverage-tip {
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 10px;
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+}
 
 
 /* ?mapdebug=1 readout (see initLayerWatchdog) */

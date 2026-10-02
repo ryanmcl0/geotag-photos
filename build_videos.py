@@ -144,6 +144,7 @@ def build() -> None:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Videos · Ryan's Travels</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="css/site.css"/>
     <script defer src="/js/analytics.js"></script>
 </head>

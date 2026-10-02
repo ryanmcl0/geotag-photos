@@ -232,6 +232,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const sitePassword = context.env.CF_SITE_PASSWORD;
     const allPassword = context.env.CF_ALL_PASSWORD;
     const isAuthPath = ['/login', '/login.html', '/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path);
+    // The tab icon is needed on the login page itself, before anyone is signed in.
+    if (path === '/icons/favicon.svg') return context.next();
 
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {

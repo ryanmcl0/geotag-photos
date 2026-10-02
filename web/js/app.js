@@ -1635,7 +1635,7 @@ function buildCoverageMarkers() {
             marker.bindPopup(
                 `<div class="coverage-popup"><strong>${escapeHtml(trip.name)}</strong>` +
                 (range ? `<span>${range}</span>` : '') +
-                `<span class="coverage-popup-note">🔒 Private, photos hidden</span></div>`
+                `<span class="coverage-popup-note" aria-label="Locked">🔒</span></div>`
             );
             marker.country = pt.country || null;
             marker.coverageYear = trip.year || null;

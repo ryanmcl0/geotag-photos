@@ -22,7 +22,8 @@ What stays out (this file is served to everyone):
   - exact coordinates: every point is rounded to ROUND_DP (~1.1 km) and
     deduplicated, so a pin says "was in this area", never "was on this roof".
 
-Trip names + dates ARE included: they're already public in trips/index.json.
+Trip names + dates ARE included (they're already public in trips/index.json),
+minus any rooftopping reference (_public_name).
 
 Run standalone (./private_coverage.py [--dry-run]) or via process_all.py /
 deploy.py, both of which call build().
@@ -50,6 +51,17 @@ def _round_pt(lat, lon):
 def _trip_year(trip):
     m = re.match(r'^(\d{4})', trip.get('name', '') or '')
     return int(m.group(1)) if m else trip.get('year')
+
+
+def _public_name(name):
+    """Trip name safe for a locked visitor: no rooftopping references.
+
+    '2024 China (rooftopping 2024)' -> '2024 China'. Drops any parenthetical
+    mentioning rooftopping, then any stray 'rooftop*' word.
+    """
+    name = re.sub(r'\s*\([^)]*rooftop[^)]*\)', '', name or '', flags=re.I)
+    name = re.sub(r'\s*\brooftop\w*', '', name, flags=re.I)
+    return re.sub(r'\s{2,}', ' ', name).strip(' -')
 
 
 def _load_json(path):
@@ -134,7 +146,7 @@ def build(dry_run=False, echo=print) -> dict:
                   for (lat, lon), c in sorted(seen.items())]
         out_trips.append({
             'id': trip['id'],
-            'name': trip.get('name', ''),
+            'name': _public_name(trip.get('name', '')),
             'year': _trip_year(trip),
             'dates': trip.get('dates', {}),
             'countries': sorted({p['country'] for p in points if p.get('country')}),

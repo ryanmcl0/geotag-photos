@@ -143,7 +143,11 @@
         if (!app) return;
         app.innerHTML = '';
 
-        const visible = trips.filter(t => unlocked() || t.public !== false);
+        // A gallery whose every photo is blocked (people privacy) has nothing to show
+        // at any tier; leave it out rather than render an empty padlock tile.
+        // Pending placeholders are deliberately photo-less and stay.
+        const hasPhotos = t => t.pending || (t.photo_count_all ?? t.photo_count ?? 1) > 0;
+        const visible = trips.filter(t => (unlocked() || t.public !== false) && hasPhotos(t));
         if (!visible.length) {
             app.appendChild(el('p', 'gallery-empty', 'No galleries yet.'));
             return;

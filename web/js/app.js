@@ -696,6 +696,7 @@ function initMap() {
     });
 
     initMapStyleControl();
+    initFitControl();
     initDoubleTapZoom();
     initLayerWatchdog();
     initOverviewMode();
@@ -959,6 +960,36 @@ function initMapStyleControl() {
     // Append inside #map so it shares the Leaflet container's compositing
     // layer and survives iOS re-tiling repaints.
     document.getElementById('map').appendChild(ctrl);
+}
+
+/**
+ * "Fit to screen" button under the zoom controls: one click back to the
+ * framing the map opened with (whatever trips the current filters show).
+ */
+function initFitControl() {
+    const FitControl = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd() {
+            const bar = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-fit-control');
+            const btn = L.DomUtil.create('a', '', bar);
+            btn.href = '#';
+            btn.title = 'Fit to screen';
+            btn.setAttribute('role', 'button');
+            btn.setAttribute('aria-label', 'Fit to screen');
+            btn.innerHTML = `
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none"
+                          stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>`;
+            L.DomEvent.disableClickPropagation(bar);
+            L.DomEvent.on(btn, 'click', e => {
+                L.DomEvent.preventDefault(e);
+                fitMapToBounds();
+            });
+            return bar;
+        }
+    });
+    map.addControl(new FitControl());
 }
 
 /**

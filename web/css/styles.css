@@ -634,6 +634,14 @@ details[open] .country-summary::after {
     margin-top: -24px !important;
 }
 
+/* Fit-to-screen button under the zoom controls (see initFitControl). */
+.map-fit-control a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #1a1a1a;
+}
+
 /* Overview zoom (see initOverviewMode): clusters shrink to small dots sitting on
    the route, and thumbnails + coverage pins step back so the lines lead. The
    coverage pin scales its inner SVG because Leaflet owns the icon's transform. */

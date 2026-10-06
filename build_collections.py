@@ -530,6 +530,8 @@ def facet_bridges(facet, records, echo):
             sub['status_info'] = b['status_info']
         if b.get('highlight'):
             sub['highlight'] = b['highlight']
+        if b.get('private_only'):
+            sub['private_only'] = True   # owner page only; _bridge_preview drops it
         # Reference imagery (renders/mockups saved from HighestBridges) for bridges
         # not yet visited — dropped into web/collections/bridge_renders/<slug>/ and
         # picked up by filename order. Lives under /collections/ so the middleware
@@ -1234,10 +1236,14 @@ def _bridge_preview(full_tile, pub_ref_set, echo):
     or a phone photo for bridges with none), else its own cover if public, else the
     first public landscape — and its photo count. Photo lists never ship, and a
     private pinned cover is never used, so climb shots stay behind the password.
-    Renders live under /collections/ (gated), so their links are dropped too."""
+    Renders live under /collections/ (gated), so their links are dropped too.
+    Roster bridges flagged `private_only` are left out of the preview entirely."""
     picks = (_load_json(BRIDGE_PUBLIC_COVERS) or {}).get('covers', {})
     t = copy.deepcopy(full_tile)
     t['preview'] = True
+    t['subtiles'] = [s for s in t.get('subtiles') or [] if not s.get('private_only')]
+    for sec in t.get('sections') or []:
+        sec['subtiles'] = [s for s in sec.get('subtiles') or [] if not s.get('private_only')]
     no_thumb = []
     for s in _all_subtiles(t):
         photos = s.pop('photos', None) or []

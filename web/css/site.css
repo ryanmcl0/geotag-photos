@@ -409,6 +409,68 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 .bridge-status-asof { font-family: var(--head); text-transform: uppercase; letter-spacing: .18em; font-size: 10px; color: #555; margin-top: 8px; }
 .bridge-extras-head { margin: 60px 0 6px; font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 15px; }
 
+/* bridges: "Still to do" summary table (owner page only) */
+.bridge-todo { margin: 80px 0 40px; }
+.bridge-todo-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.bridge-todo-head h3 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--text); font-size: 26px; font-weight: normal; line-height: 1; }
+.bridge-todo-head .count { font-family: var(--head); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-size: 13px; }
+.bridge-todo-table { border-top: 1px solid var(--line); }
+.bridge-todo-row {
+  display: grid; grid-template-columns: 40px minmax(0, 2.3fr) 64px 92px 150px minmax(0, 1.8fr) 150px 92px;
+  gap: 14px; align-items: baseline; width: 100%; padding: 11px 4px; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid #1d1d1d; color: var(--muted-2);
+  font-family: var(--body); font-size: 13px; line-height: 1.35; cursor: pointer;
+}
+.bridge-todo-row--head { cursor: default; padding-top: 8px; padding-bottom: 8px; font-family: var(--head); text-transform: uppercase; letter-spacing: .18em; font-size: 11px; color: #5a5a5a; }
+@media (hover: hover) { .bridge-todo-row[role=button]:hover { background: #161616; } .bridge-todo-row[role=button]:hover .bt-name { text-decoration: underline; text-underline-offset: 3px; } }
+.bridge-todo-row .bt-rank { font-family: var(--head); font-size: 20px; color: #4a4a4a; line-height: 1; }
+.bridge-todo-row .bt-name { color: var(--text); font-size: 14px; }
+.bridge-todo-row .bt-name em { font-style: normal; color: #5f5f5f; font-size: 12px; margin-left: 6px; }
+.bridge-todo-row .bt-height, .bridge-todo-row .bt-asof { font-variant-numeric: tabular-nums; }
+.bridge-todo-row .bt-target { color: var(--text); }
+.bridge-todo-row .bt-asof { color: #5f5f5f; font-size: 12px; }
+.bridge-todo-sub { margin: 26px 0 0; padding: 0 4px 8px; border-bottom: 1px solid var(--line); font-family: var(--head); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); font-size: 13px; }
+.bridge-phase { font-style: normal; display: inline-block; padding: 2px 8px; border-radius: 2px; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; white-space: nowrap; border: 1px solid currentColor; }
+.bridge-phase--open { color: #4fbf6c; }
+.bridge-phase--built { color: #7fb9d6; }
+.bridge-phase--uc { color: #c9a961; }
+.bridge-phase--none { color: #7a7a7a; }
+.bridge-phase--hold { color: #d9822b; }
+.bridge-phase--cancelled { color: #d9584c; text-decoration: line-through; }
+.bridge-warn { display: inline-flex; vertical-align: -2px; margin-right: 6px; color: #e0a526; cursor: help; }
+.bridge-warn-note { display: block; margin-top: 3px; font-size: 11.5px; line-height: 1.4; color: #b8913e; }
+.bridge-status-body p.bridge-warn-note { color: #c9a24a; font-size: 13px; margin-bottom: 8px; }
+.bridge-warn-count { color: #e0a526; }
+.bridge-warn-count .bridge-warn { margin-right: 4px; vertical-align: -1px; }
+.bridge-todo-visited { display: inline-flex; vertical-align: -1px; margin-left: 8px; color: #c9a961; cursor: help; }
+.bridge-warn-toggle { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; }
+.bridge-warn-toggle .bridge-warn { cursor: pointer; }
+.bridge-todo-row--open { border-bottom-color: transparent; }
+.bridge-todo-detail { padding: 0 4px 12px 58px; border-bottom: 1px solid #1d1d1d; font-family: var(--body); font-size: 12.5px; line-height: 1.5; color: #c9a24a; }
+.bridge-todo-detail .bridge-warn { cursor: default; }
+/* desktop: one line per row, overflow ellipsised (the dropdown holds the long notes) */
+@media (min-width: 861px) {
+  .bridge-todo-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bridge-todo-row { align-items: center; }
+}
+.bridge-row--flash { background: #1c1c1c; transition: background .3s; }
+@media (max-width: 1200px) {
+  .bridge-todo-row { grid-template-columns: 36px minmax(0, 2fr) 60px 140px minmax(0, 1.6fr) 130px; }
+  .bridge-todo-row .bt-prov, .bridge-todo-row .bt-asof { display: none; }
+}
+@media (max-width: 860px) {
+  /* phone: each bridge becomes a two-line card: rank + name, then status/stage/target */
+  .bridge-todo-row--head { display: none; }
+  .bridge-todo-row { grid-template-columns: 34px 1fr auto; gap: 4px 10px; padding: 12px 0; }
+  .bridge-todo-row .bt-rank { grid-row: span 3; }
+  .bridge-todo-row .bt-name { grid-column: 2; }
+  .bridge-todo-row .bt-height { grid-column: 3; grid-row: 1; text-align: right; color: var(--muted); }
+  .bridge-todo-row .bt-phase { grid-column: 2; }
+  .bridge-todo-row .bt-target { grid-column: 3; grid-row: 2; text-align: right; }
+  .bridge-todo-row .bt-stage { grid-column: 2 / 4; color: var(--muted); font-size: 12px; }
+  .bridge-todo-detail { padding-left: 44px; }
+}
+
 /* ---------- landing footer ---------- */
 .landing-footer { margin-top: 50px; padding: 36px 20px 44px; display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; align-items: center; }
 .landing-footer a { color: var(--muted); transition: color .2s; display: block; }

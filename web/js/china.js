@@ -413,22 +413,23 @@
     const extras = tile.subtiles.filter(s => !s.rank && s.done);
     const wishlist = tile.subtiles.filter(s => !s.rank && !s.done);
     let flip = false;
-    ranked.forEach(s => {
-      list.appendChild(buildBridgeRow(tile, s, flip));
+    const addRow = s => {   // id = the "Still to do" summary's scroll target
+      const row = buildBridgeRow(tile, s, flip);
+      row.id = `bridge-row-${s.id}`;
+      list.appendChild(row);
       if (s.done && bridgePhotoCount(tile, s)) flip = !flip;   // alternate photo side
-    });
+    };
+    ranked.forEach(addRow);
     if (extras.length) {
       list.appendChild(el('div', 'bridge-extras-head', 'Also visited'));
-      extras.forEach(s => {
-        list.appendChild(buildBridgeRow(tile, s, flip));
-        if (s.done && bridgePhotoCount(tile, s)) flip = !flip;
-      });
+      extras.forEach(addRow);
     }
     if (wishlist.length) {
       list.appendChild(el('div', 'bridge-extras-head', 'Nice to have'));
-      wishlist.forEach(s => list.appendChild(buildBridgeRow(tile, s, flip)));
+      wishlist.forEach(addRow);
     }
     app.appendChild(list);
+    if (!tile.preview) app.appendChild(buildBridgeTodo(tile));   // summary sits below the list
 
     // scroll-reveal
     const io = new IntersectionObserver(entries => {
@@ -482,6 +483,104 @@
     map.fitBounds(bounds, { padding: [28, 28] });
     // the container isn't sized until it's actually in the document
     requestAnimationFrame(() => { map.invalidateSize(); map.fitBounds(bounds, { padding: [28, 28] }); });
+    return wrap;
+  }
+
+  // "Still to do": every ranked bridge not yet shot, then the not-done nice-to-haves,
+  // in one table: build phase, current stage, target/opening date, when last checked.
+  // Owner page only (the preview never calls it). A row scrolls to its list entry.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fmtDate = iso => {
+    const [y, m, d] = String(iso).split('-');
+    return m ? `${d ? +d + ' ' : ''}${MONTHS[+m - 1]} ${y}` : y;
+  };
+
+  // Amber warning sign for bridges flagged on hold / possibly cancelled / unclear
+  // (status_info.warning); the note itself rides along as the tooltip.
+  const warnIcon = note => `<span class="bridge-warn" title="${esc(note)}" aria-label="Warning">` +
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" ' +
+    'd="M12 2 1 21h22L12 2zm-1 7h2v6h-2V9zm0 8h2v2h-2v-2z"/></svg></span>';
+
+  function bridgePhase(s) {
+    const st = (s.status_info && s.status_info.state) || '';
+    if (s.status === 'cancelled') return ['Cancelled', 'cancelled'];
+    if (s.status === 'completed') return ['Open', 'open'];
+    if (s.status === 'complete_not_open') return ['Built, not open', 'built'];
+    if (s.status === 'on_hold' || /^(suspended|on hold)/i.test(st)) return ['On hold', 'hold'];
+    if (/^not started/i.test(st)) return ['Not started', 'none'];
+    return ['Under construction', 'uc'];
+  }
+
+  function buildBridgeTodo(tile) {
+    const ranked = tile.subtiles.filter(s => s.rank);
+    const left = ranked.filter(s => !s.done).sort((a, b) => a.rank - b.rank);
+    const wish = tile.subtiles.filter(s => !s.rank && !s.done);
+    const wrap = el('section', 'bridge-todo');
+    const openNow = left.filter(s => bridgePhase(s)[1] === 'open').length;
+    const flagged = left.filter(s => (s.status_info || {}).warning).length;
+    wrap.appendChild(el('div', 'bridge-todo-head',
+      `<h3>Still to do</h3><span class="count">${left.length} of ${ranked.length} left` +
+      (openNow ? ` · ${openNow} open now` : '') +
+      (flagged ? ` · <span class="bridge-warn-count">${warnIcon('On hold, possibly cancelled or unclear')}${flagged} flagged</span>` : '') +
+      '</span>'));
+
+    const table = el('div', 'bridge-todo-table');
+    table.appendChild(el('div', 'bridge-todo-row bridge-todo-row--head',
+      '<span>#</span><span>Bridge</span><span>Height</span><span>Province</span>' +
+      '<span>Status</span><span>Stage</span><span>Target</span><span>Checked</span>'));
+    const addRow = s => {
+      const info = s.status_info || {};
+      const [phase, cls] = bridgePhase(s);
+      const target = info.opened ? `Opened ${fmtDate(info.opened)}`
+        : (info.target || (s.uc_year ? String(s.uc_year) : '?'));
+      // Every row stays one line: "visited" is an icon (tooltip), and a warning's
+      // note folds into a dropdown under the row, opened from the ⚠ toggle.
+      const visited = (s.photos || []).length
+        ? '<span class="bridge-todo-visited" title="Visited during construction" aria-label="Visited during construction">' +
+          '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg></span>'
+        : '';
+      const row = el('div', 'bridge-todo-row');
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.innerHTML = `
+        <span class="bt-rank">${s.rank != null ? s.rank : '·'}</span>
+        <span class="bt-name">${esc(s.title)}${s.name_zh ? ` <em>${esc(s.name_zh)}</em>` : ''}${visited}</span>
+        <span class="bt-height">${s.height_m ? `${s.height_m} m` : ''}</span>
+        <span class="bt-prov">${esc(s.province || '')}</span>
+        <span class="bt-phase"><i class="bridge-phase bridge-phase--${cls}">${phase}</i></span>
+        <span class="bt-stage">${info.warning
+          ? `<button type="button" class="bridge-warn-toggle" aria-expanded="false" title="Show note">${warnIcon(info.warning)}</button>` : ''}${esc(info.state || '')}</span>
+        <span class="bt-target">${esc(target)}</span>
+        <span class="bt-asof">${info.as_of ? fmtDate(info.as_of) : ''}</span>`;
+      const goTo = () => {
+        const dest = document.getElementById(`bridge-row-${s.id}`);
+        if (!dest) return;
+        dest.classList.add('in', 'bridge-row--flash');
+        dest.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => dest.classList.remove('bridge-row--flash'), 1800);
+      };
+      row.addEventListener('click', goTo);
+      row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(); } });
+      table.appendChild(row);
+      if (info.warning) {
+        const detail = el('div', 'bridge-todo-detail', `${warnIcon(info.warning)}${esc(info.warning)}`);
+        detail.hidden = true;
+        const tog = row.querySelector('.bridge-warn-toggle');
+        tog.addEventListener('click', e => {
+          e.stopPropagation();   // the row itself scrolls to the list entry
+          detail.hidden = !detail.hidden;
+          tog.setAttribute('aria-expanded', String(!detail.hidden));
+          row.classList.toggle('bridge-todo-row--open', !detail.hidden);
+        });
+        table.appendChild(detail);
+      }
+    };
+    left.forEach(addRow);
+    if (wish.length) {
+      table.appendChild(el('div', 'bridge-todo-sub', 'Nice to have'));
+      wish.forEach(addRow);
+    }
+    wrap.appendChild(table);
     return wrap;
   }
 
@@ -574,8 +673,9 @@
       `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` +
       (x.date ? ` <span class="bridge-status-date">${esc(x.date)}</span>` : '') + '</li>').join('');
     det.innerHTML = `
-      <summary>Status${info.state ? ` · ${esc(info.state)}` : ''}</summary>
+      <summary>${info.warning ? warnIcon(info.warning) : ''}Status${info.state ? ` · ${esc(info.state)}` : ''}</summary>
       <div class="bridge-status-body">
+        ${info.warning ? `<p class="bridge-warn-note">${warnIcon(info.warning)}${esc(info.warning)}</p>` : ''}
         <p>${esc(info.summary || '')}</p>
         ${srcs ? `<ul class="bridge-status-sources">${srcs}</ul>` : ''}
         ${info.as_of ? `<div class="bridge-status-asof">Checked ${esc(info.as_of)}</div>` : ''}

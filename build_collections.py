@@ -530,6 +530,10 @@ def facet_bridges(facet, records, echo):
             sub['status_info'] = b['status_info']
         if b.get('highlight'):
             sub['highlight'] = b['highlight']
+        if b.get('uc_year'):
+            sub['uc_year'] = b['uc_year']   # "Still to do" target fallback
+        if b.get('private_only'):
+            sub['private_only'] = True   # owner page only; _bridge_preview drops it
         # Reference imagery (renders/mockups saved from HighestBridges) for bridges
         # not yet visited — dropped into web/collections/bridge_renders/<slug>/ and
         # picked up by filename order. Lives under /collections/ so the middleware
@@ -589,7 +593,11 @@ def facet_bridges(facet, records, echo):
                 else:
                     sub['pending'] = 'No photos yet'
         else:
-            sub['pending'] = 'Pending' + (f" · UC {b['uc_year']}" if b.get('uc_year') else '')
+            # "UC <year>" only while work is actually under way, not for a bridge
+            # whose status says it hasn't started or is suspended
+            idle = re.match(r'(not started|suspended|on hold)',
+                            (b.get('status_info') or {}).get('state', ''), re.I)
+            sub['pending'] = 'Pending' + (f" · UC {b['uc_year']}" if b.get('uc_year') and not idle else '')
             if picked:
                 # Visited while under construction: the pending row stays (no tile),
                 # but the picked gallery hangs off it so the name can link in.
@@ -1234,10 +1242,14 @@ def _bridge_preview(full_tile, pub_ref_set, echo):
     or a phone photo for bridges with none), else its own cover if public, else the
     first public landscape — and its photo count. Photo lists never ship, and a
     private pinned cover is never used, so climb shots stay behind the password.
-    Renders live under /collections/ (gated), so their links are dropped too."""
+    Renders live under /collections/ (gated), so their links are dropped too.
+    Roster bridges flagged `private_only` are left out of the preview entirely."""
     picks = (_load_json(BRIDGE_PUBLIC_COVERS) or {}).get('covers', {})
     t = copy.deepcopy(full_tile)
     t['preview'] = True
+    t['subtiles'] = [s for s in t.get('subtiles') or [] if not s.get('private_only')]
+    for sec in t.get('sections') or []:
+        sec['subtiles'] = [s for s in sec.get('subtiles') or [] if not s.get('private_only')]
     no_thumb = []
     for s in _all_subtiles(t):
         photos = s.pop('photos', None) or []

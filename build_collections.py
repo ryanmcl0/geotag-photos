@@ -530,6 +530,8 @@ def facet_bridges(facet, records, echo):
             sub['status_info'] = b['status_info']
         if b.get('highlight'):
             sub['highlight'] = b['highlight']
+        if b.get('uc_year'):
+            sub['uc_year'] = b['uc_year']   # "Still to do" target fallback
         if b.get('private_only'):
             sub['private_only'] = True   # owner page only; _bridge_preview drops it
         # Reference imagery (renders/mockups saved from HighestBridges) for bridges
@@ -591,7 +593,11 @@ def facet_bridges(facet, records, echo):
                 else:
                     sub['pending'] = 'No photos yet'
         else:
-            sub['pending'] = 'Pending' + (f" · UC {b['uc_year']}" if b.get('uc_year') else '')
+            # "UC <year>" only while work is actually under way, not for a bridge
+            # whose status says it hasn't started or is suspended
+            idle = re.match(r'(not started|suspended|on hold)',
+                            (b.get('status_info') or {}).get('state', ''), re.I)
+            sub['pending'] = 'Pending' + (f" · UC {b['uc_year']}" if b.get('uc_year') and not idle else '')
             if picked:
                 # Visited while under construction: the pending row stays (no tile),
                 # but the picked gallery hangs off it so the name can link in.

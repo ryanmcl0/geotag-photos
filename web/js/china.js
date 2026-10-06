@@ -409,7 +409,9 @@
 
     const list = el('div', 'bridge-list');
     const ranked = tile.subtiles.filter(s => s.rank);
-    const extras = tile.subtiles.filter(s => !s.rank);
+    // Unranked extras: visited ones, then not-yet-visited nice-to-haves
+    const extras = tile.subtiles.filter(s => !s.rank && s.done);
+    const wishlist = tile.subtiles.filter(s => !s.rank && !s.done);
     let flip = false;
     ranked.forEach(s => {
       list.appendChild(buildBridgeRow(tile, s, flip));
@@ -421,6 +423,10 @@
         list.appendChild(buildBridgeRow(tile, s, flip));
         if (s.done && bridgePhotoCount(tile, s)) flip = !flip;
       });
+    }
+    if (wishlist.length) {
+      list.appendChild(el('div', 'bridge-extras-head', 'Nice to have'));
+      wishlist.forEach(s => list.appendChild(buildBridgeRow(tile, s, flip)));
     }
     app.appendChild(list);
 

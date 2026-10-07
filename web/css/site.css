@@ -477,6 +477,11 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 .landing-footer a:hover { color: var(--text); }
 .landing-footer svg { width: 22px; height: 22px; display: block; }
 
+/* copyright notice at the foot of every page (year kept current by photo-guard.js) */
+.site-copyright { padding: 18px 20px 30px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.site-copyright a { color: var(--muted-2); text-decoration: underline; text-underline-offset: 2px; }
+.site-copyright a:hover { color: var(--text); }
+
 /* lock badge */
 .lock-badge { position: absolute; top: 14px; right: 14px; z-index: 3; font-family: var(--head); letter-spacing: .14em; text-transform: uppercase; font-size: 11px; color: #ddd; background: rgba(0,0,0,.55); padding: 6px 10px; }
 

@@ -683,6 +683,8 @@ function initMap() {
         zoomControl: true
     });
 
+    map.attributionControl.addAttribution(`&copy; ${new Date().getFullYear()} Ryan McLoughlin, all photos`);
+
     const saved = localStorage.getItem(BASE_LAYER_KEY) || 'satellite';
     setBaseLayer(saved in BASE_LAYERS ? saved : 'satellite');
 

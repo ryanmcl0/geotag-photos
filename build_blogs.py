@@ -501,6 +501,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
     <script defer src="/js/analytics.js"></script>
+    <script defer src="/js/photo-guard.js"></script>
 </head>
 <body>
 {nav}
@@ -519,6 +520,8 @@ POST_TEMPLATE = '''<!DOCTYPE html>
         </figure>
         <article id="blog"></article>
     </main>
+
+    <footer class="site-copyright">&copy; <span class="copyright-year">2026</span> Ryan McLoughlin. All photos and content are copyrighted. Please <a href="mailto:ryanmcloughlin20@gmail.com">contact me</a> before using any content.</footer>
 
 {pswp}
 
@@ -558,6 +561,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
     <script defer src="/js/analytics.js"></script>
+    <script defer src="/js/photo-guard.js"></script>
 </head>
 <body>
 {nav}
@@ -569,6 +573,8 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
 {tiles}
         </div>
     </main>
+
+    <footer class="site-copyright">&copy; <span class="copyright-year">2026</span> Ryan McLoughlin. All photos and content are copyrighted. Please <a href="mailto:ryanmcloughlin20@gmail.com">contact me</a> before using any content.</footer>
 
     <script src="/js/unlock.js"></script>
     <script src="/js/posts.js"></script>

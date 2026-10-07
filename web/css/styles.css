@@ -1880,3 +1880,8 @@ details[open] .country-summary::after {
 .theme-dark .gallery-date-banner .gallery-date-count {
     color: #999;
 }
+
+/* copyright notice under the gallery grid (year kept current by photo-guard.js) */
+.gallery-view .site-copyright { padding: 28px 20px 36px; text-align: center; color: #888; font-size: 13px; line-height: 1.6; }
+.gallery-view .site-copyright a { color: #aaa; text-decoration: underline; text-underline-offset: 2px; }
+.gallery-view .site-copyright a:hover { color: #fff; }

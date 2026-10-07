@@ -81,6 +81,26 @@ window.Posts = (function () {
         location.reload();
     }
 
+    // A thumbnail that failed to load. Phone-library photos (trip "phone-...")
+    // aren't gated: web/phone/trips/* links into the RYAN drive, so locally a
+    // miss means the drive isn't mounted, and away from the local site the
+    // library simply isn't deployed. Say that instead of the padlock, which
+    // reads as "private". Everything else keeps the padlock.
+    function thumbFailed(img, ref) {
+        if (!(ref && ref.trip && ref.trip.startsWith('phone-'))) {
+            if (window.Gallery) Gallery.lockedCover(img);
+            return;
+        }
+        const local = !!(window.Gallery && Gallery.isLocal);
+        const d = document.createElement('div');
+        d.className = 'tile-cover-locked posts-phone-missing';
+        d.innerHTML = '<span class="pad">📱</span>' + (local ? 'Drive not mounted' : 'Local only');
+        d.title = local
+            ? 'Phone photo. Its thumbnail is on the RYAN drive, which is not mounted.'
+            : 'Phone photo. Only viewable on the local site.';
+        img.replaceWith(d);
+    }
+
     // Caption boxes grow with their text instead of scrolling inside a fixed
     // height. Re-fit on input, and whenever a box's width changes (a narrower box
     // wraps to more lines); the observer ignores the height changes fitting causes.
@@ -1687,6 +1707,7 @@ window.Posts = (function () {
                     img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
                     img.loading = 'lazy';
                     img.style.cssText = 'height:96px;border-radius:5px;display:block;cursor:pointer';
+                    img.addEventListener('error', () => thumbFailed(img, ref));
                     img.addEventListener('click', () => {
                         if (window.Gallery) Gallery.openLightbox(photoRefs, photoRefs.indexOf(ref),
                             { defaultPostId: post.id });
@@ -1867,7 +1888,7 @@ window.Posts = (function () {
             img.alt = '';
             img.title = 'On the waitlist';
             img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
-            img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+            img.addEventListener('error', () => thumbFailed(img, ref));
             img.addEventListener('click', () => {
                 if (window.Gallery) Gallery.openLightbox(waitOf(post), waitOf(post).indexOf(ref),
                     { defaultPostId: post.id });
@@ -1977,7 +1998,7 @@ window.Posts = (function () {
             img.alt = '';
             img.title = when;
             img.src = window.Gallery ? Gallery.photoUrl(entry, 'thumbnails') : '';
-            img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+            img.addEventListener('error', () => thumbFailed(img, entry));
             cell.appendChild(img);
         }
         const actions = document.createElement('div');
@@ -2053,7 +2074,7 @@ window.Posts = (function () {
         img.decoding = 'async';
         img.alt = '';
         img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
-        img.addEventListener('error', () => { if (window.Gallery) Gallery.lockedCover(img); });
+        img.addEventListener('error', () => thumbFailed(img, ref));
         img.addEventListener('click', () => {
             // Auto-suggestion sets are pseudo-posts whose id matches no draft;
             // the override lookup falls back to the current post for those.

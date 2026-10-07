@@ -298,8 +298,8 @@ def backup_expeditions_source(target_path: Path):
       - a snapshot of its working tree (exactly the files its git sees: tracked
         plus untracked-not-ignored, so uncommitted edits too) in the config
         backup repo under expeditions/, committed with the config sync;
-      - its commit history, pushed (all branches) to its own origin, but only
-        after GitHub confirms that remote is private.
+      - its commit history (branches already tracking an origin branch), pushed
+        to its own origin, but only after GitHub confirms that remote is private.
     """
     if not (EXPEDITIONS / '.git').exists():
         return
@@ -334,9 +334,26 @@ def backup_expeditions_source(target_path: Path):
         print(f"    ✗ Not pushing expeditions/ history: couldn't confirm {origin} is private "
               f"({(vis.stdout or vis.stderr).strip() or 'gh unavailable'})")
         return
-    push = subprocess.run(['git', 'push', '--all', 'origin'], cwd=EXPEDITIONS, capture_output=True, text=True)
+    # Only branches that already track an origin branch and have new commits:
+    # `push --all` would resurrect merged-and-deleted branches on the remote, and
+    # fail on a stale local main that is merely behind.
+    refs = subprocess.run(['git', 'for-each-ref', '--format=%(refname:short) %(upstream:short)', 'refs/heads'],
+                          cwd=EXPEDITIONS, capture_output=True, text=True).stdout.split('\n')
+    ahead = []
+    for line in filter(None, refs):
+        branch, _, upstream = line.partition(' ')
+        if upstream != f'origin/{branch}':
+            continue
+        n = subprocess.run(['git', 'rev-list', '--count', f'{upstream}..{branch}'],
+                           cwd=EXPEDITIONS, capture_output=True, text=True).stdout.strip()
+        if n not in ('', '0'):
+            ahead.append(branch)
+    if not ahead:
+        print("    ✓ expeditions/ history already on its private origin")
+        return
+    push = subprocess.run(['git', 'push', 'origin', *ahead], cwd=EXPEDITIONS, capture_output=True, text=True)
     if push.returncode == 0:
-        print(f"    ✓ Pushed expeditions/ history (all branches) → {origin} (private)")
+        print(f"    ✓ Pushed expeditions/ history ({', '.join(ahead)}) → {origin} (private)")
     else:
         print(f"    ✗ expeditions/ history push failed (push manually): {push.stderr.strip()}")
 

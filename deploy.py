@@ -214,9 +214,10 @@ def sync_config_backup(dry_run: bool = False):
             '--exclude', '.classify_cache.json',
             '--exclude', '.dims_cache.json',
             '--exclude', '*.bak',
-            # local_browse/ + plan doc are synced separately below — protect
-            # them from this rsync's --delete
+            # local_browse/ + plan doc + expeditions/ are synced separately
+            # below: protect them from this rsync's --delete
             '--exclude', 'local_browse',
+            '--exclude', '/expeditions',
             '--exclude', 'PHONE_PHOTOS_PLAN.md',
             str(src) + '/', str(target_path) + '/'
         ], check=True, capture_output=True)
@@ -266,6 +267,8 @@ def sync_config_backup(dry_run: bool = False):
         except subprocess.CalledProcessError as e:
             print(f"    ✗ private skills sync failed: {e.stderr.decode()}")
 
+    backup_expeditions_source(target_path)
+
     try:
         status = subprocess.run(['git', 'status', '--porcelain'],
                                 cwd=str(target_path), capture_output=True, text=True)
@@ -282,6 +285,118 @@ def sync_config_backup(dry_run: bool = False):
             print("    ✓ Committed config changes (push failed — push manually)")
     except subprocess.CalledProcessError as e:
         print(f"    ✗ Config commit failed: {e.stderr.decode()}")
+
+
+EXPEDITIONS = Path('expeditions')
+
+
+def backup_expeditions_source(target_path: Path):
+    """Keep the private expeditions/ app version-controlled away from this repo.
+
+    expeditions/ is its own nested git repo, excluded from this (public) one via
+    .git/info/exclude. Two private copies are kept:
+      - a snapshot of its working tree (exactly the files its git sees: tracked
+        plus untracked-not-ignored, so uncommitted edits too) in the config
+        backup repo under expeditions/, committed with the config sync;
+      - its commit history (branches already tracking an origin branch), pushed
+        to its own origin, but only after GitHub confirms that remote is private.
+    """
+    if not (EXPEDITIONS / '.git').exists():
+        return
+    try:
+        ls = subprocess.run(['git', 'ls-files', '-co', '--exclude-standard', '-z'],
+                            cwd=EXPEDITIONS, check=True, capture_output=True, text=True)
+        files = sorted({f for f in ls.stdout.split('\0') if f and (EXPEDITIONS / f).is_file()})
+        dest = target_path / 'expeditions'
+        dest.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['rsync', '-a', '--files-from=-', str(EXPEDITIONS) + '/', str(dest) + '/'],
+                       input='\n'.join(files), text=True, check=True, capture_output=True)
+        # --files-from never deletes: prune what the working tree no longer has
+        keep = set(files)
+        for p in sorted(dest.rglob('*'), reverse=True):
+            rel = p.relative_to(dest).as_posix()
+            if p.is_file() and rel not in keep:
+                p.unlink()
+            elif p.is_dir() and not any(p.iterdir()):
+                p.rmdir()
+        print(f"    ✓ Synced expeditions/ source ({len(files)} files) → {dest}")
+    except subprocess.CalledProcessError as e:
+        print(f"    ✗ expeditions snapshot failed: {e.stderr}")
+
+    origin = subprocess.run(['git', 'remote', 'get-url', 'origin'],
+                            cwd=EXPEDITIONS, capture_output=True, text=True).stdout.strip()
+    if not origin:
+        print("    ⚠️  expeditions/ has no origin remote; history stays local only")
+        return
+    vis = subprocess.run(['gh', 'repo', 'view', origin, '--json', 'visibility', '-q', '.visibility'],
+                         capture_output=True, text=True)
+    if vis.returncode != 0 or vis.stdout.strip() != 'PRIVATE':
+        print(f"    ✗ Not pushing expeditions/ history: couldn't confirm {origin} is private "
+              f"({(vis.stdout or vis.stderr).strip() or 'gh unavailable'})")
+        return
+    # Only branches that already track an origin branch and have new commits:
+    # `push --all` would resurrect merged-and-deleted branches on the remote, and
+    # fail on a stale local main that is merely behind.
+    refs = subprocess.run(['git', 'for-each-ref', '--format=%(refname:short) %(upstream:short)', 'refs/heads'],
+                          cwd=EXPEDITIONS, capture_output=True, text=True).stdout.split('\n')
+    ahead = []
+    for line in filter(None, refs):
+        branch, _, upstream = line.partition(' ')
+        if upstream != f'origin/{branch}':
+            continue
+        n = subprocess.run(['git', 'rev-list', '--count', f'{upstream}..{branch}'],
+                           cwd=EXPEDITIONS, capture_output=True, text=True).stdout.strip()
+        if n not in ('', '0'):
+            ahead.append(branch)
+    if not ahead:
+        print("    ✓ expeditions/ history already on its private origin")
+        return
+    push = subprocess.run(['git', 'push', 'origin', *ahead], cwd=EXPEDITIONS, capture_output=True, text=True)
+    if push.returncode == 0:
+        print(f"    ✓ Pushed expeditions/ history ({', '.join(ahead)}) → {origin} (private)")
+    else:
+        print(f"    ✗ expeditions/ history push failed (push manually): {push.stderr.strip()}")
+
+
+def build_expeditions(dry_run: bool = False) -> bool:
+    """Build the Expedition Tours app (expeditions/, a nested Next.js static
+    export with basePath /expeditions) into web/expeditions/.
+
+    Photos aren't bundled: the pages point at the site's own /photos R2 proxy,
+    and their trips' webps are already uploaded by the normal image sync.
+    Gating (all-access only, 404 otherwise) is in functions/_middleware.ts.
+    """
+    out, dest = EXPEDITIONS / 'out', Path('web/expeditions')
+    if dry_run:
+        print(f"    [dry-run] would build {EXPEDITIONS}/ and rsync {out}/ to {dest}/")
+        return True
+    # serve.sh --local symlinks the whole hosted-photos tree in here for dev;
+    # building with it present would copy every photo into the export.
+    dev_photos = EXPEDITIONS / 'public' / 'photos'
+    if dev_photos.is_symlink():
+        dev_photos.unlink()
+    elif dev_photos.exists():
+        print(f"    ✗ {dev_photos} is a real directory; remove it (it would be bundled)")
+        return False
+    env = {k: v for k, v in os.environ.items() if k != 'NEXT_PUBLIC_PHOTO_BASE'}
+    env['GEOTAG'] = str(Path.cwd())
+    try:
+        if not (EXPEDITIONS / 'node_modules').is_dir():
+            subprocess.run(['npm', 'ci'], cwd=EXPEDITIONS, env=env, check=True)
+        subprocess.run(['npm', 'run', 'build'], cwd=EXPEDITIONS, env=env, check=True,
+                       capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"    ✗ expeditions build failed:\n{(e.stdout or '')[-2000:]}{(e.stderr or '')[-2000:]}")
+        return False
+    if not (out / 'index.html').is_file():
+        print(f"    ✗ {out}/index.html missing after build")
+        return False
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['rsync', '-a', '--delete', '--exclude', '.DS_Store',
+                    str(out) + '/', str(dest) + '/'], check=True)
+    n = sum(1 for p in dest.rglob('*') if p.is_file())
+    print(f"    ✓ Built expeditions/ → {dest}/ ({n} files)")
+    return True
 
 
 def write_wrangler_toml(config: DeployConfig):
@@ -714,7 +829,8 @@ def main():
     parser.add_argument('--skip-images', action='store_true', help='Skip the R2 image sync (deploy code/manifests only)')
     parser.add_argument('--skip-pages', action='store_true', help='Skip Pages deployment')
     parser.add_argument('--no-prune', action='store_true', help='Do not remove trips that are no longer in config/trips.json')
-    parser.add_argument('--skip-config-backup', action='store_true', help='Skip syncing config/ to the private backup repo (CF_CONFIG_BACKUP_REPO)')
+    parser.add_argument('--skip-config-backup', action='store_true', help='Skip syncing config/ (and the expeditions/ source) to the private backup repo (CF_CONFIG_BACKUP_REPO)')
+    parser.add_argument('--skip-expeditions', action='store_true', help='Do not rebuild Expedition Tours; ship web/expeditions/ as it is')
     parser.add_argument('--prune-force', action='store_true', help='Allow pruning even when many trips would be removed (overrides the safety guard)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument('--trip', help='Upload only a specific trip slug')
@@ -815,6 +931,17 @@ def main():
         print("📊 Refreshing site stats...")
         from build_collections import emit_site_stats
         emit_site_stats(print)
+        print()
+
+    # Step 1e: Build Expedition Tours into web/expeditions/ (only where the private
+    # expeditions/ checkout exists). A failed build stops the deploy here, before
+    # R2 or Pages are touched.
+    if not args.skip_pages and not args.skip_expeditions and (EXPEDITIONS / 'package.json').exists():
+        print("🧭 Building Expedition Tours...")
+        if not build_expeditions(dry_run=args.dry_run):
+            print("❌ Expeditions build failed; nothing deployed "
+                  "(fix it, or --skip-expeditions to ship the existing web/expeditions/)")
+            sys.exit(1)
         print()
 
     # Step 2: Sync images to R2 (size-aware: skips unchanged, re-uploads changed,

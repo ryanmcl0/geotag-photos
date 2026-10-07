@@ -251,6 +251,10 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   width: 100%; height: 100%; border-radius: 6px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; background: #222; color: #777; font-size: 11px;
 }
+/* Phone photo whose thumbnail can't load (drive not mounted / not deployed):
+   centred, wrapping label; sized like its neighbours in the Phone strip. */
+.posts-phone-missing { text-align: center; line-height: 1.4; padding: 0 8px; box-sizing: border-box; }
+.posts-strip .posts-phone-missing { position: static; width: 128px; height: 96px; border-radius: 5px; }
 .posts-order {
   position: absolute; top: 5px; left: 5px; z-index: 2; width: 20px; height: 20px;
   border-radius: 50%; background: rgba(0,0,0,.65); color: #fff; font-size: 11px;
@@ -350,7 +354,8 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   font: inherit; font-size: 13px; padding: 8px 10px; width: 100%; box-sizing: border-box;
 }
 .posts-song::placeholder, .posts-caption::placeholder { color: #666; }
-.posts-caption { min-height: 60px; resize: vertical; }
+/* Height follows the text (posts.js fitCaption), so no inner scrollbar or drag handle. */
+.posts-caption { min-height: 60px; resize: none; overflow-y: hidden; }
 .posts-song:focus, .posts-caption:focus { outline: none; border-color: #666; }
 /* "already used" suggestions under the song field */
 .posts-song-wrap { position: relative; }

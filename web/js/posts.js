@@ -81,6 +81,23 @@ window.Posts = (function () {
         location.reload();
     }
 
+    // Caption boxes grow with their text instead of scrolling inside a fixed
+    // height. Re-fit on input, and whenever a box's width changes (a narrower box
+    // wraps to more lines); the observer ignores the height changes fitting causes.
+    function fitCaption(el) {
+        el.style.height = 'auto';
+        el.style.height = (el.scrollHeight + el.offsetHeight - el.clientHeight) + 'px';
+    }
+    const captionWidths = new WeakMap();
+    const captionResize = new ResizeObserver(entries => {
+        for (const { target } of entries) {
+            const w = target.clientWidth;
+            if (captionWidths.get(target) === w) continue;
+            captionWidths.set(target, w);
+            fitCaption(target);
+        }
+    });
+
     // Current-post chip inside the pill: shows which post "+ Post" / "Add"
     // target, with name and count; clicking it opens the post switcher.
     // Empty (hidden by CSS) until the posts doc has loaded.
@@ -1627,6 +1644,7 @@ window.Posts = (function () {
             caption.className = 'posts-caption';
             caption.placeholder = 'Caption';
             caption.value = post.caption || '';
+            caption.addEventListener('input', () => fitCaption(caption));
             caption.addEventListener('change', () => {
                 const v = caption.value.trim();
                 caption.value = v;
@@ -1637,6 +1655,7 @@ window.Posts = (function () {
                 });
             });
             meta.appendChild(caption);
+            captionResize.observe(caption);   // first fit once it is laid out
             card.appendChild(meta);
         }
 

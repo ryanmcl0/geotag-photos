@@ -25,10 +25,16 @@ const tokenFor = async (secret: string) =>
 // encoded stem against the raw names in private_photos and fails open.
 const decode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
 
+// Local dev hosts (wrangler pages dev, incl. a phone on the LAN), as in js/gallery.js.
+const isLocalHost = (h: string) =>
+    ['localhost', '127.0.0.1', '[::1]'].includes(h) || h.endsWith('.local') ||
+    /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+
 interface Env {
     PHOTOS_BUCKET: R2Bucket;
     CF_ALL_PASSWORD: string;
     CF_POSTS_PASSWORD: string;
+    ASSETS: Fetcher;
 }
 
 export const onRequest: PagesFunction<Env> = async (context) => {
@@ -74,6 +80,14 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     const object = await context.env.PHOTOS_BUCKET.get(key);
     if (!object) {
+        // wrangler pages dev simulates an empty bucket. Locally, serve the same file
+        // from the web/trips/<trip>/{display,thumbnails} symlinks into hosted-photos
+        // (after the checks above), so prebuilt pages that use /photos URLs, like
+        // Expedition Tours, render on localhost too.
+        if (isLocalHost(new URL(context.request.url).hostname)) {
+            const local = await context.env.ASSETS.fetch(new URL('/trips/' + parts.map(encodeURIComponent).join('/'), context.request.url));
+            if (local.ok && (local.headers.get('Content-Type') || '').startsWith('image/')) return local;
+        }
         return new Response('Not found', { status: 404 });
     }
 

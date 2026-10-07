@@ -1110,7 +1110,9 @@ window.Posts = (function () {
 
     const THEME_LABELS = {
         custom: 'Custom curated', story: 'Behind the scenes', province: 'By province',
-        place: 'Places', industrial: 'Industry', nature: 'Nature', wildlife: 'Wildlife'
+        place: 'Places', industrial: 'Industry', nature: 'Nature', wildlife: 'Wildlife',
+        'ig-records': 'Records & heights', 'ig-vault': 'Unposted vault',
+        'ig-scale': 'China at scale', 'ig-recent': 'Fresh trips', 'ig-mood': 'Moods & conditions'
     };
 
     // Local-only curation server (tools/curate_server.py): free-text queries
@@ -1195,18 +1197,42 @@ window.Posts = (function () {
             root.appendChild(p);
             return;
         }
-        let lastTheme = null;
+        // One collapsible section per theme, in order of first appearance.
+        // Sections start collapsed; the ones opened are remembered so the
+        // re-render after every edit doesn't fold them back up.
+        const byTheme = new Map();
         autoDoc.posts.forEach(post => {
             const theme = post.theme || 'other';
-            if (theme !== lastTheme) {
-                lastTheme = theme;
-                const h = document.createElement('h2');
-                h.className = 'posts-theme-head';
-                h.textContent = THEME_LABELS[theme] || theme;
-                root.appendChild(h);
-            }
-            root.appendChild(renderCard(root, post, 'auto'));
+            if (!byTheme.has(theme)) byTheme.set(theme, []);
+            byTheme.get(theme).push(post);
         });
+        const open = openThemes();
+        byTheme.forEach((posts, theme) => {
+            const sec = document.createElement('details');
+            sec.className = 'posts-theme';
+            sec.open = open.has(theme);
+            const head = document.createElement('summary');
+            head.className = 'posts-theme-head';
+            const label = document.createElement('span');
+            label.textContent = THEME_LABELS[theme] || theme;
+            const count = document.createElement('span');
+            count.className = 'posts-theme-count';
+            count.textContent = posts.length;
+            head.append(label, count);
+            sec.appendChild(head);
+            sec.addEventListener('toggle', () => {
+                const cur = openThemes();
+                if (sec.open) cur.add(theme); else cur.delete(theme);
+                try { localStorage.setItem(OPEN_THEMES_KEY, JSON.stringify([...cur])); } catch (e) { /* private mode */ }
+            });
+            posts.forEach(post => sec.appendChild(renderCard(root, post, 'auto')));
+            root.appendChild(sec);
+        });
+    }
+
+    const OPEN_THEMES_KEY = 'posts_open_themes';
+    function openThemes() {
+        try { return new Set(JSON.parse(localStorage.getItem(OPEN_THEMES_KEY)) || []); } catch (e) { return new Set(); }
     }
 
     // ---------- fuzzy song matching ----------

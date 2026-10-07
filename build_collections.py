@@ -1188,8 +1188,10 @@ def apply_subtile_covers(tile, id_index):
 
 
 def _locked_stub(facet, full_tile, pub_records, spec):
-    """Hub tile for a gated facet on the public page: cover + stat, no photo lists."""
-    stub = {'id': full_tile['id'], 'title': full_tile['title'], 'kind': 'locked', 'locked': True}
+    """Hub tile for a gated facet on the public page: cover + stat, no photo lists.
+    `locked_title` on the facet gives the tile a different name for locked visitors."""
+    stub = {'id': full_tile['id'], 'title': facet.get('locked_title') or full_tile['title'],
+            'kind': 'locked', 'locked': True}
     if full_tile.get('infographic'):
         stub['infographic'] = full_tile['infographic']
     if spec and spec != 'auto':

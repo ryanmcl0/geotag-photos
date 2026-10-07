@@ -350,7 +350,8 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   font: inherit; font-size: 13px; padding: 8px 10px; width: 100%; box-sizing: border-box;
 }
 .posts-song::placeholder, .posts-caption::placeholder { color: #666; }
-.posts-caption { min-height: 60px; resize: vertical; }
+/* Height follows the text (posts.js fitCaption), so no inner scrollbar or drag handle. */
+.posts-caption { min-height: 60px; resize: none; overflow-y: hidden; }
 .posts-song:focus, .posts-caption:focus { outline: none; border-color: #666; }
 /* "already used" suggestions under the song field */
 .posts-song-wrap { position: relative; }

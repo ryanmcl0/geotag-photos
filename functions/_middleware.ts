@@ -258,10 +258,26 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         if (!authed) return Response.redirect(new URL('/login', context.request.url), 302);
     }
 
+    const allAccess = allPassword !== undefined && allPassword !== ''
+        && cookieVal('all_access') === await tokenFor(allPassword);
+
+    // Expedition Tours: the DeepEast app, built into web/expeditions/ by deploy.py
+    // from the private expeditions/ checkout. It exists only for all-access visitors.
+    // Locked, every path under it (pages, chunks, RSC payloads, media) 404s as if it
+    // was never deployed, rather than offering the unlock prompt like Urbex does,
+    // and the nav links to it are stripped from the HTML below.
+    if ((path === '/expeditions' || path.startsWith('/expeditions/')) && !allAccess) {
+        return new Response('Not found', { status: 404 });
+    }
+
     if (await needsAllAccess(path, context)) {
-        const expected = allPassword ? await tokenFor(allPassword) : null;
-        const ok = expected !== null && cookieVal('all_access') === expected;
-        if (!ok) {
+        // The owner's posts cookie also opens private photo files (only the image
+        // files, not manifests or pages), matching the /photos proxy: on localhost
+        // the Posts manager loads its thumbnails from these /trips paths.
+        const postsPassword = context.env.CF_POSTS_PASSWORD;
+        const ownerPhoto = /^\/trips\/[^/]+\/(display|thumbnails)\//.test(path)
+            && !!postsPassword && cookieVal('posts_auth') === await tokenFor(postsPassword);
+        if (!allAccess && !ownerPhoto) {
             const isData = /\.(json|geojson)$/.test(path);
             return isData
                 ? new Response('Not found', { status: 404 })
@@ -295,12 +311,25 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     // While Highlights is off, strip its nav links out of every HTML page so the
     // site looks exactly as it did before the feature existed. The links stay in
-    // the static files; turning the flag on simply stops removing them.
+    // the static files; turning the flag on simply stops removing them. Links
+    // marked data-unlocked-only (Expedition Tours) are likewise removed for anyone
+    // without the all-access cookie.
     const contentType = response.headers.get('Content-Type') || '';
-    if (contentType.includes('text/html') && !(await highlightsEnabled(context))) {
-        response = new HTMLRewriter()
-            .on('a[href$="highlights.html"]', { element(el) { el.remove(); } })
-            .transform(response);
+    if (contentType.includes('text/html')) {
+        const stripHighlights = !(await highlightsEnabled(context));
+        if (stripHighlights || !allAccess) {
+            let rewriter = new HTMLRewriter();
+            if (stripHighlights) rewriter = rewriter.on('a[href$="highlights.html"]', { element(el) { el.remove(); } });
+            if (!allAccess) rewriter = rewriter.on('a[data-unlocked-only]', { element(el) { el.remove(); } });
+            response = rewriter.transform(response);
+        }
+        // The same file now renders differently per cookie, so the browser must not
+        // revalidate its copy with an ETag: the asset server would answer 304 to an
+        // unlocked reload and the locked page (no Expedition Tours link) would stick.
+        response = new Response(response.body, response);
+        response.headers.delete('ETag');
+        response.headers.set('Cache-Control', 'no-cache');
+        response.headers.append('Vary', 'Cookie');
     }
 
     // Local dev (serve.sh): never serve anything the browser cached, so edits to

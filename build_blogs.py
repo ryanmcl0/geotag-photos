@@ -457,6 +457,7 @@ NAV = '''    <nav class="topnav">
                     <a href="/highlights.html">Highlights</a>
                     <a href="/videos.html" data-gated>Videos</a>
                     <a href="/plans/" data-gated>Plans</a>
+                    <a href="/expeditions/" data-unlocked-only>Expedition Tours</a>
                 </div>
             </div>
             <a href="/about.html">About</a>

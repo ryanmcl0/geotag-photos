@@ -1671,6 +1671,9 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 
 @click.command()
 @click.option('--name', required=True, help='Trip name for display')
+@click.option('--display-name', default=None,
+              help='Name shown on the site instead of --name. --name still fixes the trip id, so a '
+                   'trip can be renamed without moving its photos, posts and config references.')
 @click.option('--gpx', required=False, default=None, type=click.Path(), help='Path to GPX file (omit for no-GPX trips — uses EXIF GPS + geocoded fallback)')
 @click.option('--kmz', 'kmz_path_str', default=None, type=click.Path(), help='KMZ/KML route file — used for route display and photo placement in no-GPX mode')
 @click.option('--photos', required=True, type=click.Path(exists=True), help='Path to photos directory')
@@ -1827,7 +1830,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
                    'START/END map badges, which are meaningless for a round trip.')
 @click.option('--test-mode', type=int, metavar='PERCENT', help='Test mode: process only X% of photos (e.g., 10 for 10%)')
 @click.option('--dry-run', is_flag=True, help='Preview without writing files')
-def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
+def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, time_overrides_json: Optional[str],
                  gpx_tolerance_hours: float, gpx_split_gap_km: float,
@@ -1870,6 +1873,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         sys.exit(1)
 
     slug = slugify(name)
+    shown_name = display_name or name
     if output:
         output_path = Path(output)
     else:
@@ -2952,7 +2956,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
 
     # Generate manifest
     manifest = {
-        'trip_name': name,
+        'trip_name': shown_name,
         'dates': {
             'start': trip_start,
             'end': trip_end
@@ -3042,7 +3046,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         # Update trips index
         index_path = update_trips_index(
             output_path,
-            name,
+            shown_name,
             manifest['dates'],
             len(processed_photos),
             countries=countries,
@@ -3053,7 +3057,7 @@ def process_trip(name: str, gpx: str, photos: str, output: Optional[str],
         name_year_m = re.match(r'^(\d{4})', name)
         year = int(name_year_m.group(1)) if name_year_m else int(manifest['dates']['start'][:4])
         trip_id = output_path.name
-        year_page, trip_page = generate_html_pages(output_path, name, trip_id, year)
+        year_page, trip_page = generate_html_pages(output_path, shown_name, trip_id, year)
         click.echo(f"Generated year page: {year_page}")
         click.echo(f"Generated trip page: {trip_page}")
 

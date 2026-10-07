@@ -161,6 +161,8 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
         cmd += ['--reindex']
 
     opts = trip.get('options', {})
+    if opts.get('display_name'):
+        cmd += ['--display-name', opts['display_name']]
     if opts.get('geosync'):
         cmd += ['--geosync', opts['geosync']]
     if opts.get('time_overrides'):

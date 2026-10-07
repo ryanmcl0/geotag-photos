@@ -147,6 +147,7 @@ def build() -> None:
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="css/site.css"/>
     <script defer src="/js/analytics.js"></script>
+    <script defer src="/js/photo-guard.js"></script>
 </head>
 <body>
 {NAV}
@@ -158,6 +159,8 @@ def build() -> None:
         <p class="powered-by" style="text-align:left;margin:14px 0 30px;">A small amount of the terabytes of footage I've been able to edit over the years.</p>
 {body}
     </main>
+
+    <footer class="site-copyright">&copy; <span class="copyright-year">2026</span> Ryan McLoughlin. All photos and content are copyrighted. Please <a href="mailto:ryanmcloughlin20@gmail.com">contact me</a> before using any content.</footer>
 
     <script src="js/unlock.js"></script>
     <script src="js/posts.js"></script>

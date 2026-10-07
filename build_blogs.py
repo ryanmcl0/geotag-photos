@@ -521,6 +521,8 @@ POST_TEMPLATE = '''<!DOCTYPE html>
         <article id="blog"></article>
     </main>
 
+    <footer class="site-copyright">&copy; <span class="copyright-year">2026</span> Ryan McLoughlin. All photos and content are copyrighted. Please <a href="mailto:ryanmcloughlin20@gmail.com">contact me</a> before using any content.</footer>
+
 {pswp}
 
     <script>window.BLOG = {data};</script>
@@ -571,6 +573,8 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
 {tiles}
         </div>
     </main>
+
+    <footer class="site-copyright">&copy; <span class="copyright-year">2026</span> Ryan McLoughlin. All photos and content are copyrighted. Please <a href="mailto:ryanmcloughlin20@gmail.com">contact me</a> before using any content.</footer>
 
     <script src="/js/unlock.js"></script>
     <script src="/js/posts.js"></script>

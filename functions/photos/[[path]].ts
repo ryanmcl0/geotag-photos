@@ -25,7 +25,13 @@ const tokenFor = async (secret: string) =>
 // encoded stem against the raw names in private_photos and fails open.
 const decode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
 
-export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD: string }> = async (context) => {
+interface Env {
+    PHOTOS_BUCKET: R2Bucket;
+    CF_ALL_PASSWORD: string;
+    CF_POSTS_PASSWORD: string;
+}
+
+export const onRequest: PagesFunction<Env> = async (context) => {
     const parts = (context.params.path as string[]).map(decode);
     const key = parts.join('/');
     const slug = parts[0] || '';
@@ -49,13 +55,19 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD
         ACCESS.private_trips.includes(slug) ||
         (ACCESS.private_photos[slug] || []).includes(stem));
 
+    // Restricted photos need the all-access cookie, or the owner's posts cookie:
+    // the Posts manager is owner-only, so a draft's photos must never show locked
+    // there just because See All happens to be off.
     if (restricted) {
-        const pass = context.env.CF_ALL_PASSWORD;
         const cookies = context.request.headers.get('Cookie') || '';
-        const match = cookies.split(';').map(c => c.trim()).find(c => c.startsWith('all_access='));
-        const val = match ? match.split('=').slice(1).join('=') : null;
-        const expected = pass ? await tokenFor(pass) : null;
-        if (expected === null || val !== expected) {
+        const cookieVal = (name: string) => {
+            const m = cookies.split(';').map(c => c.trim()).find(c => c.startsWith(name + '='));
+            return m ? m.split('=').slice(1).join('=') : null;
+        };
+        const holds = async (name: string, secret: string | undefined) =>
+            !!secret && cookieVal(name) === await tokenFor(secret);
+        if (!(await holds('all_access', context.env.CF_ALL_PASSWORD) ||
+              await holds('posts_auth', context.env.CF_POSTS_PASSWORD))) {
             return new Response('Not found', { status: 404 });
         }
     }

@@ -271,7 +271,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     }
 
     if (await needsAllAccess(path, context)) {
-        if (!allAccess) {
+        // The owner's posts cookie also opens private photo files (only the image
+        // files, not manifests or pages), matching the /photos proxy: on localhost
+        // the Posts manager loads its thumbnails from these /trips paths.
+        const postsPassword = context.env.CF_POSTS_PASSWORD;
+        const ownerPhoto = /^\/trips\/[^/]+\/(display|thumbnails)\//.test(path)
+            && !!postsPassword && cookieVal('posts_auth') === await tokenFor(postsPassword);
+        if (!allAccess && !ownerPhoto) {
             const isData = /\.(json|geojson)$/.test(path);
             return isData
                 ? new Response('Not found', { status: 404 })

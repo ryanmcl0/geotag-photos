@@ -49,6 +49,74 @@ except ImportError:
     sys.exit(1)
 
 
+# Per-trip files the site never reads that list more than the manifests show:
+# exif_cache.json and source_state.json cover every source file, hidden and
+# blocked photos included (name, time, often GPS); route.geojson.orig is the real
+# track kept when photo_privacy blanks a publish-from-private trip's route.
+LOCAL_ONLY_TRIP_FILES = ['exif_cache.json', 'source_state.json', 'route.geojson.orig']
+
+# Places routes must never show (home etc.), in the git-ignored config/:
+# [{"lat": .., "lon": .., "radius_km": ..}, ...]. Absent file = no zones.
+PRIVACY_ZONES_FILE = Path('config/privacy_zones.json')
+
+
+def apply_privacy_zones(trips_dir: Path):
+    """Cut every route point inside a privacy zone out of the deployed
+    route.geojson files (the local copies keep the full track). A line that
+    passes through a zone is split there rather than joined straight across."""
+    if not PRIVACY_ZONES_FILE.exists():
+        return
+    import math
+    zones = json.loads(PRIVACY_ZONES_FILE.read_text())
+
+    def inside(pt):
+        lon, lat = pt[0], pt[1]
+        for z in zones:
+            dy = (lat - z['lat']) * 111.32
+            dx = (lon - z['lon']) * 111.32 * math.cos(math.radians(z['lat']))
+            if math.hypot(dx, dy) < z['radius_km']:
+                return True
+        return False
+
+    def clip(line):
+        runs, run = [], []
+        for pt in line:
+            if inside(pt):
+                if len(run) > 1:
+                    runs.append(run)
+                run = []
+            else:
+                run.append(pt)
+        if len(run) > 1:
+            runs.append(run)
+        return runs
+
+    changed = 0
+    for path in trips_dir.glob('*/route.geojson'):
+        doc = json.loads(path.read_text())
+        feats, hit = [], False
+        for f in doc.get('features', []):
+            g = f.get('geometry') or {}
+            if g.get('type') == 'Point':
+                if inside(g['coordinates']):
+                    hit = True
+                    continue
+            elif g.get('type') in ('LineString', 'MultiLineString'):
+                lines = [g['coordinates']] if g['type'] == 'LineString' else g['coordinates']
+                runs = [r for line in lines for r in clip(line)]
+                if sum(map(len, runs)) != sum(map(len, lines)):
+                    hit = True
+                    if not runs:
+                        continue
+                    f = {**f, 'geometry': {'type': 'MultiLineString', 'coordinates': runs}}
+            feats.append(f)
+        if hit:
+            path.write_text(json.dumps({**doc, 'features': feats}))
+            changed += 1
+    if changed:
+        print(f"    ✓ Privacy zones: trimmed {changed} routes")
+
+
 class DeployConfig:
     def __init__(self):
         self.account_id = os.getenv('CF_ACCOUNT_ID')
@@ -735,6 +803,7 @@ class GitSyncer:
                     # removed (photo_privacy.unblocked_manifest). Deploying it would
                     # publish exactly the entries the blocked tier just took out.
                     '--exclude', 'trips/*/manifest.full.json',
+                    *(arg for name in LOCAL_ONLY_TRIP_FILES for arg in ('--exclude', f'trips/*/{name}')),
                     # local-only phone library mirror — never deployed
                     '--exclude', 'phone',
                     str(web_src) + '/', str(self.target_path) + '/'
@@ -743,6 +812,15 @@ class GitSyncer:
             except subprocess.CalledProcessError as e:
                 print(f"    ✗ Sync failed: {e.stderr.decode()}")
                 return False
+            # An --exclude also shields the mirror's copy from --delete, so copies
+            # deployed before a file was excluded have to be removed by hand.
+            stale = [f for name in LOCAL_ONLY_TRIP_FILES
+                     for f in self.target_path.glob(f'trips/*/{name}')]
+            for f in stale:
+                f.unlink()
+            if stale:
+                print(f"    ✓ Removed {len(stale)} local-only trip files from the mirror")
+            apply_privacy_zones(self.target_path / 'trips')
 
         # 1b. Plans section (private): web/plans symlinks into private_planning/page,
         # which is git-excluded from the public repo. Dereference (-L) the real files

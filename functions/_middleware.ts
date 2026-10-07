@@ -116,6 +116,9 @@ async function needsAllAccess(path: string, context: EventContext<Env, string, u
         if (fp.includes('*') || fp.includes(stem)) return false;
         if ((ACCESS.private_photos[slug] || []).includes(stem)) return true;
         if (slug.endsWith('-private')) return true;
+        // Checked before the index.json flags, which read as {} when that fetch
+        // fails: a private trip's files must not open up on a transient error.
+        if (ACCESS.private_trips.includes(slug)) return true;
         const flags = await tripFlags(context);
         if (flags[slug] === false) return true;
     }

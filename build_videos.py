@@ -74,6 +74,7 @@ NAV = '''    <nav class="topnav">
                 <div class="nav-more-menu">
                     <a href="videos.html" class="active">Videos</a>
                     <a href="plans/" data-gated>Plans</a>
+                    <a href="/expeditions/" data-unlocked-only>Expedition Tours</a>
                 </div>
             </div>
             <a href="about.html">About</a>

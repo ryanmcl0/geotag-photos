@@ -105,6 +105,7 @@ _private_photo_audit.html
 _trip_privacy_review.html
 
 *.txt
+!web/robots.txt
 _publish_review.html
 
 # ── Video browser (local-only feature; proxies + index + cuts live here) ─────

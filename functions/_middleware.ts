@@ -251,8 +251,15 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const sitePassword = context.env.CF_SITE_PASSWORD;
     const allPassword = context.env.CF_ALL_PASSWORD;
     const isAuthPath = ['/login', '/login.html', '/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path);
-    // The tab icon is needed on the login page itself, before anyone is signed in.
-    if (path === '/icons/favicon.svg') return context.next();
+    // The tab icon is needed on the login page itself, before anyone is signed in;
+    // robots.txt must reach crawlers, which never sign in.
+    if (path === '/icons/favicon.svg' || path === '/robots.txt') return context.next();
+
+    // With the site gate off there is nothing to sign in to: old links and QR
+    // invites (/login#qr=...) land on the map instead of a login form.
+    if (!sitePassword && (path === '/login' || path === '/login.html')) {
+        return Response.redirect(new URL('/', context.request.url), 302);
+    }
 
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {

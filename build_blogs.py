@@ -501,6 +501,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
     <script defer src="/js/analytics.js"></script>
+    <script defer src="/js/photo-guard.js"></script>
 </head>
 <body>
 {nav}
@@ -558,6 +559,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
     <script defer src="/js/analytics.js"></script>
+    <script defer src="/js/photo-guard.js"></script>
 </head>
 <body>
 {nav}

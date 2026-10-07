@@ -147,6 +147,7 @@ def build() -> None:
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="css/site.css"/>
     <script defer src="/js/analytics.js"></script>
+    <script defer src="/js/photo-guard.js"></script>
 </head>
 <body>
 {NAV}

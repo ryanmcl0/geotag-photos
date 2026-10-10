@@ -12,8 +12,8 @@ function countryName(cc) {
 // Configuration
 const CONFIG = {
     // Map settings
-    defaultCenter: [38.0, 82.0], // Default center
-    defaultZoom: 6,
+    defaultCenter: [30.0, 45.0], // Shown only until the trips index arrives (see fitToIndexBounds)
+    defaultZoom: 3,
     maxZoom: 18,
 
     // Cluster for readability once the map is regional enough. At world/continent
@@ -25,6 +25,7 @@ const CONFIG = {
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
     routeWeight: 3.25,
+    routeHitWeight: 22,      // invisible hover target around each route, px
     routeOpacity: 1,
     // Dark edge drawn under every route so the line reads on satellite imagery
     // and next to the markers sitting on it.
@@ -1153,9 +1154,16 @@ async function loadTripData() {
             return;
         }
 
+        // Frame every pin straight away from the bounds stamped in the index, rather
+        // than sitting on a default view until all trips have loaded and then jumping.
+        const framed = await fitToIndexBounds(trips);
+
+        // Fetch the trips' data a few at a time in parallel; they are still built
+        // one by one in index order, so colours and layering are unchanged.
+        const prefetched = prefetchTrips(trips, basePath, 8);
         for (const trip of trips) {
             try {
-                await loadSingleTrip(trip, basePath);
+                await loadSingleTrip(trip, basePath, prefetched.get(trip.id));
             } catch (e) {
                 console.warn(`Skipped trip ${trip.id}:`, e.message);
             }
@@ -1168,7 +1176,8 @@ async function loadTripData() {
         rebuildGlobalSiblingChain();
         updateTripInfo();
         await syncPrivateCoverage();
-        fitMapToBounds();
+        // Already framed from the index: only refit if something ended up off-screen.
+        fitMapToBounds({ onlyIfOffscreen: framed });
 
     } catch (error) {
         console.error('Failed to load trip data:', error);
@@ -1179,7 +1188,7 @@ async function loadTripData() {
 /**
  * Fetch and render a single trip's manifest + route onto the map.
  */
-async function loadSingleTrip(trip, basePath) {
+async function loadSingleTrip(trip, basePath, prefetched) {
     if (basePath === undefined) {
         basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
         if (new URLSearchParams(location.search).get('library') === 'phone') basePath += 'phone/';
@@ -1211,7 +1220,7 @@ async function loadSingleTrip(trip, basePath) {
         if (trip.route) {
             try {
                 const res = await fetch(`${tripPath}/route.geojson?t=${Date.now()}`);
-                if (res.ok) route = buildRouteLayer(await res.json(), color, trip.name);
+                if (res.ok) route = buildRouteLayer(await res.json(), color, trip);
             } catch (e) {
                 console.warn(`No route for pending trip ${trip.id}:`, e.message);
             }
@@ -1234,12 +1243,17 @@ async function loadSingleTrip(trip, basePath) {
         return;
     }
 
-    const [manifestRes, routeRes] = await Promise.all([
-        fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
-        fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
-    ]);
-    let manifest = await manifestRes.json();
-    const routeData = await routeRes.json();
+    let manifest, routeData;
+    if (prefetched) {
+        [manifest, routeData] = await prefetched;
+    } else {
+        const [manifestRes, routeRes] = await Promise.all([
+            fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
+            fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
+        ]);
+        manifest = await manifestRes.json();
+        routeData = await routeRes.json();
+    }
 
     // A filtered manifest omits some photos; unlocked sessions fetch the full one.
     if (manifest.filtered && checkAllAccess()) {
@@ -1271,7 +1285,7 @@ async function loadSingleTrip(trip, basePath) {
 
     const hasGpx = Boolean(manifest.source && manifest.source.gpx_path);
     tripLayers[trip.id] = {
-        route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip.name),
+        route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip),
         markers: buildMarkerLayer(manifest, hasGpx),
         color,
         hasGpx,
@@ -1487,23 +1501,46 @@ function formatDate(dateStr) {
 /**
  * Build a polyline layer for a trip's GPX route.
  */
-function buildRouteLayer(routeData, color, tripName) {
+function buildRouteLayer(routeData, color, trip) {
     const casing = L.geoJSON(routeData, {
         interactive: false,
         style: { ...CONFIG.routeCasing, lineCap: 'round', lineJoin: 'round' }
     });
+    // A trip can be several separate road trips (features tagged with `part`): each
+    // part gets the next palette colour after the trip's own and its own label/km.
+    const base = Math.max(0, CONFIG.routeColors.indexOf(color));
+    const colorFor = f => {
+        const part = f && f.properties && f.properties.part;
+        return part ? CONFIG.routeColors[(base + part) % CONFIG.routeColors.length] : color;
+    };
+    const kmLine = km => `<span class="route-tooltip-km">${Number(km).toLocaleString('en-GB')} km road trip</span>`;
+    const labelFor = f => {
+        const partLabel = f && f.properties && f.properties.part_label;
+        if (partLabel) {
+            const km = (trip.road_km_parts || {})[partLabel];
+            return `${trip.name}: ${partLabel}${km ? kmLine(km) : ''}`;
+        }
+        return trip.road_km ? `${trip.name}${kmLine(trip.road_km)}` : trip.name;
+    };
     const line = L.geoJSON(routeData, {
-        style: {
-            color: color,
+        interactive: false,
+        style: f => ({
+            color: colorFor(f),
             weight: CONFIG.routeWeight,
             opacity: CONFIG.routeOpacity,
             lineCap: 'round',
             lineJoin: 'round'
-        }
+        })
     });
-    line.bindTooltip(tripName, { permanent: false, sticky: true });
-    // Casing first so the coloured line draws on top of it.
-    return L.featureGroup([casing, line]);
+    // The drawn line is only a few pixels wide, so hovering it took pixel-perfect
+    // aim. An invisible, much wider copy on top catches the pointer instead.
+    const hit = L.geoJSON(routeData, {
+        style: f => ({ color: colorFor(f), weight: CONFIG.routeHitWeight, opacity: 0, lineCap: 'round', lineJoin: 'round' }),
+        onEachFeature: (f, layer) => layer.bindTooltip(labelFor(f),
+            { permanent: false, sticky: true, className: 'route-tooltip' })
+    });
+    // Casing first so the coloured line draws on top of it; the hit line goes last.
+    return L.featureGroup([casing, line, hit]);
 }
 
 /**
@@ -2015,7 +2052,7 @@ function createMultiPhotoPopup(marker, startPage) {
 /**
  * Fit map to show currently-visible trips' content
  */
-function fitMapToBounds() {
+function fitMapToBounds({ onlyIfOffscreen = false } = {}) {
     // pan:false — a fitBounds follows immediately, and the default pan would shift
     // the layer pane out from under the markers first (see initMap).
     if (window.matchMedia('(max-width: 768px)').matches) {
@@ -2036,9 +2073,67 @@ function fitMapToBounds() {
         bounds.extend(coverageLayer.getBounds());
     }
     if (bounds.isValid()) {
+        if (onlyIfOffscreen && map.getBounds().contains(bounds)) return;
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
         map.fitBounds(bounds, { padding: [50, 50], animate: !isMobile });
     }
+}
+
+/**
+ * First view: fit to the union of the trips' stamped `bounds` (public trips only,
+ * from their photos) plus the coverage pins, before any trip has loaded. Returns
+ * true when it framed something, so the post-load fit only corrects if needed.
+ */
+async function fitToIndexBounds(trips) {
+    const bounds = L.latLngBounds([]);
+    trips.forEach(t => { if (Array.isArray(t.bounds)) bounds.extend(t.bounds); });
+    await syncPrivateCoverage();
+    if (coverageLayer && map.hasLayer(coverageLayer) && coverageLayer.getLayers().length > 0) {
+        bounds.extend(coverageLayer.getBounds());
+    }
+    if (!bounds.isValid()) return false;
+    if (window.matchMedia('(max-width: 768px)').matches) {
+        map.invalidateSize({ animate: false, pan: false });
+    }
+    // Whole-number zooms leave the pins small in a mostly empty world (New York to
+    // Japan only fits at zoom 2), so this first view uses quarter steps for a snug
+    // frame. The next zoom in or out lands back on a whole level.
+    const snap = map.options.zoomSnap;
+    map.options.zoomSnap = 0.25;
+    map.setView(bounds.getCenter(), map.getBoundsZoom(bounds, false, L.point(100, 100)), { animate: false });
+    map.options.zoomSnap = snap;
+    return true;
+}
+
+/**
+ * Start fetching each trip's manifest + route, at most `limit` trips at a time.
+ * Returns tripId -> promise of [manifest, routeData]; placeholders are skipped.
+ */
+function prefetchTrips(trips, basePath, limit) {
+    const out = new Map();
+    const queue = [];
+    let active = 0;
+    const pump = () => {
+        while (active < limit && queue.length) {
+            const job = queue.shift();
+            active++;
+            job().finally(() => { active--; pump(); });
+        }
+    };
+    trips.forEach(trip => {
+        if (trip.pending) return;
+        const tripPath = `${basePath}${trip.path}`;
+        const p = new Promise((resolve, reject) => {
+            queue.push(() => Promise.all([
+                fetch(`${tripPath}/manifest.json?t=${Date.now()}`).then(r => r.json()),
+                fetch(`${tripPath}/route.geojson?t=${Date.now()}`).then(r => r.json()),
+            ]).then(resolve, reject));
+        });
+        p.catch(() => {});   // a failure surfaces when loadSingleTrip awaits it
+        out.set(trip.id, p);
+    });
+    pump();
+    return out;
 }
 
 /**

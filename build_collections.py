@@ -1091,6 +1091,7 @@ def main(collection, do_category, force):
     emit_site_stats(click.echo)
     emit_gallery_covers(click.echo)
     emit_gallery_highlights(click.echo)
+    stamp_road_km(click.echo)
     save_dims_cache()
 
 
@@ -1545,6 +1546,34 @@ def emit_gallery_highlights(echo):
     (OUT_DIR / 'gallery_highlights.json').write_text(json.dumps(out, indent=2))
     echo(f"✓ Wrote web/collections/gallery_highlights.json "
          f"({len(out)} galler{'y' if len(out) == 1 else 'ies'})")
+
+
+def stamp_road_km(echo):
+    """Stamp `road_km` on trips/index.json entries for trips that were road trips: the
+    sum of the km recorded for every roster leg (world + China road-trip rosters) whose
+    `trip` names that trip. Only roster figures are used, never the GPS line length,
+    which drift and recording gaps make unreliable. The map shows it on the route."""
+    km = {}
+    for f in ('world_road_trips.json', 'china_road_trips.json'):
+        p = ROOT / 'config' / f
+        if not p.exists():
+            continue
+        for leg in json.loads(p.read_text()).get('trips', []):
+            if leg.get('trip') and leg.get('km'):
+                km[leg['trip']] = km.get(leg['trip'], 0) + float(leg['km'])
+    idx_path = WEB_TRIPS / 'index.json'
+    idx = json.loads(idx_path.read_text())
+    stamped = 0
+    for t in idx.get('trips', []):
+        total = next((v for name, v in km.items()
+                      if slugify(name) == t['id'] or name == t.get('name')), None)
+        if total:
+            t['road_km'] = round(total)
+            stamped += 1
+        else:
+            t.pop('road_km', None)
+    idx_path.write_text(json.dumps(idx, indent=2))
+    echo(f"✓ Road-trip km on {stamped} trips in trips/index.json")
 
 
 def emit_site_stats(echo):

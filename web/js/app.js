@@ -25,6 +25,7 @@ const CONFIG = {
     // Route styling (colors for different trips)
     routeColors: ['#e11d48', '#2563eb', '#16a34a', '#ca8a04', '#9333ea', '#dc2626'],
     routeWeight: 3.25,
+    routeHitWeight: 22,      // invisible hover target around each route, px
     routeOpacity: 1,
     // Dark edge drawn under every route so the line reads on satellite imagery
     // and next to the markers sitting on it.
@@ -1211,7 +1212,7 @@ async function loadSingleTrip(trip, basePath) {
         if (trip.route) {
             try {
                 const res = await fetch(`${tripPath}/route.geojson?t=${Date.now()}`);
-                if (res.ok) route = buildRouteLayer(await res.json(), color, trip.name);
+                if (res.ok) route = buildRouteLayer(await res.json(), color, trip);
             } catch (e) {
                 console.warn(`No route for pending trip ${trip.id}:`, e.message);
             }
@@ -1271,7 +1272,7 @@ async function loadSingleTrip(trip, basePath) {
 
     const hasGpx = Boolean(manifest.source && manifest.source.gpx_path);
     tripLayers[trip.id] = {
-        route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip.name),
+        route: inCollectionMode ? L.featureGroup() : buildRouteLayer(routeData, color, trip),
         markers: buildMarkerLayer(manifest, hasGpx),
         color,
         hasGpx,
@@ -1487,12 +1488,13 @@ function formatDate(dateStr) {
 /**
  * Build a polyline layer for a trip's GPX route.
  */
-function buildRouteLayer(routeData, color, tripName) {
+function buildRouteLayer(routeData, color, trip) {
     const casing = L.geoJSON(routeData, {
         interactive: false,
         style: { ...CONFIG.routeCasing, lineCap: 'round', lineJoin: 'round' }
     });
     const line = L.geoJSON(routeData, {
+        interactive: false,
         style: {
             color: color,
             weight: CONFIG.routeWeight,
@@ -1501,9 +1503,17 @@ function buildRouteLayer(routeData, color, tripName) {
             lineJoin: 'round'
         }
     });
-    line.bindTooltip(tripName, { permanent: false, sticky: true });
-    // Casing first so the coloured line draws on top of it.
-    return L.featureGroup([casing, line]);
+    // The drawn line is only a few pixels wide, so hovering it took pixel-perfect
+    // aim. An invisible, much wider copy on top catches the pointer instead.
+    const hit = L.geoJSON(routeData, {
+        style: { color: color, weight: CONFIG.routeHitWeight, opacity: 0, lineCap: 'round', lineJoin: 'round' }
+    });
+    const label = trip.road_km
+        ? `${trip.name}<span class="route-tooltip-km">${Number(trip.road_km).toLocaleString('en-GB')} km road trip</span>`
+        : trip.name;
+    hit.bindTooltip(label, { permanent: false, sticky: true, className: 'route-tooltip' });
+    // Casing first so the coloured line draws on top of it; the hit line goes last.
+    return L.featureGroup([casing, line, hit]);
 }
 
 /**

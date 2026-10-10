@@ -534,6 +534,8 @@ details[open] .country-summary::after {
 .coverage-popup strong { display: block; margin-bottom: 2px; }
 .coverage-popup span { display: block; color: #8a8f98; font-size: 12px; }
 .coverage-popup-note { margin-top: 3px; font-size: 11px; }
+/* Route hover: trip name, plus the recorded distance on road trips. */
+.route-tooltip-km { display: block; margin-top: 2px; color: #8a8f98; font-size: 12px; }
 /* Hover caption for coverage pins (pointer devices; see buildCoverageMarkers). */
 .leaflet-tooltip.coverage-tip {
     padding: 8px 12px;

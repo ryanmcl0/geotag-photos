@@ -1506,25 +1506,39 @@ function buildRouteLayer(routeData, color, trip) {
         interactive: false,
         style: { ...CONFIG.routeCasing, lineCap: 'round', lineJoin: 'round' }
     });
+    // A trip can be several separate road trips (features tagged with `part`): each
+    // part gets the next palette colour after the trip's own and its own label/km.
+    const base = Math.max(0, CONFIG.routeColors.indexOf(color));
+    const colorFor = f => {
+        const part = f && f.properties && f.properties.part;
+        return part ? CONFIG.routeColors[(base + part) % CONFIG.routeColors.length] : color;
+    };
+    const kmLine = km => `<span class="route-tooltip-km">${Number(km).toLocaleString('en-GB')} km road trip</span>`;
+    const labelFor = f => {
+        const partLabel = f && f.properties && f.properties.part_label;
+        if (partLabel) {
+            const km = (trip.road_km_parts || {})[partLabel];
+            return `${trip.name}: ${partLabel}${km ? kmLine(km) : ''}`;
+        }
+        return trip.road_km ? `${trip.name}${kmLine(trip.road_km)}` : trip.name;
+    };
     const line = L.geoJSON(routeData, {
         interactive: false,
-        style: {
-            color: color,
+        style: f => ({
+            color: colorFor(f),
             weight: CONFIG.routeWeight,
             opacity: CONFIG.routeOpacity,
             lineCap: 'round',
             lineJoin: 'round'
-        }
+        })
     });
     // The drawn line is only a few pixels wide, so hovering it took pixel-perfect
     // aim. An invisible, much wider copy on top catches the pointer instead.
     const hit = L.geoJSON(routeData, {
-        style: { color: color, weight: CONFIG.routeHitWeight, opacity: 0, lineCap: 'round', lineJoin: 'round' }
+        style: f => ({ color: colorFor(f), weight: CONFIG.routeHitWeight, opacity: 0, lineCap: 'round', lineJoin: 'round' }),
+        onEachFeature: (f, layer) => layer.bindTooltip(labelFor(f),
+            { permanent: false, sticky: true, className: 'route-tooltip' })
     });
-    const label = trip.road_km
-        ? `${trip.name}<span class="route-tooltip-km">${Number(trip.road_km).toLocaleString('en-GB')} km road trip</span>`
-        : trip.name;
-    hit.bindTooltip(label, { permanent: false, sticky: true, className: 'route-tooltip' });
     // Casing first so the coloured line draws on top of it; the hit line goes last.
     return L.featureGroup([casing, line, hit]);
 }

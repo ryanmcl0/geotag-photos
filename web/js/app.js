@@ -1458,7 +1458,7 @@ function updateTripInfo() {
     const PENDING_COUNTRIES = [
         'Ireland','Montenegro','Slovakia',
     ];
-    const TOTAL_COUNTRIES = 56;
+    const TOTAL_COUNTRIES = 57;
 
     // One full list: every trip's countries (private ones included; the index
     // already lists them) plus those still to come, regardless of filters.

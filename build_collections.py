@@ -42,6 +42,9 @@ CLASSIFY_CONFIG = ROOT / 'config' / 'classifications.json'
 CLIP_CACHE = ROOT / 'config' / '.classify_cache.json'
 BRIDGE_VISITS = ROOT / 'config' / 'bridge_visits.json'
 BRIDGE_PICKS = ROOT / 'config' / 'bridge_photo_picks.json'
+# {trip: {photo id: province}} — hand corrections from tools/province_review_picker.py
+# for photos the boundary lookup files under the wrong province.
+PROVINCE_OVERRIDES = ROOT / 'config' / 'province_overrides.json'
 
 # A `building` value that opens "Day 12 …" is the day's itinerary, not a building.
 DAY_ITINERARY = re.compile(r'^\s*day\s*\d', re.I)
@@ -176,6 +179,10 @@ def load_member_photos(prov_index, exclude: set, echo) -> list:
     """Membership: with a province index, every geotagged photo inside a (non-excluded)
     province; with prov_index=None ('membership: all'), every geotagged photo, period."""
     trip_meta = load_trip_meta()
+    try:
+        overrides = json.loads(PROVINCE_OVERRIDES.read_text())
+    except (OSError, json.JSONDecodeError):
+        overrides = {}
     records = []
     scanned = 0
     for manifest_file in sorted(WEB_TRIPS.glob('*/manifest.json')):
@@ -186,13 +193,14 @@ def load_member_photos(prov_index, exclude: set, echo) -> list:
         if not manifest:
             continue
         meta = trip_meta.get(slug, {})
+        trip_overrides = overrides.get(slug) or {}
         for ph in manifest.get('photos', []):
             lat, lon = ph.get('lat'), ph.get('lon')
             if lat is None or lon is None:
                 continue
             scanned += 1
             if prov_index is not None:
-                province = prov_index.lookup(lat, lon)
+                province = trip_overrides.get(ph['id']) or prov_index.lookup(lat, lon)
                 if not province or province in exclude:
                     continue
             else:

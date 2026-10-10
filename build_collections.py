@@ -1091,6 +1091,8 @@ def main(collection, do_category, force):
     emit_site_stats(click.echo)
     emit_gallery_covers(click.echo)
     emit_gallery_highlights(click.echo)
+    stamp_road_km(click.echo)
+    stamp_trip_bounds(click.echo)
     save_dims_cache()
 
 
@@ -1545,6 +1547,72 @@ def emit_gallery_highlights(echo):
     (OUT_DIR / 'gallery_highlights.json').write_text(json.dumps(out, indent=2))
     echo(f"✓ Wrote web/collections/gallery_highlights.json "
          f"({len(out)} galler{'y' if len(out) == 1 else 'ies'})")
+
+
+def stamp_road_km(echo):
+    """Stamp `road_km` on trips/index.json entries for trips that were road trips: the
+    sum of the km recorded for every roster leg (world + China road-trip rosters) whose
+    `trip` names that trip. Only roster figures are used, never the GPS line length,
+    which drift and recording gaps make unreliable. The map shows it on the route.
+    Legs with a `part` (a labelled piece of the trip's route, see options.route_parts
+    in trips.json) are also kept per part in `road_km_parts`."""
+    km, parts = {}, {}
+    for f in ('world_road_trips.json', 'china_road_trips.json'):
+        p = ROOT / 'config' / f
+        if not p.exists():
+            continue
+        for leg in json.loads(p.read_text()).get('trips', []):
+            if leg.get('trip') and leg.get('km'):
+                km[leg['trip']] = km.get(leg['trip'], 0) + float(leg['km'])
+                if leg.get('part'):
+                    tp = parts.setdefault(leg['trip'], {})
+                    tp[leg['part']] = tp.get(leg['part'], 0) + float(leg['km'])
+    idx_path = WEB_TRIPS / 'index.json'
+    idx = json.loads(idx_path.read_text())
+    stamped = 0
+    for t in idx.get('trips', []):
+        name = next((n for n in km if slugify(n) == t['id'] or n == t.get('name')), None)
+        if name:
+            t['road_km'] = round(km[name])
+            stamped += 1
+        else:
+            t.pop('road_km', None)
+        if name and parts.get(name):
+            t['road_km_parts'] = {k: round(v) for k, v in parts[name].items()}
+        else:
+            t.pop('road_km_parts', None)
+    idx_path.write_text(json.dumps(idx, indent=2))
+    echo(f"✓ Road-trip km on {stamped} trips in trips/index.json")
+
+
+def stamp_trip_bounds(echo):
+    """Stamp `bounds` [[south, west], [north, east]] on PUBLIC trips in trips/index.json,
+    from the photos in the public manifest (or a placeholder's pins), so the map can
+    frame everything the moment the index arrives instead of after every trip loads.
+    Routes are left out on purpose: the deployed routes are trimmed around private
+    places, and a box drawn from the untrimmed local route could extend into one."""
+    idx_path = WEB_TRIPS / 'index.json'
+    idx = json.loads(idx_path.read_text())
+    stamped = 0
+    for t in idx.get('trips', []):
+        t.pop('bounds', None)
+        if t.get('public') is False:
+            continue
+        pts = []
+        mf = WEB_TRIPS / t['id'] / 'manifest.json'
+        if mf.exists():
+            pts = [(p['lat'], p['lon']) for p in json.loads(mf.read_text()).get('photos', [])
+                   if p.get('lat') is not None and p.get('lon') is not None]
+        elif t.get('pending'):
+            locs = t.get('locations') or ([{'location': t['location']}] if t.get('location') else [])
+            pts = [tuple(l['location']) for l in locs if l.get('location')]
+        if pts:
+            lats, lons = [p[0] for p in pts], [p[1] for p in pts]
+            t['bounds'] = [[round(min(lats), 4), round(min(lons), 4)],
+                           [round(max(lats), 4), round(max(lons), 4)]]
+            stamped += 1
+    idx_path.write_text(json.dumps(idx, indent=2))
+    echo(f"✓ Map bounds on {stamped} public trips in trips/index.json")
 
 
 def emit_site_stats(echo):

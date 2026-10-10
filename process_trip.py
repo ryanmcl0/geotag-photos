@@ -613,6 +613,8 @@ def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0,
     features = []
     for track in gpx.tracks:
         track_name = track.name or 'Track'
+        # Tracks tagged by process_all's route_parts: one of several road trips.
+        part_m = re.match(r'route-part-(\d+)$', track.type or '')
         sub_segments: list[list[list[float]]] = [[]]
         for segment in track.segments:
             for point in segment.points:
@@ -629,9 +631,13 @@ def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0,
             if simplify_tolerance > 0:
                 coords = _simplify_coords(coords, simplify_tolerance)
             name = track_name if len(sub_segments) == 1 else f"{track_name} (seg {i+1})"
+            props = {'name': name}
+            if part_m:
+                props['part'] = int(part_m.group(1))
+                props['part_label'] = track.description or ''
             features.append({
                 'type': 'Feature',
-                'properties': {'name': name},
+                'properties': props,
                 'geometry': {'type': 'LineString', 'coordinates': coords},
             })
 

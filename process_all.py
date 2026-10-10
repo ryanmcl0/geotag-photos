@@ -107,8 +107,12 @@ def gather_gpx_files(gpx_entry) -> list[Path]:
     return files
 
 
-def merge_gpx_to_temp(gpx_files: list[Path]) -> Path:
-    """Merge multiple GPX files into a single temp file. Returns the temp path."""
+def merge_gpx_to_temp(gpx_files: list[Path], parts: dict | None = None) -> Path:
+    """Merge multiple GPX files into a single temp file. Returns the temp path.
+
+    `parts` maps a file to (index, label) for trips whose route is several separate
+    road trips (options.route_parts); its tracks are tagged so gpx_to_geojson can
+    label each part of the drawn route."""
     try:
         import gpxpy
         import gpxpy.gpx
@@ -137,6 +141,9 @@ def merge_gpx_to_temp(gpx_files: list[Path]) -> Path:
             click.echo(f"  ⚠ Skipping unreadable GPX {f.name}: {e}", err=True)
             continue
         for track in gpx.tracks:
+            if parts and f in parts:
+                track.type = f'route-part-{parts[f][0]}'
+                track.description = parts[f][1]
             combined.tracks.append(track)
 
     tmp = tempfile.NamedTemporaryFile(suffix='.gpx', delete=False)
@@ -374,7 +381,19 @@ def process_all(force: bool, trip_filter: str | None, dry_run: bool, skip_existi
         tmp_gpx = None
         try:
             gpx_path = None
-            if trip.get('gpx'):
+            route_parts = (trip.get('options') or {}).get('route_parts')
+            if route_parts:
+                # A route made of several separate road trips: each part names its
+                # own GPX files, and its tracks are tagged with the part's label.
+                part_of = {}
+                for i, part in enumerate(route_parts):
+                    for f in gather_gpx_files(part['gpx']):
+                        part_of[f] = (i, part['label'])
+                gpx_files = list(part_of)
+                click.echo(f"  Merging {len(gpx_files)} GPX files in {len(route_parts)} route parts...")
+                tmp_gpx = merge_gpx_to_temp(gpx_files, part_of)
+                gpx_path = tmp_gpx
+            elif trip.get('gpx'):
                 gpx_files = gather_gpx_files(trip['gpx'])
                 if not gpx_files:
                     click.echo("  ⚠ No GPX files found — running in no-GPX mode")

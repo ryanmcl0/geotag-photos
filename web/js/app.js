@@ -12,8 +12,8 @@ function countryName(cc) {
 // Configuration
 const CONFIG = {
     // Map settings
-    defaultCenter: [38.0, 82.0], // Default center
-    defaultZoom: 6,
+    defaultCenter: [30.0, 45.0], // Shown only until the trips index arrives (see fitToIndexBounds)
+    defaultZoom: 3,
     maxZoom: 18,
 
     // Cluster for readability once the map is regional enough. At world/continent
@@ -1154,9 +1154,16 @@ async function loadTripData() {
             return;
         }
 
+        // Frame every pin straight away from the bounds stamped in the index, rather
+        // than sitting on a default view until all trips have loaded and then jumping.
+        const framed = await fitToIndexBounds(trips);
+
+        // Fetch the trips' data a few at a time in parallel; they are still built
+        // one by one in index order, so colours and layering are unchanged.
+        const prefetched = prefetchTrips(trips, basePath, 8);
         for (const trip of trips) {
             try {
-                await loadSingleTrip(trip, basePath);
+                await loadSingleTrip(trip, basePath, prefetched.get(trip.id));
             } catch (e) {
                 console.warn(`Skipped trip ${trip.id}:`, e.message);
             }
@@ -1169,7 +1176,8 @@ async function loadTripData() {
         rebuildGlobalSiblingChain();
         updateTripInfo();
         await syncPrivateCoverage();
-        fitMapToBounds();
+        // Already framed from the index: only refit if something ended up off-screen.
+        fitMapToBounds({ onlyIfOffscreen: framed });
 
     } catch (error) {
         console.error('Failed to load trip data:', error);
@@ -1180,7 +1188,7 @@ async function loadTripData() {
 /**
  * Fetch and render a single trip's manifest + route onto the map.
  */
-async function loadSingleTrip(trip, basePath) {
+async function loadSingleTrip(trip, basePath, prefetched) {
     if (basePath === undefined) {
         basePath = (typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.basePath) || '';
         if (new URLSearchParams(location.search).get('library') === 'phone') basePath += 'phone/';
@@ -1235,12 +1243,17 @@ async function loadSingleTrip(trip, basePath) {
         return;
     }
 
-    const [manifestRes, routeRes] = await Promise.all([
-        fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
-        fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
-    ]);
-    let manifest = await manifestRes.json();
-    const routeData = await routeRes.json();
+    let manifest, routeData;
+    if (prefetched) {
+        [manifest, routeData] = await prefetched;
+    } else {
+        const [manifestRes, routeRes] = await Promise.all([
+            fetch(`${tripPath}/manifest.json?t=${Date.now()}`),
+            fetch(`${tripPath}/route.geojson?t=${Date.now()}`)
+        ]);
+        manifest = await manifestRes.json();
+        routeData = await routeRes.json();
+    }
 
     // A filtered manifest omits some photos; unlocked sessions fetch the full one.
     if (manifest.filtered && checkAllAccess()) {
@@ -2025,7 +2038,7 @@ function createMultiPhotoPopup(marker, startPage) {
 /**
  * Fit map to show currently-visible trips' content
  */
-function fitMapToBounds() {
+function fitMapToBounds({ onlyIfOffscreen = false } = {}) {
     // pan:false — a fitBounds follows immediately, and the default pan would shift
     // the layer pane out from under the markers first (see initMap).
     if (window.matchMedia('(max-width: 768px)').matches) {
@@ -2046,9 +2059,67 @@ function fitMapToBounds() {
         bounds.extend(coverageLayer.getBounds());
     }
     if (bounds.isValid()) {
+        if (onlyIfOffscreen && map.getBounds().contains(bounds)) return;
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
         map.fitBounds(bounds, { padding: [50, 50], animate: !isMobile });
     }
+}
+
+/**
+ * First view: fit to the union of the trips' stamped `bounds` (public trips only,
+ * from their photos) plus the coverage pins, before any trip has loaded. Returns
+ * true when it framed something, so the post-load fit only corrects if needed.
+ */
+async function fitToIndexBounds(trips) {
+    const bounds = L.latLngBounds([]);
+    trips.forEach(t => { if (Array.isArray(t.bounds)) bounds.extend(t.bounds); });
+    await syncPrivateCoverage();
+    if (coverageLayer && map.hasLayer(coverageLayer) && coverageLayer.getLayers().length > 0) {
+        bounds.extend(coverageLayer.getBounds());
+    }
+    if (!bounds.isValid()) return false;
+    if (window.matchMedia('(max-width: 768px)').matches) {
+        map.invalidateSize({ animate: false, pan: false });
+    }
+    // Whole-number zooms leave the pins small in a mostly empty world (New York to
+    // Japan only fits at zoom 2), so this first view uses quarter steps for a snug
+    // frame. The next zoom in or out lands back on a whole level.
+    const snap = map.options.zoomSnap;
+    map.options.zoomSnap = 0.25;
+    map.setView(bounds.getCenter(), map.getBoundsZoom(bounds, false, L.point(100, 100)), { animate: false });
+    map.options.zoomSnap = snap;
+    return true;
+}
+
+/**
+ * Start fetching each trip's manifest + route, at most `limit` trips at a time.
+ * Returns tripId -> promise of [manifest, routeData]; placeholders are skipped.
+ */
+function prefetchTrips(trips, basePath, limit) {
+    const out = new Map();
+    const queue = [];
+    let active = 0;
+    const pump = () => {
+        while (active < limit && queue.length) {
+            const job = queue.shift();
+            active++;
+            job().finally(() => { active--; pump(); });
+        }
+    };
+    trips.forEach(trip => {
+        if (trip.pending) return;
+        const tripPath = `${basePath}${trip.path}`;
+        const p = new Promise((resolve, reject) => {
+            queue.push(() => Promise.all([
+                fetch(`${tripPath}/manifest.json?t=${Date.now()}`).then(r => r.json()),
+                fetch(`${tripPath}/route.geojson?t=${Date.now()}`).then(r => r.json()),
+            ]).then(resolve, reject));
+        });
+        p.catch(() => {});   // a failure surfaces when loadSingleTrip awaits it
+        out.set(trip.id, p);
+    });
+    pump();
+    return out;
 }
 
 /**

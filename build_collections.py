@@ -1092,6 +1092,7 @@ def main(collection, do_category, force):
     emit_gallery_covers(click.echo)
     emit_gallery_highlights(click.echo)
     stamp_road_km(click.echo)
+    stamp_trip_bounds(click.echo)
     save_dims_cache()
 
 
@@ -1574,6 +1575,36 @@ def stamp_road_km(echo):
             t.pop('road_km', None)
     idx_path.write_text(json.dumps(idx, indent=2))
     echo(f"✓ Road-trip km on {stamped} trips in trips/index.json")
+
+
+def stamp_trip_bounds(echo):
+    """Stamp `bounds` [[south, west], [north, east]] on PUBLIC trips in trips/index.json,
+    from the photos in the public manifest (or a placeholder's pins), so the map can
+    frame everything the moment the index arrives instead of after every trip loads.
+    Routes are left out on purpose: the deployed routes are trimmed around private
+    places, and a box drawn from the untrimmed local route could extend into one."""
+    idx_path = WEB_TRIPS / 'index.json'
+    idx = json.loads(idx_path.read_text())
+    stamped = 0
+    for t in idx.get('trips', []):
+        t.pop('bounds', None)
+        if t.get('public') is False:
+            continue
+        pts = []
+        mf = WEB_TRIPS / t['id'] / 'manifest.json'
+        if mf.exists():
+            pts = [(p['lat'], p['lon']) for p in json.loads(mf.read_text()).get('photos', [])
+                   if p.get('lat') is not None and p.get('lon') is not None]
+        elif t.get('pending'):
+            locs = t.get('locations') or ([{'location': t['location']}] if t.get('location') else [])
+            pts = [tuple(l['location']) for l in locs if l.get('location')]
+        if pts:
+            lats, lons = [p[0] for p in pts], [p[1] for p in pts]
+            t['bounds'] = [[round(min(lats), 4), round(min(lons), 4)],
+                           [round(max(lats), 4), round(max(lons), 4)]]
+            stamped += 1
+    idx_path.write_text(json.dumps(idx, indent=2))
+    echo(f"✓ Map bounds on {stamped} public trips in trips/index.json")
 
 
 def emit_site_stats(echo):

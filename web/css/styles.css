@@ -1704,47 +1704,108 @@ details[open] .country-summary::after {
     padding: 18px 22px 64px;
 }
 
+/* Gallery header: trip title (site heading face), summary, then the map/blog
+   links. Same Bebas Kai + Futura PT pairing as the static pages (site.css). */
+@font-face { font-family: 'Bebas Kai'; src: url('../fonts/BebasKai.ttf') format('truetype'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Futura PT'; src: url('../fonts/FuturaPT-Book.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+
 .gallery-toolbar {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    margin: 6px 0 28px;
 }
 
 .gallery-toolbar .gallery-title {
-    font-size: 1.05rem;
-    font-weight: 600;
+    font-family: 'Bebas Kai', 'Oswald', 'Arial Narrow', sans-serif;
+    font-weight: 400;
+    font-size: clamp(34px, 4.2vw, 56px);
+    line-height: 0.95;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     color: #1a1a1a;
-    margin-right: auto;
 }
 
-.gallery-switch {
+/* Faint dates + regions-visited lines under the title */
+.gallery-watermark {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: -4px;
+    font-family: 'Bebas Kai', 'Oswald', 'Arial Narrow', sans-serif;
+    font-size: 17px;
+    line-height: 1.15;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(0, 0, 0, 0.38);
+}
+
+.gallery-watermark[hidden] {
+    display: none;
+}
+
+/* Trip summary between the title and the links; spans the full width */
+.gallery-description {
+    font-family: 'Futura PT', 'Futura', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 17px;
+    line-height: 1.6;
+    color: #444;
+}
+
+.gallery-description p {
+    margin: 0;
+}
+
+.gallery-description p + p {
+    margin-top: 0.7em;
+}
+
+/* Trip context links (map, blog) under the summary; each opens a new tab */
+.gallery-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.gallery-links:empty {
+    display: none;
+}
+
+.gallery-link {
     display: inline-flex;
-    border: 1px solid #e5e5e5;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 18px 8px;
+    border: 1px solid #d5d5d5;
     border-radius: 999px;
-    overflow: hidden;
-}
-
-.gallery-switch a {
-    padding: 5px 14px;
-    font-size: 0.8rem;
-    color: #666;
+    font-family: 'Bebas Kai', 'Oswald', 'Arial Narrow', sans-serif;
+    font-size: 16px;
+    line-height: 1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #333;
     text-decoration: none;
-    transition: background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.gallery-switch a + a {
-    border-left: 1px solid #e5e5e5;
+.gallery-link-icon {
+    flex: none;
+    margin-top: -2px;
+    opacity: 0.7;
+    transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
-.gallery-switch a:hover {
-    background: #f5f5f5;
-}
-
-.gallery-switch a.active {
+.gallery-link:hover {
     background: #e11d48;
+    border-color: #e11d48;
     color: #fff;
+}
+
+.gallery-link:hover .gallery-link-icon {
+    opacity: 1;
+    transform: translate(1px, -1px);
 }
 
 .gallery-view .photo-grid {
@@ -1822,7 +1883,7 @@ details[open] .country-summary::after {
         padding: 14px 12px 64px;
     }
     /* Clear the floating hamburger toggle (top-left) */
-    .gallery-toolbar { padding-left: 52px; }
+    .gallery-toolbar .gallery-title { padding-left: 52px; min-height: 40px; display: flex; align-items: center; }
     .gallery-view .photo-grid { gap: 6px; }
     .gallery-view .photo-row { gap: 6px; }
 }
@@ -1837,28 +1898,25 @@ details[open] .country-summary::after {
 }
 
 .theme-dark .gallery-toolbar .gallery-title {
+    color: #fff;
+}
+
+.theme-dark .gallery-watermark {
+    color: rgba(255, 255, 255, 0.38);
+}
+
+.theme-dark .gallery-description {
+    color: #aeaeae;
+}
+
+.theme-dark .gallery-link {
+    border-color: rgba(255, 255, 255, 0.28);
     color: #f2f2f2;
 }
 
-.theme-dark .gallery-switch {
-    border-color: rgba(255, 255, 255, 0.18);
-}
-
-.theme-dark .gallery-switch a {
-    color: #b0b0b0;
-}
-
-.theme-dark .gallery-switch a + a {
-    border-left-color: rgba(255, 255, 255, 0.12);
-}
-
-.theme-dark .gallery-switch a:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: #f2f2f2;
-}
-
-.theme-dark .gallery-switch a.active {
+.theme-dark .gallery-link:hover {
     background: #e11d48;
+    border-color: #e11d48;
     color: #fff;
 }
 

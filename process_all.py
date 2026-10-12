@@ -175,6 +175,8 @@ def build_command(trip: dict, gpx_path: Path | None, skip_existing_images: bool 
     if opts.get('time_overrides'):
         import json as _json
         cmd += ['--time-overrides', _json.dumps(opts['time_overrides'])]
+    if opts.get('dates'):
+        cmd += ['--dates', f"{opts['dates']['start']},{opts['dates']['end']}"]
     if opts.get('filter_raws'):
         cmd += ['--filter-by-raws-in', opts['filter_raws']]
     if opts.get('exclude_raws'):

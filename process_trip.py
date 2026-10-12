@@ -1697,6 +1697,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
                    '"stamped_to":"2025-12-31","shift_seconds":34954980}]. Selects frames by '
                    'filename prefix and/or stamped date range and shifts them; applied BEFORE '
                    '--geosync. For a camera whose clock was wrong on part of a trip.')
+@click.option('--dates', 'dates_override', default=None, metavar='START,END',
+              help='Fix the trip date range (YYYY-MM-DD,YYYY-MM-DD) instead of deriving it '
+                   'from the GPX track or photo timestamps. For a GPX that starts after '
+                   'the first photos, or a known trip span.')
 @click.option('--gpx-tolerance-hours', default=2.0, type=float,
               help='Photos this far outside the GPX window get fallback placement (default: 2)')
 @click.option('--gpx-split-gap-km', default=5.0, type=float,
@@ -1842,6 +1846,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, time_overrides_json: Optional[str],
+                 dates_override: Optional[str],
                  gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float, max_gap_interp_km: float,
                  phone_gps: bool, phone_gps_dir: str, phone_gps_threshold_min: float,
@@ -2933,6 +2938,9 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
             (p['timestamp'] for p in processed_photos), name)
         if trip_start is None:
             trip_start = trip_end = datetime.now().date().isoformat()
+    if dates_override:
+        trip_start, trip_end = [d.strip() for d in dates_override.split(',', 1)]
+        click.echo(f"Date range fixed by config: {trip_start} – {trip_end}")
 
     # Report results
     click.echo(f"\nProcessed: {len(processed_photos)} photos")

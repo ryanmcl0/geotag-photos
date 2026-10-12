@@ -63,6 +63,25 @@ def load_blogs():
     return cfg.get('blogs', [])
 
 
+def emit_trip_blogs(echo=print):
+    """Trip id → its built blog posts → web/collections/trip_blogs.json, read by the
+    gallery page for its "Read the blog" button. Only live posts with a built page;
+    a post covering several trips is listed under each. 'public' lets the gallery
+    hide gated posts from locked visitors (their titles are already public on
+    blogs.html, so listing them here leaks nothing)."""
+    out = {}
+    for b in load_blogs():
+        if b.get('status') != 'live' or not (OUT_DIR / f"{b['slug']}.html").exists():
+            continue
+        for trip in b.get('trips', []):
+            out.setdefault(trip, []).append(
+                {'slug': b['slug'], 'title': b['title'], 'public': b.get('public', False)})
+    path = WEB / 'collections' / 'trip_blogs.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1))
+    echo(f"  ✓ {path.relative_to(ROOT)} ({len(out)} trip(s) with a blog)")
+
+
 def road_km_for(blog):
     """Total road-trip km for a blog. Precedence: explicit 'km' in config/blogs.json
     (use this for non-China trips — GPS route length is unreliable, canyon/desert drift
@@ -694,6 +713,7 @@ def main(only_slug, force_assets, dry_run):
         bc.save_dims_cache()
         click.echo(f"  ✓ web/blogs.html + {len(built)} post page(s)"
                    + (f" + {len(pending)} pending tile(s)" if pending else ''))
+        emit_trip_blogs(click.echo)
 
 
 if __name__ == '__main__':

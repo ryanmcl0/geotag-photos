@@ -96,8 +96,10 @@ async function bridgesPreviewEnabled(context: EventContext<Env, string, unknown>
 
 // gallery_highlights.json is id lists only — the gallery page renders just the ids
 // present in the manifest the visitor could load, and images stay behind the proxy.
+// trip_blogs.json maps trips to blog slugs + titles, which blogs.html already shows.
 const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json',
-    '/collections/gallery_covers.json', '/collections/gallery_highlights.json'];
+    '/collections/gallery_covers.json', '/collections/gallery_highlights.json',
+    '/collections/trip_blogs.json'];
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
     if (['/rooftopping', '/rooftopping.html'].includes(path)) return true;

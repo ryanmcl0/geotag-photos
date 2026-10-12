@@ -1009,6 +1009,10 @@ def main():
         print("📊 Refreshing site stats...")
         from build_collections import emit_site_stats
         emit_site_stats(print)
+        # Gallery "Read the blog" buttons: refreshed here too so a blogs.json
+        # edit ships without a full build_blogs run.
+        from build_blogs import emit_trip_blogs
+        emit_trip_blogs(print)
         print()
 
     # Step 1e: Build Expedition Tours into web/expeditions/ (only where the private

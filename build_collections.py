@@ -1091,6 +1091,7 @@ def main(collection, do_category, force):
     emit_site_stats(click.echo)
     emit_gallery_covers(click.echo)
     emit_gallery_highlights(click.echo)
+    emit_gallery_descriptions(click.echo)
     stamp_road_km(click.echo)
     stamp_trip_bounds(click.echo)
     save_dims_cache()
@@ -1519,6 +1520,27 @@ def emit_gallery_covers(echo):
     (OUT_DIR / 'gallery_covers.json').write_text(json.dumps(covers, indent=2))
     echo(f"✓ Wrote web/collections/gallery_covers.json ({len(covers)} pinned cover"
          f"{'' if len(covers) == 1 else 's'})")
+
+
+def emit_gallery_descriptions(echo):
+    """Per-trip summaries (config/gallery_descriptions.json) →
+    web/collections/gallery_descriptions.json, shown at the top of the gallery
+    page. Fail-closed: only trips the index marks public are published, since the
+    file is readable by locked visitors."""
+    cfg_path = ROOT / 'config' / 'gallery_descriptions.json'
+    if not cfg_path.exists():
+        return
+    texts = json.loads(cfg_path.read_text()).get('descriptions') or {}
+    index = json.loads((WEB_TRIPS / 'index.json').read_text())
+    public = {t['id'] for t in index.get('trips', []) if t.get('public') is True}
+    out = {}
+    for slug, text in texts.items():
+        if slug not in public:
+            echo(f"  ⚠ descriptions: trip '{slug}' not a public trip — skipped")
+        elif (text or '').strip():
+            out[slug] = text.strip()
+    (OUT_DIR / 'gallery_descriptions.json').write_text(json.dumps(out, indent=2, ensure_ascii=False))
+    echo(f"✓ Wrote web/collections/gallery_descriptions.json ({len(out)} trip(s))")
 
 
 def emit_gallery_highlights(echo):

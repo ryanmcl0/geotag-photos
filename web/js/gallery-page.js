@@ -143,6 +143,23 @@
         }
     }
 
+    // Trip summary (web/collections/gallery_descriptions.json) between the title
+    // and the links; blank lines in the text split paragraphs. Trips without one
+    // show nothing.
+    async function renderDescription(el, tripId) {
+        let text = '';
+        try {
+            const res = await fetch(`${VIEW_CONFIG.basePath || ''}collections/gallery_descriptions.json?t=${Date.now()}`);
+            if (res.ok) text = (await res.json())[tripId] || '';
+        } catch (e) { /* no summary */ }
+        el.replaceChildren(...text.split(/\n\s*\n/).filter(s => s.trim()).map(s => {
+            const p = document.createElement('p');
+            p.textContent = s.trim();
+            return p;
+        }));
+        el.hidden = !el.childElementCount;
+    }
+
     const POP_OUT_ICON =
         '<svg class="gallery-link-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' +
         '<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8V4.8a.8.8 0 0 1 .8-.8h3.2" ' +
@@ -160,18 +177,22 @@
         return a;
     }
 
-    // Header: trip title, then context links each opening in a new tab: its map,
-    // plus its blog post(s) where one has been written. A trip with two posts
-    // labels each by the part of its title after the colon ("Northwest Regions").
+    // Header: trip title, its summary, then context links each opening in a new
+    // tab: its map, plus its blog post(s) where one has been written. A trip with
+    // two posts labels each by the part of its title after the colon
+    // ("Northwest Regions").
     async function renderToolbar(trip) {
         const bar = document.getElementById('gallery-toolbar');
         if (!bar) return;
         const title = document.createElement('span');
         title.className = 'gallery-title';
         title.textContent = formatTripName(trip.name);
+        const desc = document.createElement('div');
+        desc.className = 'gallery-description';
+        desc.hidden = true;
         const links = document.createElement('div');
         links.className = 'gallery-links';
-        bar.replaceChildren(title, links);
+        bar.replaceChildren(title, desc, links);
 
         if (!trip.pending) {
             const phoneLib = new URLSearchParams(location.search).get('library') === 'phone';
@@ -179,6 +200,8 @@
                 `&year=${tripYear(trip)}${phoneLib ? '&library=phone' : ''}`;
             links.appendChild(linkButton(mapHref, 'See the map'));
         }
+
+        renderDescription(desc, trip.id);
 
         const blogs = await loadTripBlogs(trip.id);
         blogs.forEach(b => {

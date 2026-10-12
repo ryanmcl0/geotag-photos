@@ -130,18 +130,63 @@
         if (countEl) countEl.textContent = count || '';
     }
 
-    function renderToolbar(trip) {
+    // Built posts per trip (web/collections/trip_blogs.json, from build_blogs.py).
+    // Gated posts are only offered to unlocked visitors.
+    async function loadTripBlogs(tripId) {
+        try {
+            const res = await fetch(`${VIEW_CONFIG.basePath || ''}collections/trip_blogs.json?t=${Date.now()}`);
+            if (!res.ok) return [];
+            const blogs = (await res.json())[tripId] || [];
+            return blogs.filter(b => b.public || checkAllAccess());
+        } catch (e) {
+            return [];
+        }
+    }
+
+    const POP_OUT_ICON =
+        '<svg class="gallery-link-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' +
+        '<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8V4.8a.8.8 0 0 1 .8-.8h3.2" ' +
+        'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    function linkButton(href, label, title) {
+        const a = document.createElement('a');
+        a.className = 'gallery-link';
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        if (title) a.title = title;
+        a.innerHTML = `<span></span>${POP_OUT_ICON}`;
+        a.firstChild.textContent = label;
+        return a;
+    }
+
+    // Header: trip title, then context links each opening in a new tab: its map,
+    // plus its blog post(s) where one has been written. A trip with two posts
+    // labels each by the part of its title after the colon ("Northwest Regions").
+    async function renderToolbar(trip) {
         const bar = document.getElementById('gallery-toolbar');
         if (!bar) return;
-        const slug = trip.id.replace(/-\d{4}$/, '');
-        const mapHref = `${VIEW_CONFIG.basePath}${tripYear(trip)}/${slug}/index.html`;
-        bar.innerHTML = `
-            <span class="gallery-title">${formatTripName(trip.name)}</span>
-            <span class="gallery-switch">
-                <a href="${mapHref}">Map</a>
-                <a href="${location.href}" class="active" aria-current="page">Gallery</a>
-            </span>
-        `;
+        const title = document.createElement('span');
+        title.className = 'gallery-title';
+        title.textContent = formatTripName(trip.name);
+        const links = document.createElement('div');
+        links.className = 'gallery-links';
+        bar.replaceChildren(title, links);
+
+        if (!trip.pending) {
+            const phoneLib = new URLSearchParams(location.search).get('library') === 'phone';
+            const mapHref = `${VIEW_CONFIG.basePath}map.html?mode=trip&trip=${encodeURIComponent(trip.id)}` +
+                `&year=${tripYear(trip)}${phoneLib ? '&library=phone' : ''}`;
+            links.appendChild(linkButton(mapHref, 'See the map'));
+        }
+
+        const blogs = await loadTripBlogs(trip.id);
+        blogs.forEach(b => {
+            const label = blogs.length > 1
+                ? `Read: ${b.title.split(':').pop().trim()}`
+                : 'Read the blog';
+            links.appendChild(linkButton(`${VIEW_CONFIG.basePath}blogs/${b.slug}.html`, label, b.title));
+        });
     }
 
     // Fill in any missing aspect ratios by measuring the thumbnails, so the

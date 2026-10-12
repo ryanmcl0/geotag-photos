@@ -218,15 +218,17 @@ def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
 def load_geotag_overrides(raw_overrides: list) -> list:
     """
     Parse geotag_overrides from trip config. Each entry has ids_from, ids_to (strings
-    with numeric suffix, e.g. "RM101884"), lat, lon. Returns list of
-    (from_num, to_num, lat, lon) tuples for fast range checks.
+    with numeric suffix, e.g. "RM101884"), lat, lon, and an optional building that
+    replaces the raw-folder label (a friend's card filed under their name rather
+    than the place). Returns (from_num, to_num, lat, lon, building) tuples.
     """
     result = []
     for o in (raw_overrides or []):
         try:
             from_num = int(''.join(filter(str.isdigit, str(o['ids_from']))))
             to_num   = int(''.join(filter(str.isdigit, str(o['ids_to']))))
-            result.append((from_num, to_num, float(o['lat']), float(o['lon'])))
+            result.append((from_num, to_num, float(o['lat']), float(o['lon']),
+                           o.get('building') or None))
         except (KeyError, ValueError):
             pass
     return result
@@ -283,14 +285,15 @@ def apply_time_override(photo_stem: str, photo_time, overrides: list):
 
 
 def apply_geotag_override(photo_stem: str, overrides: list) -> Optional[dict]:
-    """Return fixed {lat, lon} if photo_stem's numeric ID falls in any override range."""
+    """Return fixed {lat, lon[, building]} if photo_stem's numeric ID falls in any
+    override range."""
     digits = ''.join(filter(str.isdigit, photo_stem))
     if not digits or not overrides:
         return None
     num = int(digits)
-    for from_num, to_num, lat, lon in overrides:
+    for from_num, to_num, lat, lon, building in overrides:
         if from_num <= num <= to_num:
-            return {'lat': lat, 'lon': lon}
+            return {'lat': lat, 'lon': lon, **({'building': building} if building else {})}
     return None
 
 
@@ -2527,7 +2530,7 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
         # Geotag overrides take highest priority — bypass all GPS logic for matched IDs.
         _override = apply_geotag_override(photo_file.stem, geotag_overrides_parsed)
         if _override:
-            gps = _override
+            gps = {'lat': _override['lat'], 'lon': _override['lon']}
             gps_source = 'geotag_override'
         elif forced_untimed:
             _uloc = building_coords.get(untimed_label.strip().lower()) if untimed_label else None
@@ -2584,6 +2587,8 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
         # Untimed-to-fallback photos get their explicit label as the cluster title.
         if forced_untimed and untimed_label:
             building_name = untimed_label
+        if _override and _override.get('building'):
+            building_name = _override['building']
 
         if exclude_building_set and building_name and building_name.strip().lower() in exclude_building_set:
             continue

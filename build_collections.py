@@ -1091,6 +1091,8 @@ def main(collection, do_category, force):
     emit_site_stats(click.echo)
     emit_gallery_covers(click.echo)
     emit_gallery_highlights(click.echo)
+    emit_gallery_descriptions(click.echo)
+    emit_gallery_regions(click.echo)
     stamp_road_km(click.echo)
     stamp_trip_bounds(click.echo)
     save_dims_cache()
@@ -1519,6 +1521,52 @@ def emit_gallery_covers(echo):
     (OUT_DIR / 'gallery_covers.json').write_text(json.dumps(covers, indent=2))
     echo(f"✓ Wrote web/collections/gallery_covers.json ({len(covers)} pinned cover"
          f"{'' if len(covers) == 1 else 's'})")
+
+
+def emit_gallery_descriptions(echo):
+    """Per-trip summaries (config/gallery_descriptions.json) →
+    web/collections/gallery_descriptions.json, shown at the top of the gallery
+    page. Fail-closed: only trips the index marks public are published, since the
+    file is readable by locked visitors."""
+    cfg_path = ROOT / 'config' / 'gallery_descriptions.json'
+    if not cfg_path.exists():
+        return
+    texts = json.loads(cfg_path.read_text()).get('descriptions') or {}
+    index = json.loads((WEB_TRIPS / 'index.json').read_text())
+    public = {t['id'] for t in index.get('trips', []) if t.get('public') is True}
+    out = {}
+    for slug, text in texts.items():
+        if slug not in public:
+            echo(f"  ⚠ descriptions: trip '{slug}' not a public trip — skipped")
+        elif (text or '').strip():
+            out[slug] = text.strip()
+    (OUT_DIR / 'gallery_descriptions.json').write_text(json.dumps(out, indent=2, ensure_ascii=False))
+    echo(f"✓ Wrote web/collections/gallery_descriptions.json ({len(out)} trip(s))")
+
+
+def emit_gallery_regions(echo):
+    """Regions visited per trip (config/gallery_regions.json), shown under the title
+    on the gallery page. Public and publish-from-private trips →
+    web/collections/gallery_regions.json (readable when locked); fully private
+    trips → gallery_regions.all.json, which the middleware gates behind See All."""
+    cfg_path = ROOT / 'config' / 'gallery_regions.json'
+    if not cfg_path.exists():
+        return
+    regions = json.loads(cfg_path.read_text()).get('regions') or {}
+    index = json.loads((WEB_TRIPS / 'index.json').read_text())
+    pfp_path = ROOT / 'config' / 'public_from_private.json'
+    pfp = set(json.loads(pfp_path.read_text()).get('trips') or {}) if pfp_path.exists() else set()
+    known = {t['id']: t.get('public') is True or t['id'] in pfp for t in index.get('trips', [])}
+    public, private = {}, {}
+    for slug, text in regions.items():
+        if slug not in known:
+            echo(f"  ⚠ regions: trip '{slug}' not in the index — skipped")
+        elif (text or '').strip():
+            (public if known[slug] else private)[slug] = text.strip()
+    for name, data in (('gallery_regions.json', public), ('gallery_regions.all.json', private)):
+        (OUT_DIR / name).write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    echo(f"✓ Wrote web/collections/gallery_regions.json ({len(public)} public, "
+         f"{len(private)} private trip(s))")
 
 
 def emit_gallery_highlights(echo):

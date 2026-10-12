@@ -130,18 +130,139 @@
         if (countEl) countEl.textContent = count || '';
     }
 
-    function renderToolbar(trip) {
+    // Built posts per trip (web/collections/trip_blogs.json, from build_blogs.py).
+    // Gated posts are only offered to unlocked visitors.
+    async function loadTripBlogs(tripId) {
+        try {
+            const res = await fetch(`${VIEW_CONFIG.basePath || ''}collections/trip_blogs.json?t=${Date.now()}`);
+            if (!res.ok) return [];
+            const blogs = (await res.json())[tripId] || [];
+            return blogs.filter(b => b.public || checkAllAccess());
+        } catch (e) {
+            return [];
+        }
+    }
+
+    // Trip summary (web/collections/gallery_descriptions.json) between the title
+    // and the links; blank lines in the text split paragraphs. Trips without one
+    // show nothing.
+    async function renderDescription(el, tripId) {
+        let text = '';
+        try {
+            const res = await fetch(`${VIEW_CONFIG.basePath || ''}collections/gallery_descriptions.json?t=${Date.now()}`);
+            if (res.ok) text = (await res.json())[tripId] || '';
+        } catch (e) { /* no summary */ }
+        el.replaceChildren(...text.split(/\n\s*\n/).filter(s => s.trim()).map(s => {
+            const p = document.createElement('p');
+            p.textContent = s.trim();
+            return p;
+        }));
+        el.hidden = !el.childElementCount;
+    }
+
+    // Watermark-style trip dates, e.g. "13 Jul – 3 Aug 2026". Trips longer than
+    // two months (city year-buckets) read as months only: "Dec 2016 – Jan 2018".
+    function formatWatermarkDates(start, end) {
+        const s = new Date(start + 'T00:00:00Z');
+        const e = new Date((end || start) + 'T00:00:00Z');
+        if (isNaN(s) || isNaN(e)) return '';
+        // Fixed names: en-GB's short September is "Sept", which breaks the rhythm.
+        const mon = d => ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
+            'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+        const day = d => d.getUTCDate();
+        const yr = d => d.getUTCFullYear();
+        if ((e - s) / 86400000 > 62) {
+            return yr(s) === yr(e) ? `${mon(s)} – ${mon(e)} ${yr(e)}`
+                : `${mon(s)} ${yr(s)} – ${mon(e)} ${yr(e)}`;
+        }
+        if (+s === +e) return `${day(s)} ${mon(s)} ${yr(s)}`;
+        if (yr(s) !== yr(e)) return `${day(s)} ${mon(s)} ${yr(s)} – ${day(e)} ${mon(e)} ${yr(e)}`;
+        if (s.getUTCMonth() !== e.getUTCMonth()) return `${day(s)} ${mon(s)} – ${day(e)} ${mon(e)} ${yr(e)}`;
+        return `${day(s)}–${day(e)} ${mon(s)} ${yr(s)}`;
+    }
+
+    // Regions visited (web/collections/gallery_regions.json, curated in
+    // config/gallery_regions.json). Fully private trips' regions live in the
+    // gated .all file, fetched only for unlocked visitors.
+    async function loadRegions(tripId) {
+        const base = VIEW_CONFIG.basePath || '';
+        const files = ['gallery_regions.json'].concat(checkAllAccess() ? ['gallery_regions.all.json'] : []);
+        for (const f of files) {
+            try {
+                const res = await fetch(`${base}collections/${f}?t=${Date.now()}`);
+                if (!res.ok) continue;
+                const text = (await res.json())[tripId];
+                if (text) return text;
+            } catch (e) { /* try the next file */ }
+        }
+        return '';
+    }
+
+    async function renderWatermark(el, trip) {
+        const dates = trip.dates ? formatWatermarkDates(trip.dates.start, trip.dates.end) : '';
+        const regions = await loadRegions(trip.id);
+        el.replaceChildren(...[dates, regions].filter(Boolean).map(t => {
+            const line = document.createElement('span');
+            line.textContent = t;
+            return line;
+        }));
+        el.hidden = !el.childElementCount;
+    }
+
+    const POP_OUT_ICON =
+        '<svg class="gallery-link-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">' +
+        '<path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M12 9.5v3.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8V4.8a.8.8 0 0 1 .8-.8h3.2" ' +
+        'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    function linkButton(href, label, title) {
+        const a = document.createElement('a');
+        a.className = 'gallery-link';
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        if (title) a.title = title;
+        a.innerHTML = `<span></span>${POP_OUT_ICON}`;
+        a.firstChild.textContent = label;
+        return a;
+    }
+
+    // Header: trip title, a faint dates/regions watermark, its summary, then
+    // context links each opening in a new tab: its map, plus its blog post(s)
+    // where one has been written. A trip with two posts labels each by the part
+    // of its title after the colon ("Northwest Regions").
+    async function renderToolbar(trip) {
         const bar = document.getElementById('gallery-toolbar');
         if (!bar) return;
-        const slug = trip.id.replace(/-\d{4}$/, '');
-        const mapHref = `${VIEW_CONFIG.basePath}${tripYear(trip)}/${slug}/index.html`;
-        bar.innerHTML = `
-            <span class="gallery-title">${formatTripName(trip.name)}</span>
-            <span class="gallery-switch">
-                <a href="${mapHref}">Map</a>
-                <a href="${location.href}" class="active" aria-current="page">Gallery</a>
-            </span>
-        `;
+        const title = document.createElement('span');
+        title.className = 'gallery-title';
+        title.textContent = formatTripName(trip.name);
+        const mark = document.createElement('div');
+        mark.className = 'gallery-watermark';
+        mark.hidden = true;
+        const desc = document.createElement('div');
+        desc.className = 'gallery-description';
+        desc.hidden = true;
+        const links = document.createElement('div');
+        links.className = 'gallery-links';
+        bar.replaceChildren(title, mark, desc, links);
+        renderWatermark(mark, trip);
+
+        if (!trip.pending) {
+            const phoneLib = new URLSearchParams(location.search).get('library') === 'phone';
+            const mapHref = `${VIEW_CONFIG.basePath}map.html?mode=trip&trip=${encodeURIComponent(trip.id)}` +
+                `&year=${tripYear(trip)}${phoneLib ? '&library=phone' : ''}`;
+            links.appendChild(linkButton(mapHref, 'See the map'));
+        }
+
+        renderDescription(desc, trip.id);
+
+        const blogs = await loadTripBlogs(trip.id);
+        blogs.forEach(b => {
+            const label = blogs.length > 1
+                ? `Read: ${b.title.split(':').pop().trim()}`
+                : 'Read the blog';
+            links.appendChild(linkButton(`${VIEW_CONFIG.basePath}blogs/${b.slug}.html`, label, b.title));
+        });
     }
 
     // Fill in any missing aspect ratios by measuring the thumbnails, so the

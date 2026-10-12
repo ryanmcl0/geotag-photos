@@ -218,15 +218,17 @@ def building_from_raw(raw_path: Path, raw_root: Path) -> Optional[str]:
 def load_geotag_overrides(raw_overrides: list) -> list:
     """
     Parse geotag_overrides from trip config. Each entry has ids_from, ids_to (strings
-    with numeric suffix, e.g. "RM101884"), lat, lon. Returns list of
-    (from_num, to_num, lat, lon) tuples for fast range checks.
+    with numeric suffix, e.g. "RM101884"), lat, lon, and an optional building that
+    replaces the raw-folder label (a friend's card filed under their name rather
+    than the place). Returns (from_num, to_num, lat, lon, building) tuples.
     """
     result = []
     for o in (raw_overrides or []):
         try:
             from_num = int(''.join(filter(str.isdigit, str(o['ids_from']))))
             to_num   = int(''.join(filter(str.isdigit, str(o['ids_to']))))
-            result.append((from_num, to_num, float(o['lat']), float(o['lon'])))
+            result.append((from_num, to_num, float(o['lat']), float(o['lon']),
+                           o.get('building') or None))
         except (KeyError, ValueError):
             pass
     return result
@@ -283,14 +285,15 @@ def apply_time_override(photo_stem: str, photo_time, overrides: list):
 
 
 def apply_geotag_override(photo_stem: str, overrides: list) -> Optional[dict]:
-    """Return fixed {lat, lon} if photo_stem's numeric ID falls in any override range."""
+    """Return fixed {lat, lon[, building]} if photo_stem's numeric ID falls in any
+    override range."""
     digits = ''.join(filter(str.isdigit, photo_stem))
     if not digits or not overrides:
         return None
     num = int(digits)
-    for from_num, to_num, lat, lon in overrides:
+    for from_num, to_num, lat, lon, building in overrides:
         if from_num <= num <= to_num:
-            return {'lat': lat, 'lon': lon}
+            return {'lat': lat, 'lon': lon, **({'building': building} if building else {})}
     return None
 
 
@@ -1694,6 +1697,10 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
                    '"stamped_to":"2025-12-31","shift_seconds":34954980}]. Selects frames by '
                    'filename prefix and/or stamped date range and shifts them; applied BEFORE '
                    '--geosync. For a camera whose clock was wrong on part of a trip.')
+@click.option('--dates', 'dates_override', default=None, metavar='START,END',
+              help='Fix the trip date range (YYYY-MM-DD,YYYY-MM-DD) instead of deriving it '
+                   'from the GPX track or photo timestamps. For a GPX that starts after '
+                   'the first photos, or a known trip span.')
 @click.option('--gpx-tolerance-hours', default=2.0, type=float,
               help='Photos this far outside the GPX window get fallback placement (default: 2)')
 @click.option('--gpx-split-gap-km', default=5.0, type=float,
@@ -1839,6 +1846,7 @@ def write_private_trip(off_photos, base_output_path, base_hosted_path, image_ext
 def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, output: Optional[str],
                  hosted_photos_dir: Optional[str],
                  geosync: str, time_overrides_json: Optional[str],
+                 dates_override: Optional[str],
                  gpx_tolerance_hours: float, gpx_split_gap_km: float,
                  max_interp_gap_hours: float, max_gap_interp_km: float,
                  phone_gps: bool, phone_gps_dir: str, phone_gps_threshold_min: float,
@@ -2527,7 +2535,7 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
         # Geotag overrides take highest priority — bypass all GPS logic for matched IDs.
         _override = apply_geotag_override(photo_file.stem, geotag_overrides_parsed)
         if _override:
-            gps = _override
+            gps = {'lat': _override['lat'], 'lon': _override['lon']}
             gps_source = 'geotag_override'
         elif forced_untimed:
             _uloc = building_coords.get(untimed_label.strip().lower()) if untimed_label else None
@@ -2584,6 +2592,8 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
         # Untimed-to-fallback photos get their explicit label as the cluster title.
         if forced_untimed and untimed_label:
             building_name = untimed_label
+        if _override and _override.get('building'):
+            building_name = _override['building']
 
         if exclude_building_set and building_name and building_name.strip().lower() in exclude_building_set:
             continue
@@ -2928,6 +2938,9 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
             (p['timestamp'] for p in processed_photos), name)
         if trip_start is None:
             trip_start = trip_end = datetime.now().date().isoformat()
+    if dates_override:
+        trip_start, trip_end = [d.strip() for d in dates_override.split(',', 1)]
+        click.echo(f"Date range fixed by config: {trip_start} – {trip_end}")
 
     # Report results
     click.echo(f"\nProcessed: {len(processed_photos)} photos")

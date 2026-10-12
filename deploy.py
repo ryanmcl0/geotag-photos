@@ -1007,9 +1007,11 @@ def main():
     # regenerated when build_collections happens to run).
     if not args.dry_run:
         print("📊 Refreshing site stats...")
-        from build_collections import emit_site_stats, emit_gallery_descriptions
+        from build_collections import (emit_site_stats, emit_gallery_descriptions,
+                                       emit_gallery_regions)
         emit_site_stats(print)
         emit_gallery_descriptions(print)
+        emit_gallery_regions(print)
         # Gallery "Read the blog" buttons: refreshed here too so a blogs.json
         # edit ships without a full build_blogs run.
         from build_blogs import emit_trip_blogs

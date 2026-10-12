@@ -65,10 +65,10 @@ NAV = '''    <nav class="topnav">
         <div class="nav-links">
             <a href="index.html">Home</a>
             <a href="map.html">Map</a>
+            <a href="galleries.html">Galleries</a>
             <a href="china.html">China</a>
             <a href="blogs.html">Blogs</a>
             <a href="rooftopping.html" data-gated>Urbex</a>
-            <a href="galleries.html">Galleries</a>
             <div class="nav-more">
                 <button class="nav-more-toggle active" type="button">More</button>
                 <div class="nav-more-menu">

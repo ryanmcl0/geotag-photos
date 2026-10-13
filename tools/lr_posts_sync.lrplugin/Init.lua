@@ -11,8 +11,12 @@ LrTasks.startAsyncTask(function()
     if not ok then return end
     LrTasks.sleep(20)   -- let the catalog finish waking up
     for attempt = 1, 10 do
-        local ran, res = pcall(Sync.sync)
-        if ran and not res.err then
+        local ran, res = LrTasks.pcall(Sync.sync, 'startup')   -- plain pcall breaks LR yielding
+        if not ran then
+            Sync.log('startup attempt', attempt, 'crashed:', res)
+        elseif res.err then
+            Sync.log('startup attempt', attempt, 'failed:', res.err)
+        else
             if res.synced > 0 then
                 LrDialogs.showBezel(string.format(
                     'Posts Sync: %d collection(s) synced', res.synced))

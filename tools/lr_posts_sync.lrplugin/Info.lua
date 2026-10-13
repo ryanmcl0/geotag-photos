@@ -4,10 +4,11 @@ writes into /Volumes/RYAN/Edits/Posts/<post>/<post>.lrsmcol.
 
 Install once: Lightroom Classic > File > Plug-in Manager > Add > pick this
 .lrplugin folder. It syncs automatically shortly after every Lightroom
-launch, and Library > Plug-in Extras > "Sync Post Collections" does the same
-on demand. Both mirror every post into a smart collection inside the "Posts"
-collection set (creating new ones, updating changed ones - safe to run any
-time).
+launch, and "Sync Post Collections" under Plug-in Extras (Library or File
+menu) does the same on demand. Both mirror every post into a smart
+collection inside the "Posts" collection set (creating new ones, updating
+changed ones - safe to run any time). Log:
+~/Library/Logs/Adobe/Lightroom/LrClassicLogs/PostsSync.log
 ]]
 
 return {
@@ -17,6 +18,9 @@ return {
     LrPluginName = 'Posts Sync',
     LrInitPlugin = 'Init.lua',
     LrLibraryMenuItems = {
+        { title = 'Sync Post Collections', file = 'SyncAll.lua' },
+    },
+    LrExportMenuItems = {
         { title = 'Sync Post Collections', file = 'SyncAll.lua' },
     },
     VERSION = { major = 1, minor = 0, revision = 0 },

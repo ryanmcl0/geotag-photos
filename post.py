@@ -219,6 +219,25 @@ def trip_manifest_photos(trip):
     return photos, photos_path
 
 
+def cached_capture_dates(plan):
+    """dst -> 'YYYY-MM-DD' from each trip's exif_cache.json, keyed by the
+    edited source path. Covers exports saved without metadata, whose copies
+    have no DateTimeOriginal for the smart collection's date rule."""
+    caches, out = {}, {}
+    for _, ref, src, dst in plan:
+        trip = ref['trip']
+        if trip not in caches:
+            p = WEB_TRIPS / trip / 'exif_cache.json'
+            try:
+                caches[trip] = json.loads(p.read_text()) if p.exists() else {}
+            except ValueError:
+                caches[trip] = {}
+        dto = (caches[trip].get(str(src)) or {}).get('DateTimeOriginal') or ''
+        if re.match(r'\d{4}:\d{2}:\d{2}', dto):
+            out[dst] = dto[:10].replace(':', '-')
+    return out
+
+
 def normalize_stem(stem):
     # Same suffix handling as build_collections.build_id_index
     return re.split(r'-Enhanced|-NR|-SAI|-2$', stem)[0]
@@ -992,8 +1011,16 @@ def cmd_pull(args):
             sys.path.insert(0, str(ROOT / 'tools'))
             from lr_smart_collection import write_lrsmcol
             lr_out = dest_dir / f'{name}.lrsmcol'
-            write_lrsmcol([dst for _, _, _, dst in plan], post['name'], lr_out)
-            print(f"   ✓ Lightroom smart collection → {lr_out}\n")
+            notes = []
+            n_rules, undated = write_lrsmcol([dst for _, _, _, dst in plan], post['name'],
+                                             lr_out, cached_capture_dates(plan), notes)
+            print(f"   ✓ Lightroom smart collection → {lr_out}")
+            for f, why in notes:
+                print(f"     ⚠️  {f.name}: {why}")
+            for f in undated:
+                print(f"     ⚠️  {f.name}: no capture date anywhere, matched by filename "
+                      "only (may pull in other photos with the same number)")
+            print()
         except Exception as e:
             print(f"   ⚠️  Lightroom smart collection not written: {e}\n")
 

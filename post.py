@@ -243,8 +243,15 @@ def normalize_stem(stem):
     return re.split(r'-Enhanced|-NR|-SAI|-2$', stem)[0]
 
 
-def resolve_source(trip, photo_id):
-    """{trip, id} → absolute Path of the edited source file, or (None, why)."""
+_scan_cache = {}   # photos_path → every source file under it (one walk per run)
+
+
+def resolve_source(trip, photo_id, hint=None):
+    """{trip, id} → absolute Path of the edited source file, or (None, why).
+    hint is where the previous pull found it (the post folder's manifest.json):
+    trips sorted into section subfolders (2024 China/Shanghai/...) aren't at
+    photos_path/source_filename, and re-scanning the share for them on every
+    pull is the slow part, so a still-valid hint short-circuits that."""
     photos, photos_path = trip_manifest_photos(trip)
     ph = photos.get(photo_id)
     if ph is None:
@@ -258,16 +265,22 @@ def resolve_source(trip, photo_id):
         if not mount.exists():
             sys.exit(f"❌ {mount} is not available. Is the RYAN drive mounted?")
         return None, f'source dir missing: {base}'
-    exact = base / ph.get('source_filename', f'{photo_id}.jpg')
-    if exact.exists():
-        return exact, None
-    # Fall back to a recursive stem search (re-edits can change the suffix)
-    print(f"   🔍 {photo_id}: not at its manifest filename, scanning {base} "
-          "(slow over the network)...")
+    fname = ph.get('source_filename', f'{photo_id}.jpg')
     norm = normalize_stem(photo_id)
-    candidates = [f for f in base.rglob('*')
-                  if f.suffix.lower() in SOURCE_EXTS
-                  and normalize_stem(f.stem) == norm]
+    quick = [base / fname]
+    if hint:
+        quick.append(Path(hint))
+    if ph.get('section'):
+        quick.append(base / ph['section'] / fname)
+    for cand in quick:
+        if normalize_stem(cand.stem) == norm and cand.exists():
+            return cand, None
+    # Fall back to a recursive stem search (re-edits can change the suffix)
+    if base not in _scan_cache:
+        print(f"   🔍 {photo_id}: not at its manifest filename, scanning {base} "
+              "once (slow over the network)...")
+        _scan_cache[base] = [f for f in base.rglob('*') if f.suffix.lower() in SOURCE_EXTS]
+    candidates = [f for f in _scan_cache[base] if normalize_stem(f.stem) == norm]
     if candidates:
         # Prefer the longest stem (most-processed edit), then newest
         best = sorted(candidates, key=lambda f: (len(f.stem), f.stat().st_mtime))[-1]
@@ -489,7 +502,7 @@ def sync_post_dir(dest_dir, plan, reblur=False):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
     only genuinely new photos are copied from the drive. Returns (copied,
-    renamed). reblur=True regenerates every blur-flagged copy from its source
+    renamed, adopted). reblur=True regenerates every blur-flagged copy from its source
     (use after the blur algorithm changes).
 
     Every copy we write is fingerprinted (md5 in .pull_state.json). A local
@@ -527,7 +540,7 @@ def sync_post_dir(dest_dir, plan, reblur=False):
     # Re-edits exported under a Lightroom-renamed filename (X-Enhanced-NR, X-2, ...)
     adopted = _adopt_renamed_exports(dest_dir, plan, planned)
 
-    copied = renamed = 0
+    copied = renamed = adopted_n = 0
     for i, ref, src, dst in plan:
         want_blur = bool(ref.get('blur'))
         have_blur = bool(blurred.get(src.name, False))
@@ -544,7 +557,7 @@ def sync_post_dir(dest_dir, plan, reblur=False):
                         else 'decode failed, check manually')))
             blurred[src.name] = want_blur
             hashes[src.name] = _file_md5(dst)
-            copied += 1
+            adopted_n += 1
             continue
         if reblur and want_blur and dst.exists():
             dst.unlink(missing_ok=True)   # regenerate from source (missing_ok: SMB dir cache can be stale)
@@ -607,7 +620,7 @@ def sync_post_dir(dest_dir, plan, reblur=False):
             orig = tmp.name.split('_', 2)[2]
             tmp.rename(dest_dir / f'removed_{orig}')
             print(f'   ⚠️  {orig} is no longer in this post, kept as removed_{orig}')
-    return copied, renamed
+    return copied, renamed, adopted_n
 
 
 # ---------------------------------------------------------------- map cards
@@ -769,11 +782,22 @@ def resolve_phone(ref):
     return (src, None) if src.exists() else (None, f'missing: {src}')
 
 
-def resolve_wait(ref):
+def resolve_wait(ref, hint=None):
     """Waitlist refs are carousel or phone photos; pick the right resolver."""
     if ref['trip'].startswith('phone-'):
         return resolve_phone(ref)
-    return resolve_source(ref['trip'], ref['id'])
+    return resolve_source(ref['trip'], ref['id'], hint)
+
+
+def previous_sources(dest_dir):
+    """(trip, id) → source path recorded by the last pull into dest_dir."""
+    try:
+        m = json.loads((dest_dir / 'manifest.json').read_text())
+    except (OSError, ValueError):
+        return {}
+    return {(r['trip'], r['id']): r['source']
+            for r in (m.get('photos') or []) + (m.get('waitlist') or [])
+            if r.get('source') and r.get('id')}
 
 
 def sync_phone_dir(phone_dir, plan):
@@ -861,9 +885,10 @@ def cmd_pull(args):
         n_wait = len(post.get('waitlist') or [])
         wait_txt = f", {n_wait} waitlisted" if n_wait else ''
         print(f"── {tag}{post['name']}{acct} ({len(post['photos'])} photos{wait_txt}) → {dest_dir}")
+        prev = previous_sources(dest_dir)
         plan = []
         for i, ref in enumerate(post['photos'], 1):
-            src, why = resolve_source(ref['trip'], ref['id'])
+            src, why = resolve_source(ref['trip'], ref['id'], prev.get((ref['trip'], ref['id'])))
             if src is None:
                 print(f"   ⚠️  {i:02d} {ref['trip']}/{ref['id']}: {why}")
                 unresolved += 1
@@ -886,7 +911,7 @@ def cmd_pull(args):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
                           f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
             for i, ref in enumerate(post.get('waitlist') or [], 1):
-                src, why = resolve_wait(ref)
+                src, why = resolve_wait(ref, prev.get((ref['trip'], ref.get('id'))))
                 print(f"   Waitlist {i:02d} {src or why}  →  {dest_dir / 'Waitlist'}")
             for i, ref in enumerate(post.get('phone') or [], 1):
                 src, why = resolve_phone(ref)
@@ -895,7 +920,8 @@ def cmd_pull(args):
             continue
 
         dest_dir.mkdir(parents=True, exist_ok=True)
-        copied, renamed = sync_post_dir(dest_dir, plan, reblur=getattr(args, 'reblur', False))
+        copied, renamed, adopted = sync_post_dir(dest_dir, plan,
+                                                 reblur=getattr(args, 'reblur', False))
         manifest = {
             'name': post['name'],
             'version': doc.get('version'),
@@ -905,9 +931,11 @@ def cmd_pull(args):
         }
         (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         parts = [f'{copied} copied']
+        if adopted:
+            parts.append(f'{adopted} local re-exports adopted')
         if renamed:
             parts.append(f'{renamed} reordered')
-        parts.append(f'{len(plan) - copied - renamed} already up to date')
+        parts.append(f'{len(plan) - copied - adopted - renamed} already up to date')
         print(f"   ✓ {', '.join(parts)}")
 
         # Account, caption and song noted on the site -> one caption.txt in
@@ -958,7 +986,7 @@ def cmd_pull(args):
             wait_dir = dest_dir / 'Waitlist'
             wait_plan = []
             for i, ref in enumerate(wait_refs, 1):
-                src, why = resolve_wait(ref)
+                src, why = resolve_wait(ref, prev.get((ref['trip'], ref.get('id'))))
                 if src is None:
                     print(f"   ⚠️  Waitlist {i:02d} {ref['trip']}/{ref['id']}: {why}")
                     unresolved += 1
@@ -966,17 +994,19 @@ def cmd_pull(args):
                 wait_plan.append((i, ref, src, wait_dir / f'{i:02d}_{src.name}'))
             if wait_plan:
                 wait_dir.mkdir(parents=True, exist_ok=True)
-                wcopied, wrenamed = sync_post_dir(wait_dir, wait_plan,
-                                                  reblur=getattr(args, 'reblur', False))
+                wcopied, wrenamed, wadopted = sync_post_dir(
+                    wait_dir, wait_plan, reblur=getattr(args, 'reblur', False))
                 manifest['waitlist'] = [
                     {'order': i, 'trip': ref['trip'], 'id': ref['id'],
                      'source': str(src), 'copied_to': str(dst)}
                     for i, ref, src, dst in wait_plan]
                 (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
                 wparts = [f'{wcopied} copied']
+                if wadopted:
+                    wparts.append(f'{wadopted} local re-exports adopted')
                 if wrenamed:
                     wparts.append(f'{wrenamed} reordered')
-                wparts.append(f'{len(wait_plan) - wcopied - wrenamed} already up to date')
+                wparts.append(f'{len(wait_plan) - wcopied - wadopted - wrenamed} already up to date')
                 print(f"   ✓ Waitlist/ ({len(wait_plan)} photos): {', '.join(wparts)}")
 
         # Behind-the-scenes phone selections -> <post>/Phone/ (originals,

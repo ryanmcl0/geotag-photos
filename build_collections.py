@@ -763,6 +763,7 @@ def facet_roofs(facet, records, echo):
                 'id': slugify(b['name']), 'title': b['name'], 'done': True,
                 'height_m': b.get('height_m'), 'crane_m': b.get('crane_m'),
                 'height_label': height_label(b), 'city': b.get('city'),
+                'country': b.get('country'), 'underground': underground(b) or None,
                 'subtitle': ' · '.join(x for x in bits if x),
                 'count': len(photos),
                 'cover': pick_cover(photos),

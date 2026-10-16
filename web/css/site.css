@@ -286,6 +286,15 @@ img { display: block; }
 .rv { opacity: 0; transform: translateY(26px); transition: opacity .6s ease, transform .6s ease; }
 .rv.in { opacity: 1; transform: none; }
 
+/* tier search (Urbex): filters the tiles below in place as you type */
+.tier-search { display: flex; align-items: baseline; gap: 16px; margin: 22px 0 0; max-width: 560px; }
+.tier-search__input { flex: 1; min-width: 0; background: transparent; color: var(--text); border: 0; border-bottom: 1px solid var(--line); padding: 8px 0; font-family: var(--body); font-size: 16px; outline: none; transition: border-color .2s; }
+.tier-search__input::placeholder { color: var(--muted); }
+.tier-search__input:focus { border-bottom-color: var(--text); }
+.tier-search__input::-webkit-search-cancel-button { filter: invert(1); opacity: .6; cursor: pointer; }
+.tier-search__count { font-family: var(--head); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-size: 13px; white-space: nowrap; }
+#tier-host [hidden] { display: none !important; }
+
 /* roofs height-tier sections */
 .tier-head { margin: 56px 0 0; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
 .tier-head h3 { margin: 0; font-family: var(--head); text-transform: uppercase; letter-spacing: .08em; color: var(--text); font-size: clamp(22px, 2.4vw, 32px); line-height: 1; }

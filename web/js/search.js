@@ -378,8 +378,7 @@
   function renderEmpty() {
     const sug = suggestions();
     out.innerHTML = `<div class="ss-empty">
-      <p>Search across the map, galleries, the China pages and blogs.
-      Type a place to see everywhere it shows up.</p>
+      <p>Site-wide search of all trips, blogs, countries, locations and maps</p>
       <div class="ss-chips">${sug.map(s => `<button type="button" class="ss-chip" data-q="${esc(s)}">${esc(s)}</button>`).join('')}</div>
     </div>`;
     countEl.textContent = '';

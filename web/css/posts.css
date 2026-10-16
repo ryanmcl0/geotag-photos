@@ -463,3 +463,70 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 }
 /* Nothing under it on this slide — drop back down so it isn't floating. */
 .posts-badge--lightbox.is-low { bottom: 22px; }
+
+/* ---------- Reels tab (posts-reels.js, localhost only) ---------- */
+.reels-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 14px; }
+.reels-chip {
+  background: none; border: 1px solid #333; border-radius: 999px; color: #999;
+  font-size: 12px; font-weight: 600; padding: 5px 12px; cursor: pointer;
+}
+.reels-chip:hover { color: #fff; }
+.reels-chip.active { border-color: #4667a8; color: #fff; background: #1c2537; }
+.reels-how { color: #889; font-size: 13px; line-height: 1.5; margin: 0 0 8px; max-width: 760px; }
+.reels-week {
+  font-size: 13px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: #9ab; margin: 20px 0 8px; border-bottom: 1px solid #2a2a2a; padding-bottom: 6px;
+}
+.reels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
+.reels-card {
+  display: flex; gap: 14px; background: #161616; border: 1px solid #262626; border-radius: 10px;
+  padding: 10px; margin: 0 0 8px;
+}
+.reels-grid .reels-card { margin: 0; }
+.reels-card.posted { opacity: .55; }
+.reels-thumb {
+  position: relative; flex: 0 0 auto; width: 90px; height: 160px; padding: 0; border: 0;
+  border-radius: 7px; overflow: hidden; background: #000; cursor: pointer;
+}
+.reels-thumb video, .reels-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.reels-play {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 22px; text-shadow: 0 1px 6px rgba(0,0,0,.7); opacity: .85;
+}
+.reels-thumb:hover .reels-play { opacity: 1; }
+.reels-dur {
+  position: absolute; right: 4px; bottom: 4px; background: rgba(0,0,0,.65); color: #ddd;
+  font-size: 10px; border-radius: 4px; padding: 1px 4px;
+}
+.reels-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.reels-date { color: #8ab4ff; font-size: 12px; font-weight: 600; }
+.reels-date.due { color: #ffb066; }
+.reels-title { color: #eee; font-size: 15px; font-weight: 600; }
+.reels-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; color: #888; font-size: 12px; align-items: center; }
+.reels-kind { border-radius: 4px; padding: 1px 6px; font-weight: 600; color: #ddd; background: #2a2a2a; }
+.reels-kind-earth_zoom { background: #1f3a5c; }
+.reels-kind-compilation { background: #4a2f5c; }
+.reels-kind-vlog_cut { background: #2f4a33; }
+.reels-kind-one_shot { background: #4a3f22; }
+.reels-note { font-style: italic; }
+.reels-alts { display: flex; flex-wrap: wrap; gap: 6px; }
+.reels-alt {
+  background: #1d1d1d; border: 1px solid #3a3a3a; border-radius: 6px; color: #bbb;
+  font-size: 11px; padding: 3px 8px; cursor: pointer;
+}
+.reels-alt:hover { color: #fff; border-color: #555; }
+.reels-caption summary { color: #9ab; font-size: 12px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
+.reels-caption pre {
+  white-space: pre-wrap; font: 12px/1.45 -apple-system, sans-serif; color: #bbb;
+  background: #111; border-radius: 6px; padding: 8px; margin: 6px 0 0;
+}
+.reels-copy {
+  background: none; border: 1px solid #3a3a3a; border-radius: 5px; color: #aaa; font-size: 11px;
+  padding: 1px 7px; cursor: pointer;
+}
+.reels-posted { color: #999; font-size: 12px; margin-top: auto; cursor: pointer; }
+.reels-done > summary { color: #889; font-size: 13px; cursor: pointer; margin: 18px 0 8px; }
+@media (max-width: 640px) {
+  .reels-grid { grid-template-columns: 1fr; }
+  .reels-thumb { width: 72px; height: 128px; }
+}

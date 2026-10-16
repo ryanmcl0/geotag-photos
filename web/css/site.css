@@ -608,7 +608,7 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 #ss-results [hidden] { display: none !important; }
 
 .ss-empty { margin-top: 40px; color: var(--muted-2); font-size: 16px; line-height: 1.6; }
-.ss-empty p { margin: 0 0 18px; max-width: 640px; }
+.ss-empty p { margin: 0 0 18px; }
 .ss-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .ss-chip { display: inline-block; background: none; cursor: pointer; border: 1px solid #3a3a3a; color: var(--muted-2); padding: 8px 12px 7px; font-family: var(--head); text-transform: uppercase; letter-spacing: .14em; font-size: 13px; line-height: 1; transition: color .2s, border-color .2s; }
 .ss-chip:hover { color: var(--text); border-color: #777; }

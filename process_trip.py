@@ -650,10 +650,13 @@ def gpx_to_geojson(gpx_path: Path, split_gap_km: float = 5.0,
 SKIP_SUBDIRS = {'compressed', 'phone', 'videos'}
 
 
-def find_photos(photo_dir: Path) -> list[Path]:
+def find_photos(photo_dir: Path, dedupe: bool = True) -> list[Path]:
     """
     Recursively find supported photo files, skipping known non-edit subdirs
     (Compressed/ duplicates the parent, Phone/ and Videos/ aren't relevant).
+    dedupe=False leaves same-stem files in, for a caller that filters by folder
+    first (see process_trip: deduping across folders it is about to drop lets
+    a dropped copy beat, and so erase, the real edit).
     """
     photos = []
     for ext in SUPPORTED_EXTENSIONS:
@@ -663,7 +666,8 @@ def find_photos(photo_dir: Path) -> list[Path]:
                 if any(part.lower() in SKIP_SUBDIRS for part in rel_parts):
                     continue
                 photos.append(p)
-    return _dedupe_edit_stems(sorted(set(photos)), photo_dir)
+    photos = sorted(set(photos))
+    return _dedupe_edit_stems(photos, photo_dir) if dedupe else photos
 
 
 def _dedupe_edit_stems(photos: list[Path], photo_dir: Path) -> list[Path]:
@@ -1949,7 +1953,7 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
 
     # Find photos
     click.echo("\nFinding photos...")
-    photo_files = find_photos(photos_path)
+    photo_files = find_photos(photos_path, dedupe=False)   # deduped after the folder filters
     click.echo(f"Found {len(photo_files)} photos")
 
     # Pre-2019 backfill: when the edits root is a whole year folder, restrict to
@@ -2090,6 +2094,12 @@ def process_trip(name: str, display_name: Optional[str], gpx: str, photos: str, 
         photo_files = [p for p in photo_files
                        if not any(part.lower() in excl for part in p.parts)]
         click.echo(f"  Excluded edits under {excl}: dropped {before - len(photo_files)}, kept {len(photo_files)}")
+
+    # One edit per stem, decided only among files that survived the folder filters
+    # above. Deduping the raw folder walk instead let a newer same-named JPG in a
+    # folder those filters drop (a friend's dump, a camera card's Pictures/) win and
+    # then vanish, taking the real edit with it (2017 London lost 8 photos so).
+    photo_files = _dedupe_edit_stems(photo_files, photos_path)
 
     # Drop specific photos by id/stem — a hard exclusion, separate from the public/private
     # split: these never enter the manifest or get derivatives. Matches the full edit stem

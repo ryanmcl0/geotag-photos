@@ -6,6 +6,13 @@ Everything for working with post drafts. Always takes a subcommand:
   ./post.py pull      pull the drafts from the remote and copy their files
                       (plus a location card in <post>/maps/ for every photo
                       marked with the map button — see tools/map_card.py)
+                      Re-edits found in a post folder are listed (post file,
+                      where it goes in Edits, an open command) and, once you
+                      confirm, written back over their original in Edits
+                      unblurred, optionally updating the live site too
+                      (see reedits.py)
+  ./post.py backfill  the same for re-edits not written back yet (earlier
+                      pulls, or answered "not now")
   ./post.py mirror    sync a dev server started elsewhere (./serve.sh runs this)
   ./post.py sync      copy the remote state down to the local dev server
   ./post.py push      copy the local dev state up to the remote
@@ -32,6 +39,7 @@ CF_ALL_PASSWORD (passed to the dev server so "See All" works locally).
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -44,6 +52,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import reedits
 
 ROOT = Path(__file__).parent
 WEB_TRIPS = ROOT / 'web' / 'trips'
@@ -434,9 +444,32 @@ def sanitize(name):
     return re.sub(r'[\\/:*?"<>|]', '_', name).strip() or 'untitled'
 
 
+@contextlib.contextmanager
+def _read(path):
+    """open(path, 'rb') for the RYAN share, whose SMB mount sometimes fails
+    the CLOSE with EBADF after a perfectly good read. A read-only handle has
+    nothing to flush, so that error is safe to drop; open/read errors are not."""
+    f = open(path, 'rb')
+    try:
+        yield f
+    finally:
+        try:
+            f.close()
+        except OSError:
+            pass
+
+
+def _copy(src, dst):
+    """shutil.copyfile through _read, checked by size (dst gets a fresh mtime)."""
+    with _read(src) as fi, open(dst, 'wb') as fo:
+        shutil.copyfileobj(fi, fo, 1 << 20)
+    if Path(dst).stat().st_size != Path(src).stat().st_size:
+        raise OSError(f'incomplete copy of {src}')
+
+
 def _file_md5(path):
     h = hashlib.md5()
-    with open(path, 'rb') as f:
+    with _read(path) as f:
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
@@ -502,7 +535,109 @@ def _adopt_renamed_exports(dest_dir, plan, planned_names):
     return adopted
 
 
-def sync_post_dir(dest_dir, plan, reblur=False):
+def _exif_brief(path):
+    try:
+        out = subprocess.run(['exiftool', '-j', '-DateTimeOriginal', '-GPSLatitude', str(path)],
+                             capture_output=True, text=True, timeout=60)
+        return json.loads(out.stdout or '[]')[0]
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        return {}
+
+
+def _carry_metadata(old, new):
+    """An export saved without metadata would cost the photo its capture time
+    or GPS on the next reprocess (placement depends on both). Copy over
+    whichever of the two the re-edit lacks and the old edit had."""
+    o, n = _exif_brief(old), _exif_brief(new)
+    tags = []
+    if o.get('DateTimeOriginal') and not n.get('DateTimeOriginal'):
+        tags += ['-EXIF:DateTimeOriginal', '-EXIF:SubSecTimeOriginal',
+                 '-EXIF:OffsetTimeOriginal', '-EXIF:CreateDate',
+                 '-EXIF:Make', '-EXIF:Model', '-EXIF:SerialNumber']
+    if o.get('GPSLatitude') and not n.get('GPSLatitude'):
+        tags.append('-GPS:all')
+    if tags:
+        subprocess.run(['exiftool', '-q', '-overwrite_original', '-tagsFromFile', str(old),
+                        *tags, str(new)], capture_output=True, timeout=120)
+
+
+def _magic(path):
+    try:
+        with _read(path) as f:
+            head = f.read(4)
+    except OSError:
+        return None
+    return 'jpg' if head[:2] == b'\xff\xd8' else head
+
+
+EDITS_ROOT = Path('/Volumes/RYAN/Edits')
+STAGED = '.reedits_staged'   # clean exports of blur-flagged re-edits, awaiting write-back
+
+
+def _reedit_ok(ref, src, edited):
+    """Whether a re-edit exported into a post folder may go back over its
+    original in Edits. Warns about the refusals worth knowing about."""
+    if ref['trip'].startswith('phone-'):
+        return False   # phone originals are backups, never edits
+    if _magic(edited) != _magic(src):
+        print(f'   ⚠️  {edited.name}: not the same file type as {src.name}, '
+              'Edits left alone')
+        return False
+    if src.stat().st_size == edited.stat().st_size and _file_md5(src) == _file_md5(edited):
+        return False
+    a, b = _capture_id(edited), _capture_id(src)
+    if a and b and a[0] != b[0]:
+        # Sony reuses RM numbers: a same-named export of a different shot
+        print(f'   ⚠️  {edited.name}: taken {a[0]}, but {src.name} in Edits was taken '
+              f'{b[0]}, Edits left alone')
+        return False
+    return True
+
+
+def note_reedit(found, ref, src, edited, dest_dir, post_file, blur):
+    """Queue a re-edit for write-back (confirm_reedits asks first). Called
+    BEFORE any face blur: a blur-flagged one keeps a clean copy in
+    <post>/.reedits_staged/, since the post copy is about to be pixelated and
+    Edits must get the clean photo."""
+    if not _reedit_ok(ref, src, edited):
+        return
+    new = post_file
+    if blur:
+        new = dest_dir / STAGED / f'reedit_{src.name}'
+        new.parent.mkdir(exist_ok=True)
+        shutil.copyfile(edited, new)
+    found.append({'ref': ref, 'src': src, 'new': new, 'post_file': post_file,
+                  'dest_dir': dest_dir})
+
+
+def write_back(rec):
+    """Copy a confirmed re-edit over its original in Edits. The replaced
+    original is kept once in <post>/.previous_edits/ (the first one only:
+    that is the true original if a photo is re-edited several times)."""
+    src, new = rec['src'], rec['new']
+    keep = rec['dest_dir'] / '.previous_edits' / src.name
+    if not keep.exists():
+        keep.parent.mkdir(exist_ok=True)
+        part = keep.with_name(f'.{keep.name}.part')   # never a half backup under the real name
+        _copy(src, part)
+        st = src.stat()
+        os.utime(part, (st.st_atime, st.st_mtime))   # the original's date, like copy2
+        os.replace(part, keep)
+    tmp = src.with_name(f'.{src.name}.reedit_tmp')
+    _copy(new, tmp)   # a fresh mtime marks it changed for the pipeline
+    _carry_metadata(src, tmp)
+    os.replace(tmp, src)
+    reedits.add_pending(rec['ref']['trip'], src)
+    if new.parent.name == STAGED:
+        new.unlink()
+        try:
+            new.parent.rmdir()
+        except OSError:
+            pass
+    print(f'   ✎ {src.name}: written back to {src.parent}')
+
+
+def sync_post_dir(dest_dir, plan, reblur=False, found=None):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
     only genuinely new photos are copied from the drive. Returns (copied,
@@ -514,7 +649,12 @@ def sync_post_dir(dest_dir, plan, reblur=False):
     a Lightroom re-export after re-editing the original. Those local edits are
     kept, but if the photo is blur-flagged the fresh export has an unblurred
     face, so it is re-blurred IN PLACE (the re-edit survives; only the face
-    pixelation is reapplied)."""
+    pixelation is reapplied).
+
+    Both kinds of re-edit (an adopted renamed export, or an NN_ file replaced
+    in place) are also queued in `found` for writing back over the original
+    in Edits, see note_reedit."""
+    found = [] if found is None else found
     planned = {dst.name for _, _, _, dst in plan}
 
     # Local NN_<file>s that are no longer at their planned name, keyed by base
@@ -554,6 +694,7 @@ def sync_post_dir(dest_dir, plan, reblur=False):
         have_blur = bool(blurred.get(src.name, False))
         if src.name in adopted:
             new = adopted.pop(src.name)
+            note_reedit(found, ref, src, new, dest_dir, dst, want_blur)
             dst.unlink(missing_ok=True)
             new.rename(dst)
             print(f'   ⇢ {dst.name}: adopted re-edited export {new.name}')
@@ -579,6 +720,7 @@ def sync_post_dir(dest_dir, plan, reblur=False):
             cur = _file_md5(dst)
             if cur == rec:
                 continue   # right place, right content
+            note_reedit(found, ref, src, dst, dest_dir, dst, want_blur)
             if not want_blur:
                 hashes[src.name] = cur   # local re-edit kept, just remember it
                 continue
@@ -938,6 +1080,7 @@ def cmd_pull(args):
 
     print(f"📥 {len(posts)} post draft(s) (state v{doc.get('version')})\n")
     unresolved = 0
+    found = []   # re-edits to confirm for write-back to Edits
     for post in posts:
         name = sanitize(post['name'])
         dest_dir = Path(args.dest) / name
@@ -982,7 +1125,8 @@ def cmd_pull(args):
 
         dest_dir.mkdir(parents=True, exist_ok=True)
         copied, renamed, adopted = sync_post_dir(dest_dir, plan,
-                                                 reblur=getattr(args, 'reblur', False))
+                                                 reblur=getattr(args, 'reblur', False),
+                                                 found=found)
         manifest = {
             'name': post['name'],
             'version': doc.get('version'),
@@ -1056,7 +1200,8 @@ def cmd_pull(args):
             if wait_plan:
                 wait_dir.mkdir(parents=True, exist_ok=True)
                 wcopied, wrenamed, wadopted = sync_post_dir(
-                    wait_dir, wait_plan, reblur=getattr(args, 'reblur', False))
+                    wait_dir, wait_plan, reblur=getattr(args, 'reblur', False),
+                    found=found)
                 manifest['waitlist'] = [
                     {'order': i, 'trip': ref['trip'], 'id': ref['id'],
                      'source': str(src), 'copied_to': str(dst)}
@@ -1115,8 +1260,233 @@ def cmd_pull(args):
         except Exception as e:
             print(f"   ⚠️  Lightroom smart collection not written: {e}\n")
 
+    if not (args.list or args.dry_run):
+        confirm_reedits(found, Path(args.dest))
     if unresolved:
         sys.exit(f'⚠️  {unresolved} photo(s) could not be resolved (see above).')
+
+
+def _sample_differs(a, b, chunk=1 << 18):
+    """Cheap content check for two files on the network drive: size, then the
+    first and last 256 KB. A re-export never matches the copy byte for byte."""
+    if a.stat().st_size != b.stat().st_size:
+        return True
+    with _read(a) as fa, _read(b) as fb:
+        if fa.read(chunk) != fb.read(chunk):
+            return True
+        fa.seek(-min(chunk, a.stat().st_size), 2)
+        fb.seek(-min(chunk, b.stat().st_size), 2)
+        return fa.read() != fb.read()
+
+
+def _visual_diff(a, b):
+    """Mean per-pixel difference at 1/8 scale (inf if the frames differ in
+    shape). A face blur moves this well under 1; a re-grade or crop does not."""
+    import cv2
+    import numpy as np
+    ia, ib = (cv2.imdecode(np.fromfile(str(p), dtype=np.uint8), cv2.IMREAD_REDUCED_COLOR_8)
+              for p in (a, b))
+    if ia is None or ib is None or ia.shape != ib.shape:
+        return float('inf')
+    return float(np.mean(np.abs(ia.astype(np.int16) - ib.astype(np.int16))))
+
+
+BLURRED_REEDIT_DIFF = 4.0
+
+
+def cmd_backfill(args):
+    """Catch-up for re-edits a pull did not write back: pulls made before
+    write-back existed, or ones answered "not now".
+
+    Every photo in every pulled post folder (its manifest.json says where it
+    came from) is compared with its source in Edits. A post copy that differs
+    and is newer than the source is a re-edit, offered for write-back with the
+    same prompt as a pull. Blur-flagged copies have pixelated faces, so only
+    a clean copy a pull set aside (.reedits_staged/) can go back; the others
+    that look re-edited are listed for a clean export from Lightroom into the
+    post folder, which the next pull adopts and offers unblurred."""
+    root = Path(args.dest)
+    if not root.exists():
+        sys.exit(f'⚠️  {root} is not available. Is the RYAN drive mounted?')
+    cands, blurred_reedits, stamped, found = {}, [], 0, []
+    for man in sorted(root.glob('*/manifest.json')):
+        folder = man.parent
+        try:
+            m = json.loads(man.read_text())
+        except ValueError:
+            continue
+        print(f'── {folder.name}')
+        for d, rows in ((folder, m.get('photos')), (folder / 'Waitlist', m.get('waitlist'))):
+            state_path = d / '.pull_state.json'
+            try:
+                state = json.loads(state_path.read_text())
+            except (OSError, ValueError):
+                state = {}
+            hashes = state.setdefault('hashes', {})
+            dirty = False
+            for r in rows or []:
+                if r['trip'].startswith('phone-') or not r.get('source'):
+                    continue
+                src = Path(r['source'])
+                # by name inside THIS folder: a copied post folder keeps the
+                # original's absolute copied_to paths
+                dst = d / Path(r['copied_to']).name
+                if not (src.exists() and dst.exists()):
+                    continue
+                if state.get('blurred', {}).get(src.name):
+                    if src.name not in hashes and not args.dry_run:
+                        # pulled before fingerprints: without one, a re-export
+                        # over this file would go unnoticed by the next pull
+                        hashes[src.name] = _file_md5(dst)
+                        dirty = stamped = stamped + 1
+                    staged = d / STAGED / f'reedit_{src.name}'
+                    if staged.exists():
+                        if _reedit_ok(r, src, staged):
+                            found.append({'ref': r, 'src': src, 'new': staged,
+                                          'post_file': dst, 'dest_dir': d})
+                        continue
+                    diff = _visual_diff(src, dst)
+                    if diff > BLURRED_REEDIT_DIFF:
+                        blurred_reedits.append((dst, diff))
+                    continue
+                if _sample_differs(src, dst):
+                    cands.setdefault(src, []).append((dst.stat().st_mtime, dst, r, d))
+            if dirty:
+                state_path.write_text(json.dumps(state, indent=1))
+
+    print()
+    for src, versions in sorted(cands.items()):
+        versions.sort(key=lambda c: c[0])
+        mtime, dst, ref, d = versions[-1]
+        if mtime <= src.stat().st_mtime:
+            print(f'   · {src.name}: the Edits copy is newer than {dst.parent.name}/{dst.name}, '
+                  'left alone')
+            continue
+        if len(versions) > 1 and len({_file_md5(c[1]) for c in versions}) > 1:
+            print(f'   {src.name}: {len(versions)} different versions in post folders, '
+                  f'offering the newest ({dst.parent.name}/{dst.name})')
+        if _reedit_ok(ref, src, dst):
+            found.append({'ref': ref, 'src': src, 'new': dst, 'post_file': dst, 'dest_dir': d})
+
+    found.sort(key=lambda r: str(r['post_file']))
+    if blurred_reedits:
+        print(f'\n🙂🚫 {len(blurred_reedits)} blur-flagged photo(s) look re-edited, but the '
+              'post copy has pixelated faces, so it cannot go back to Edits.\n'
+              '   Export each from Lightroom into its post folder (any name Lightroom gives\n'
+              '   it), then run ./post.py pull: it adopts the export and offers the clean\n'
+              '   version for Edits while re-blurring the post copy.')
+        for dst, diff in blurred_reedits:
+            print(f'     {dst}  (diff {"crop" if diff == float("inf") else f"{diff:.1f}"})')
+    if stamped:
+        print(f'\n   (fingerprinted {stamped} older blurred copies so pulls notice re-exports)')
+    if args.dry_run:
+        if found:
+            print_reedits(found, root, 'would be offered for write-back')
+        else:
+            print('\nNo re-edits to write back.')
+        return
+    if not found:
+        print('\nNo re-edits to write back.')
+    confirm_reedits(found, root)
+
+
+def _rel(path, root, label=''):
+    """path shown under root's name when it lives there, else in full."""
+    try:
+        return label + str(Path(path).relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def print_reedits(found, posts_root, what):
+    print(f'\n🔁 {len(found)} re-edit(s) {what}:')
+    for k, r in enumerate(found, 1):
+        print(f"  {k:>2}  {_rel(r['post_file'], posts_root)}  →  "
+              f"{_rel(r['src'].parent, EDITS_ROOT, 'Edits/')}/")
+
+
+def preview_pairs(found):
+    """Open re-edits in Preview, each followed by the Edits version it would
+    replace. A blur-flagged one shows as its clean reedit_ copy, which is
+    what Edits gets. Opens the existing files only, nothing is copied."""
+    files = [str(f) for r in found for f in (r['new'], r['src'])]
+    subprocess.run(['open', '-a', 'Preview', *files])
+
+
+def confirm_reedits(found, posts_root):
+    """List the re-edits found, then ask before anything goes into Edits.
+    y = write back and update the live site, e = write back only (the site
+    follows with the next full deploy), n = leave everything as it is
+    (./post.py backfill offers them again). All of them open in Preview
+    first, each next to the Edits version it replaces; a number reopens one."""
+    if not found:
+        offer_site_update()
+        return
+    print_reedits(found, posts_root, 'found, nothing written to Edits yet')
+    if not sys.stdin.isatty():
+        print('   No terminal to confirm in, so nothing was written. '
+              'Run ./post.py backfill to review them.')
+        return
+    preview_pairs(found)
+    print('   Preview has each re-edit followed by the Edits version it replaces '
+          '(type a number to reopen one pair).')
+    while True:
+        try:
+            ans = input('   Write them back to Edits?  y = and update the live site now, '
+                        'e = Edits only, n = not now [y/e/N] ').strip().lower()
+        except EOFError:
+            ans = 'n'
+        if ans.isdigit() and 1 <= int(ans) <= len(found):
+            preview_pairs([found[int(ans) - 1]])
+            continue
+        if ans in ('y', 'yes', 'e'):
+            break
+        if ans in ('', 'n', 'no'):
+            print('   Nothing written. ./post.py backfill offers them again when you are ready.')
+            return
+        print(f'   Type y, e, n or a number from 1 to {len(found)}.')
+    failed = 0
+    for r in found:
+        try:
+            write_back(r)
+        except OSError as e:
+            failed += 1
+            print(f"   ⚠️  {r['src'].name}: not written ({e}); "
+                  './post.py backfill offers it again')
+    if failed == len(found):
+        return
+    if ans == 'e':
+        print('   The live site picks them up with the next full deploy (python3 deploy.py).')
+        return
+    run_deploy()
+
+
+def run_deploy():
+    """deploy.py reprocesses the trips with pending re-edits first (reedits.py)."""
+    py = ROOT / 'venv' / 'bin' / 'python'
+    rc = subprocess.run([str(py if py.exists() else sys.executable), 'deploy.py'],
+                        cwd=str(ROOT), env=load_env()).returncode
+    if rc:
+        print(f'⚠️  deploy.py exited with {rc}; the re-edits stay pending.')
+
+
+def offer_site_update():
+    """Re-edits written to Edits earlier ("Edits only") but not live yet."""
+    pending = reedits.load_pending()
+    if not pending:
+        return
+    n = sum(len(e.get('sources', [])) for e in pending.values())
+    names = ', '.join(e.get('name') or slug for slug, e in pending.items())
+    print(f'🔁 {n} re-edit(s) already in Edits are not live yet ({names}).')
+    try:
+        answer = input('   Update the live site now? [y/N] ') if sys.stdin.isatty() else ''
+    except EOFError:
+        answer = ''
+    if answer.strip().lower() in ('y', 'yes'):
+        run_deploy()
+    else:
+        print('   Left for later: the next full deploy (python3 deploy.py) reprocesses '
+              'and uploads them.')
 
 
 # ---------------------------------------------------------------- serve
@@ -1465,6 +1835,12 @@ def main():
     b.add_argument('--replace', action='store_true',
                    help='Replace the saved boxes for this photo instead of adding to them')
     b.set_defaults(func=cmd_blur)
+
+    f = sub.add_parser('backfill', help='write re-edits from earlier pulls back to Edits')
+    f.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',
+                   help='Folder the posts were pulled into')
+    f.add_argument('--dry-run', action='store_true', help='Report only, change nothing')
+    f.set_defaults(func=cmd_backfill)
 
     m = sub.add_parser('mirror', help='sync an already-running dev server with the live site')
     m.add_argument('--interval', type=int, default=5,

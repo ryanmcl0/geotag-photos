@@ -936,6 +936,20 @@ def main():
         print(f"   Mode:     DRY RUN")
     print()
 
+    # Step 0-pre: Photos re-edited for a post and written back to Edits by
+    # `./post.py pull`. Reprocessing them here is what makes "the next deploy"
+    # carry a re-edit. A code/manifest-only deploy leaves them waiting, since
+    # it would not upload the new images.
+    import reedits
+    if reedits.load_pending():
+        if args.skip_images:
+            print("🔁 Post re-edits are waiting; they go out with the next deploy "
+                  "without --skip-images.\n")
+        else:
+            print("🔁 Reprocessing trips with post re-edits...")
+            reedits.apply_pending(dry_run=args.dry_run)
+            print()
+
     # Step 0: Back up config/ to the private repo (gitignored here for privacy)
     if not args.skip_config_backup:
         print("🗄️  Backing up config/ to private repo...")

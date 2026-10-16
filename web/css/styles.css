@@ -898,9 +898,25 @@ details[open] .country-summary::after {
         background: #fff;
     }
 
+    /* Popup content + Leaflet's 14px margins + border must fit the screen with a
+       small gutter, or its right edge (and the close button) is cut off. */
     .cluster-popup {
         width: 460px;
-        max-width: calc(100vw - 24px);
+        max-width: calc(100vw - 56px);
+    }
+
+    /* While a popup is open, the corner buttons (menu, zoom, Filters) step aside
+       so none of them sits on top of it; they come back when it closes. */
+    #map .leaflet-top,
+    #map .sidebar-toggle,
+    #map .map-settings {
+        transition: opacity .2s ease;
+    }
+    #map:has(.leaflet-popup) .leaflet-top,
+    #map:has(.leaflet-popup) .sidebar-toggle,
+    #map:has(.leaflet-popup) .map-settings {
+        opacity: 0;
+        pointer-events: none;
     }
 
     .cluster-popup .photo-grid {
@@ -920,7 +936,7 @@ details[open] .country-summary::after {
     /* Single-photo cluster popup: fill the screen width, cap preview height. */
     .photo-popup {
         width: 440px;
-        max-width: calc(100vw - 24px);
+        max-width: calc(100vw - 56px);   /* same gutter as .cluster-popup */
     }
     .photo-popup .popup-thumbnail { height: 240px; }
 

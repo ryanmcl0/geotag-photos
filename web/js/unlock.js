@@ -104,8 +104,34 @@ window.Unlock = (function () {
         });
     }
 
+    // Site search: a magnifier beside See All on every page with the top nav, and
+    // "/" from anywhere opens it (search.html handles "/" itself, to focus the box).
+    function bindSearch() {
+        const seeall = document.getElementById('seeall-link');
+        const onSearch = /\/search(\.html)?$/.test(location.pathname);
+        if (seeall && !document.querySelector('.nav-search')) {
+            const a = document.createElement('a');
+            a.className = 'nav-search';
+            a.href = '/search.html';
+            a.title = 'Search (/)';
+            a.setAttribute('aria-label', 'Search');
+            a.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>';
+            if (onSearch) a.classList.add('active');
+            seeall.before(a);
+        }
+        if (onSearch) return;
+        document.addEventListener('keydown', e => {
+            if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+            const t = document.activeElement;
+            if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+            e.preventDefault();
+            location.href = '/search.html';
+        });
+    }
+
     function bind() {
         bindNavMore();
+        bindSearch();
         document.querySelectorAll('[data-gated]').forEach(t => {
             t.addEventListener('click', e => {
                 if (unlocked()) return;

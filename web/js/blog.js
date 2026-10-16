@@ -25,6 +25,7 @@
   }
 
   const dayAnchors = [];   // {id, label, el}
+  let paraCount = 0;
 
   data.sections.forEach(sec => {
     if (sec.type === 'heading') {
@@ -58,6 +59,7 @@
       sec.paragraphs.forEach(p => {
         const el = document.createElement('p');
         el.innerHTML = p;
+        el.id = 'p-' + (paraCount++);   // site search links straight to a paragraph
         root.appendChild(el);
       });
     } else if (sec.type === 'photos') {
@@ -67,6 +69,8 @@
       window.Gallery.renderGrid(g, sec.photos, { sequential: true });
     }
   });
+
+  openSearchHit();
 
   if (!v2) return;
 
@@ -129,4 +133,35 @@
   document.addEventListener('scroll', () => {
     top.classList.toggle('show', document.documentElement.scrollTop > 1200);
   }, { passive: true });
+
+  // Arriving from site search (#p-N?hl=words): mark the words in that paragraph
+  // and bring it into view. Photo grids above it settle their height as they lay
+  // out, so the scroll is repeated once they have.
+  function openSearchHit() {
+    const m = location.hash.match(/^#p-(\d+)$/);
+    const el = m && document.getElementById('p-' + m[1]);
+    if (!el) return;
+    const words = (new URLSearchParams(location.search).get('hl') || '')
+      .split(/\s+/).filter(w => w.length > 1)
+      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (words.length) {
+      const re = new RegExp('(' + words.join('|') + ')', 'ig');
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walk.nextNode()) nodes.push(walk.currentNode);
+      nodes.forEach(n => {
+        if (!re.test(n.nodeValue)) return;
+        re.lastIndex = 0;
+        const span = document.createElement('span');
+        span.innerHTML = n.nodeValue.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+          .replace(re, '<mark class="search-hit">$1</mark>');
+        n.replaceWith(...span.childNodes);
+      });
+    }
+    el.classList.add('search-para');
+    const go = () => el.scrollIntoView({ block: 'center' });
+    requestAnimationFrame(go);
+    setTimeout(go, 700);
+    window.addEventListener('load', go, { once: true });
+  }
 })();

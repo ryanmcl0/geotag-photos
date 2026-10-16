@@ -675,16 +675,23 @@ def facet_roofs(facet, records, echo):
     claimed 74 photos for the Shangri-La Hotel in Dubai. Those strings are skipped
     unless the roster opted in by using the day string ITSELF as a match token
     (Grand View Zunyi Hotel does, to claim that day's climb). Roads read day
-    strings legitimately — the day names the road driven — so this is roofs-only."""
+    strings legitimately — the day names the road driven — so this is roofs-only.
+
+    Roster extras: `trips` (slugs) limits an entry's tokens to those trips, for two
+    places that share a folder name ("Novotel" in London and in Bangkok).
+    `category: "underground"` puts tunnels and stations in their own section with
+    no height. `crane_m` marks a crane climb: the tile shows the finished building
+    height with the crane in brackets, and it ranks by the crane."""
     roster_path = facet.get('roster')
     roster = json.loads((ROOT / roster_path).read_text()) if roster_path else {}
     entries = roster.get('buildings', [])
     tiers = roster.get('tiers', [600, 500, 400, 300, 200])
 
-    tokens = []   # (token_lower, entry_index)
+    tokens = []   # (token_lower, entry_index, trips or None)
     for i, b in enumerate(entries):
+        only = set(b['trips']) if b.get('trips') else None
         for t in b.get('match', [b['name']]):
-            tokens.append((t.lower(), i))
+            tokens.append((t.lower(), i, only))
 
     photos_by_building = {}
     for r in records:
@@ -693,13 +700,27 @@ def facet_roofs(facet, records, echo):
             continue
         itinerary = bool(DAY_ITINERARY.match(bl))
         best = None
-        for t, i in tokens:
+        for t, i, only in tokens:
             if itinerary and not DAY_ITINERARY.match(t):
                 continue           # place passed through on a drive, not a climb
+            if only and r['trip'] not in only:
+                continue
             if t in bl and (best is None or len(t) > len(best[0])):
                 best = (t, i)
         if best:
             photos_by_building.setdefault(best[1], []).append(r)
+
+    def underground(b):
+        return b.get('category') == 'underground'
+
+    def rank_height(b):
+        return b.get('crane_m') or b.get('height_m')
+
+    def height_label(b):
+        if not b.get('height_m'):
+            return None
+        h = f"{b['height_m']} m"
+        return f"{h} ({b['crane_m']} m crane)" if b.get('crane_m') else h
 
     def tier_of(h):
         if h is None:
@@ -720,13 +741,16 @@ def facet_roofs(facet, records, echo):
 
     by_tier = {}
     for i, b in enumerate(entries):
-        by_tier.setdefault(tier_of(b.get('height_m')), []).append(i)
+        key = 'underground' if underground(b) else tier_of(rank_height(b))
+        by_tier.setdefault(key, []).append(i)
 
     sections, all_photos, with_photos = [], [], 0
-    order = [t for t in tiers if t in by_tier] + ([0] if 0 in by_tier else []) + ([None] if None in by_tier else [])
+    order = ([t for t in tiers if t in by_tier] + ([0] if 0 in by_tier else [])
+             + (['underground'] if 'underground' in by_tier else [])
+             + ([None] if None in by_tier else []))
     for t in order:
         subtiles = []
-        idxs = sorted(by_tier[t], key=lambda i: -(entries[i].get('height_m') or 0))
+        idxs = sorted(by_tier[t], key=lambda i: (-(rank_height(entries[i]) or 0), entries[i]['name']))
         for i in idxs:
             b = entries[i]
             photos = by_time(photos_by_building.get(i, []))
@@ -734,10 +758,12 @@ def facet_roofs(facet, records, echo):
                 continue   # counted in the stat, but no tile until its edits are processed
             all_photos.extend(photos)
             with_photos += 1
-            bits = [f"{b['height_m']} m" if b.get('height_m') else None, b.get('city')]
+            bits = [height_label(b), b.get('city')]
             subtiles.append({
                 'id': slugify(b['name']), 'title': b['name'], 'done': True,
-                'height_m': b.get('height_m'), 'city': b.get('city'),
+                'height_m': b.get('height_m'), 'crane_m': b.get('crane_m'),
+                'height_label': height_label(b), 'city': b.get('city'),
+                'country': b.get('country'), 'underground': underground(b) or None,
                 'subtitle': ' · '.join(x for x in bits if x),
                 'count': len(photos),
                 'cover': pick_cover(photos),
@@ -748,11 +774,13 @@ def facet_roofs(facet, records, echo):
             })
         if subtiles:
             sections.append({'id': f'tier-{t if t is not None else "tbc"}',
-                             'title': tier_title(t), 'subtiles': subtiles})
+                             'title': 'Underground' if t == 'underground' else tier_title(t),
+                             'subtiles': subtiles})
 
-    info = facet['infographic']['format'].format(value=len(entries))
+    buildings = [b for b in entries if not underground(b)]
+    info = facet['infographic']['format'].format(value=len(buildings))
     years = sorted({y for sec in sections for s in sec['subtiles'] for y in s['years']}, reverse=True)
-    echo(f"  roofs: {len(entries)} buildings in roster, {with_photos} with photos "
+    echo(f"  roofs: {len(buildings)} buildings + {len(entries) - len(buildings)} underground in roster, {with_photos} with photos "
          f"({len(all_photos)} photos, {len(sections)} height tiers)")
     return {'kind': 'tiered_tilegroup', 'infographic': info, 'years': years,
             'sections': sections}, all_photos
@@ -1054,7 +1082,7 @@ def build_stats(coll):
                             'ranked_total': sum(1 for b in br if b.get('rank'))}
     rf = roster_for('rooftopping')
     if rf:
-        blds = rf.get('buildings', [])
+        blds = [b for b in rf.get('buildings', []) if b.get('category') != 'underground']
         stats['buildings'] = len(blds)
         # cities/countries breakdowns only for pure-rooftopping collections (the China
         # masthead has its own places stat from the regions roster)
@@ -1096,6 +1124,9 @@ def main(collection, do_category, force):
     stamp_road_km(click.echo)
     stamp_trip_bounds(click.echo)
     save_dims_cache()
+    # Site search reads the collections written above, so it goes last.
+    from build_search import build as build_search
+    build_search(click.echo)
 
 
 def _all_subtiles(tile):
@@ -1685,7 +1716,8 @@ def emit_site_stats(echo):
     )
     wr_path = ROOT / 'config' / 'world_roofs.json'
     if wr_path.exists():
-        stats['buildings'] = len(json.loads(wr_path.read_text()).get('buildings', []))
+        stats['buildings'] = sum(1 for b in json.loads(wr_path.read_text()).get('buildings', [])
+                                 if b.get('category') != 'underground')
     driven, legs = 0.0, 0
     for f in ('world_road_trips.json', 'china_road_trips.json'):
         p = ROOT / 'config' / f

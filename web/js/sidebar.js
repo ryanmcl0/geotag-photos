@@ -40,6 +40,7 @@
      */
     async function initSidebar() {
         ensureSidebarNav();
+        addSearchIcon();
         await loadTripsData();
         renderNavigation();
         renderSeeAllSection();
@@ -69,6 +70,23 @@
             </a>
         `;
         header.insertBefore(nav, header.firstChild);
+    }
+
+    /** Site search, beside the Home icon (the top-nav pages get theirs from unlock.js). */
+    function addSearchIcon() {
+        const home = document.querySelector('.sidebar-nav .sidebar-homeicon');
+        if (!home || document.querySelector('.sidebar-searchicon')) return;
+        const a = document.createElement('a');
+        a.className = 'sidebar-searchicon';
+        a.href = '/search.html';
+        a.title = 'Search';
+        a.setAttribute('aria-label', 'Search');
+        a.innerHTML = `
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
+                <path d="m15.5 15.5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>`;
+        home.before(a);
     }
 
     /**

@@ -538,16 +538,39 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
      collides with the now-full-width bottom-centered title block — move them to the
      top-right (clear of the bottom-aligned text) so they never overlap on mobile */
   .tile-bloglinks { top: 12px; bottom: auto; right: 12px; align-items: flex-end; }
+  /* the smallest labels, a step up so they read on a phone */
+  .bridge-row--pending .bridge-meta { font-size: 12px; }
+  .bridge-status-asof { font-size: 11px; }
 }
 @media (max-width: 760px) {
-  /* 9 links + See All overflow a narrow header, and the absolutely-centred brand
-     name overlaps them. Give the name and each link group their own full-width row
-     (flex-basis:100% is what forces the links to actually wrap instead of the group
-     staying one wide, clipped row) so every item stays visible. */
-  .topnav { flex-wrap: wrap; row-gap: 12px; justify-content: center; }
-  .nav-name { position: static; transform: none; order: -1; flex-basis: 100%; text-align: center; }
+  /* Phones: two rows. The name gets the first, with search at its left and See All
+     at its right; the page links get the second (flex-basis:100% is what forces
+     them to wrap rather than stay one wide, clipped row). Links carry vertical
+     padding so each is a finger-sized target without looking any bigger. The
+     whole bar slides away while scrolling down and returns on any scroll up
+     (unlock.js), so it never sits on a third of a small screen. */
+  .topnav {
+    flex-wrap: wrap; row-gap: 2px; justify-content: center;
+    padding: 12px var(--margin) 4px; transition: transform .25s ease;
+  }
+  .topnav.topnav--away { transform: translateY(-100%); }
+  .nav-name { position: static; transform: none; order: -1; flex-basis: 100%; text-align: center; padding: 6px 0; }
   .nav-spacer { display: none; }
-  .nav-links { flex-basis: 100%; flex-wrap: wrap; justify-content: center; gap: 10px 16px; }
+  .nav-links { flex-basis: 100%; flex-wrap: wrap; justify-content: center; gap: 0 12px; }
+  .nav-links a, .nav-more-toggle { padding: 9px 0; }
+  .nav-links:has(#seeall-link) {
+    position: absolute; top: 12px; left: var(--margin); right: var(--margin);
+    flex-basis: auto; justify-content: flex-start; pointer-events: none;
+  }
+  .nav-links:has(#seeall-link) > * { pointer-events: auto; }
+  .nav-links:has(#seeall-link) a { padding: 7px 6px; }
+  #seeall-link { margin-left: auto; }
+  .nav-more { padding-bottom: 0; margin-bottom: 0; }
+  /* things that stick under the bar follow it up when it slides away */
+  #galleries-app .gallery-year .section-head { transition: top .25s ease; }
+  html.nav-away #galleries-app .gallery-year .section-head { top: 0; }
+  .day-rail { top: var(--topnav-h, 0px); transition: top .25s ease; }
+  html.nav-away .day-rail { top: 0; }
 }
 
 /* ---------- videos page: embedded-in-tile players ---------- */
@@ -667,6 +690,7 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 @media (max-width: 1200px) { .ss-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 860px) {
   .ss-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ss-card__map { top: 6px; right: 6px; padding: 8px 10px 7px; font-size: 12px; }
   .ss-place__inner { padding: 24px 20px; }
   .ss-row__img { width: 88px; }
   .ss-row--place .ss-row__img { width: 64px; }

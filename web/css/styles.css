@@ -882,6 +882,10 @@ details[open] .country-summary::after {
         will-change: transform;
     }
 
+    /* The menu button sits at the map's top-left corner, where Leaflet puts its
+       zoom and fit buttons; drop those below it so neither covers the other. */
+    #map .leaflet-top.leaflet-left { top: 56px; }
+
     .sidebar-toggle {
         display: flex;
         z-index: 3000;

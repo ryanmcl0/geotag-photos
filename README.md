@@ -1,294 +1,208 @@
 # Travel Photography Map
 
-Turn many years of travel photography into a single interactive world map — every place you've been, shown by the photos you took there.
+A decade of travel photography turned into one website: an interactive world map, trip galleries, long-form blogs and a deep dive into China, all generated from folders of edited photos.
 
-You give the pipeline a folder of edited photos per trip; it works out **where each photo belongs**, generates web-sized images, clusters them into map markers, and publishes a static site (Leaflet front-end) where every trip is browsable by year and region. When a trip has a GPS track, photos snap to the route; when it doesn't, the pipeline falls back through a chain of strategies (drone GPS, the photo's folder/location name, a trip fallback) so older, GPS-less trips still land in the right place.
+Live at **[ryanmcl.com](https://ryanmcl.com)**. Over 15,000 photos from 57 countries, more than 90 trips and about 53,000 km of road trips so far, with older trips still being backfilled.
 
-It's built around a *well-organised* archive — a decade of trips filed by year, trip, and location — and that structure is exactly what makes automatic placement possible. The real work is the **long tail of edge cases**: conventions that evolved over the years and per-trip quirks, each needing its own handling rather than one tidy one-size-fits-all format (see [The backfill](#the-backfill) below).
+You point the pipeline at a trip's edited photos. It works out **where each photo was taken**, makes web-sized images, groups them into map markers and publishes a static site. When a trip has a GPS track, photos snap to the route. When it doesn't, the pipeline falls back through drone GPS, the photo's folder name, location history and a trip fallback, so even trips from 2015 land in the right place.
 
-**Hosting in one line:** output is a static site + aggressively-compressed images, deployed **free** to **Cloudflare Pages + R2** — a full lifetime library of over 10,000 photos fits in the free tier with **zero egress fees**, and the whole map (plus a separate "private trips" tier) can sit behind a password. Details in [Hosting](#hosting) and [DEPLOYMENT.md](DEPLOYMENT.md).
+The whole thing runs on **Cloudflare Pages + R2 for free**: a static site plus compressed images, with no bandwidth bill.
 
-## Project goals
+## What's on the site
 
-- **Show, don't curate.** A lifetime of trips on one map, browsable by year/region/trip.
-- **Place anything.** GPX, drone EXIF, folder-name lookup, or fallback — every photo gets a position, even with no GPS.
-- **Free hosting friendly.** Output is small, static, and CDN-cacheable. Photos are aggressively compressed so the full library can fit in a free-tier object store. See [Hosting](#hosting) below.
-- **Re-runnable & incremental.** Re-process a trip at any time; or update only what changed (`--update`). Outputs are deterministic and gitignored.
+- **Map.** Every trip on one map, with routes, photo clusters, satellite / street / topo layers and a year filter. Links can open a single trip, a year, a filtered set of photos, or a single spot (`map.html?mode=trip&trip=<slug>&at=lat,lon`).
+- **Galleries.** One justified-grid gallery per trip, with a title, regions, a short description and buttons to the trip's map and blog. Photos open in a full-screen lightbox.
+- **China.** A hub built from the same photos, organised by theme rather than by trip:
+  - **Provinces**: every province visited, with a progress count and a gallery each.
+  - **On the Roads**: each road trip with its car, dates, distance and route.
+  - **Bridges**: the world's highest bridges, ranked, with construction status for the ones still being built.
+  - **Energy & Infrastructure**: dams, solar and wind farms and other big engineering.
+  - **Stories**: the China blogs.
+- **Blogs.** Long-form trip write-ups with inline photo grids, a route map and a day-by-day rail. Any paragraph can be linked to directly.
+- **Search.** One box over everything: trips, places on the map, the China pages and blog text. Typing a country or a Chinese province opens a place card showing everywhere it appears on the site. It tolerates typos, and `/` opens it from any page.
 
-<a name="the-backfill"></a>
-## The backfill — and why the toolset keeps growing
+## Access
 
-The map didn't start full; it's being **backfilled** from a deep archive, and that backfill is what drives most of the features here. Each new batch of older trips surfaces a problem the pipeline didn't handle yet, and the fix becomes a general capability:
+The site sits behind a password, and QR invite links let people in without sharing it (see [QR_ACCESS.md](QR_ACCESS.md)). A few trips and pages that aren't ready to share need a second password. The same rules apply everywhere a visitor could reach them: pages, data files, search results and the image proxy.
 
-| Backfill challenge | Feature it drove |
+## How a trip gets onto the map
+
+1. **Read the track.** Parse the trip's GPX (or several merged Strava days) into timestamped trackpoints.
+2. **Find the photos.** Scan the trip's edits folder, skipping noise folders (`Compressed/`, `Phone/`, `Videos/`).
+<a name="placement-priority"></a>
+3. **Place each photo.** In priority order:
+   1. The photo's **own GPS tag** (drone JPEGs carry one).
+   2. The matching **drone DNG** (with `--raws`).
+   3. **GPX interpolation** between the trackpoints either side of the photo's time, after correcting the camera clock (`--geosync`).
+   4. **Folder name lookup**: for trips without a track, the photo's folder in the raw tree names the place, and `config/locations.json` gives its coordinates. These names also become the cluster titles on the map.
+   5. **Trip fallback**: anything left goes to the track's centre or a given point, tagged `approximate` in the manifest.
+4. **Fix the stragglers.** `geotag_overrides` in `config/trips.json` re-place or relabel individual photos (by name or number range) without touching the source files, for drifting clocks and mislabelled folders.
+5. **Compress.** A 400 px thumbnail and a 2160 px display image per photo, WebP Q90 by default, into `hosted-photos/<slug>/`. Originals are never touched.
+6. **Cluster and publish.** Group nearby photos into markers and write `manifest.json` + `route.geojson` to `web/trips/<slug>/`, then refresh the trip index.
+
+Then the site-level builders run over every processed trip:
+
+| Builder | What it makes |
 |---|---|
-| Trips with **no GPS track** at all | the placement fallback chain — drone EXIF → **building/location lookup from folder names** → trip fallback |
-| Folder structures that **changed over the years** (centralized edits vs. edits left in-tree next to raws, flat city folders vs. building-level) | folder-aware location extraction + `--only-edits-dirs` to ingest in-tree layouts without scooping up raws/camera dumps |
-| Older trips needing **coordinates** for named places | a coordinates file keyed by folder name, populated from a curated places list + lookups |
-| **Re-editing / adding / removing** photos in already-processed trips | incremental `--update` (delta re-encode + orphan cleanup) so a tweak doesn't re-run the whole trip |
-| The library **growing past free-tier storage** | tiered compression and retroactive `tools/recompress.py` (see [Compression](#compression)) |
+| `build_collections.py` | The China hub (provinces, roads, bridges, energy) from rosters in `config/`, plus landing-page stats, gallery covers and descriptions |
+| `build_blogs.py` | Blog pages from Markdown drafts, with photos resolved against the trip manifests |
+| `build_search.py` | The search indexes behind `search.html` |
+| `placeholder_trips.py` | "Photos pending" pins for trips that are planned or not yet edited |
 
-So the project is less a one-shot script than a steadily generalizing toolset: every messy corner of the archive that gets mapped tends to leave behind a reusable feature.
+## The backfill, and why the toolset keeps growing
 
-## Hosting
+The map didn't start full. It's being backfilled from a deep archive, and most features here exist because a batch of older trips broke an assumption:
 
-The site itself is tiny (HTML + JS + manifest JSON). The photos are the budget.
+| Backfill problem | What it led to |
+|---|---|
+| Trips with **no GPS track** | The placement fallback chain and folder-name lookup |
+| Tracks with **gaps**, or only a phone's location history | `tools/reconstruction/`: rebuild a GPX from Google Timeline, merge partial Strava days, fill holes along the road |
+| **Camera clocks** left on the wrong time zone | `--geosync`, clock checks against phone photos, and `geotag_overrides` |
+| Folder layouts that **changed over the years** | Folder-aware location names and `--only-edits-dirs` for edits stored next to raws |
+| **Re-editing** photos in finished trips | Incremental `--update` and `tools/sync_post_edits.py` |
+| The library **outgrowing the free tier** | Tiered compression and `tools/recompress.py` |
 
-**The chosen setup → Cloudflare Pages + R2, $0.** The static site (HTML/JS/JSON) goes to **Cloudflare Pages**; the compressed images go to **Cloudflare R2**. A lifetime library stays inside the free tier, the whole site can be password-gated, and there's no egress bill no matter how much traffic it gets. The full step-by-step deploy guide (credentials, `deploy.py`, password protection, custom domain) is in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
-
-### Why this split — hosts evaluated
-
-| Host | Free quota | Verdict |
-|---|---|---|
-| GitHub Pages | 1 GB hard cap | Small libraries only (~1k photos) — too tight |
-| Cloudflare Pages | Unlimited bandwidth, **25k file limit** | Great for the static site; file limit caps it at ~12k photos (thumb + display = 2 files each) if images live here too |
-| Netlify | ~10 GB practical | Medium libraries |
-| **Cloudflare R2** ✅ | **10 GB storage + 1M reads/mo, zero egress** | Chosen for images — large libraries, no bandwidth bill |
-| Backblaze B2 + Cloudflare CDN | 10 GB + free egress to CDN | Equivalent alternative to R2 |
-
-The deciding factor was **R2's zero egress fees** (see the cost projection below) plus pairing it with Pages for the static front-end. The shape:
-
-1. Push `web/` (HTML/JS/JSON, no images) to **Cloudflare Pages**.
-2. Sync `hosted-photos/` to **Cloudflare R2**.
-3. Manifest image paths resolve to the bucket so browsers fetch photos straight from R2.
-
-This split is intentional: the pipeline writes images and metadata to different roots, so swapping the image host is a path change, not a refactor. Two-tier visibility (public vs. password-gated private trips) is applied at deploy time — see [Public / private](#public--private).
-
-### Scaling to 10k+ photos
-
-This project is expected to grow well past 10,000 photos as more trips are added. Here's how the constraints shift at that scale:
-
-**Cloudflare Pages file limit (25k files)** is the first wall you'll hit. At 2 files per photo (thumbnail + display), 25k files = ~12,500 photos. Options when you get there:
-- Switch to **R2 with custom domain** for image serving — Pages only hosts the HTML/JS/JSON, images come straight from R2. No file limit applies to R2.
-- This is already how `deploy.py` works (images proxied through Pages Functions) — you'd just move to direct R2 serving with a custom domain to avoid the proxy overhead at scale.
-
-**R2 storage (10 GB free)** at Q90/2160px averages ~0.7 MB per display image. 10k photos ≈ 7 GB display + ~0.3 GB thumbnails = ~7.3 GB — still within the free tier. At ~14k photos you'd cross 10 GB and pay ~$0.015/GB/month beyond that (roughly $0.06/month per extra 4GB).
-
-**Compression strategy at scale** — if storage becomes a concern, re-encoding the whole library with `tools/recompress.py` is a single command:
-```bash
-# Drop to Q85/1920px — cuts ~25% per image, ~5.5 GB for 10k photos
-./venv/bin/python tools/recompress.py --trip all --quality 85 --display-longest 1920
-```
-
-**Page load time** — at 10k+ photos, loading all manifests on the all-trips view gets heavy (~10 MB of JSON). Consider splitting into per-year lazy loading if initial load feels slow.
-
-**Rough cost projection**:
-
-| Library size | Storage | Monthly R2 cost | Notes |
-|---|---:|---:|---|
-| ~4k photos (current) | ~3 GB | $0 | Within free tier |
-| ~10k photos | ~7 GB | $0 | Still within free tier |
-| ~14k photos | ~10 GB | ~$0.06/mo | Just over free tier |
-| ~30k photos | ~21 GB | ~$0.17/mo | Full lifetime library |
-
-The numbers above are not typos. Cloudflare R2 charges **zero egress fees** — unlike S3 or GCS which charge $0.08–0.09/GB for every image a visitor loads, R2 only charges for storage. A full lifetime library of 30,000 travel photos costs less than a cup of coffee per month to host, with unlimited bandwidth. Even a very active site with thousands of daily visitors would stay under $1/month.
+So it's less a one-off script than a toolset that grows with the archive: each messy corner that gets mapped leaves behind something reusable.
 
 ---
 
-# Technical / usage
+# Usage
 
-## How it works
-
-1. **Parse GPX** — extract trackpoints with UTC timestamps.
-2. **Find photos** — scan the input directory, skipping known noise subdirs (`Compressed/`, `Phone/`, `Videos/`).
-<a name="placement-priority"></a>
-3. **Resolve GPS coordinates** per photo. Priority order:
-   1. The photo's **own EXIF GPS tag** (DJI drone JPEGs have this baked in).
-   2. The matching **DJI DNG** (pass `--raws` to enable).
-   3. **GPX interpolation** between trackpoints surrounding the photo's timestamp.
-   4. **Building / location lookup** — for trips without GPS, the photo's source folder name (derived from the raw directory tree via `--raws-root`) is looked up in a coordinates file (`config/locations.json`, gitignored) to place it at that named place. This is what powers no-GPX trips and gives clusters their titles.
-   5. **Fallback location** — when all the above fail. Defaults to the *GPX centroid* (rough middle of the trip), or whatever you pass to `--fallback-location lat,lon`. Photos placed here are tagged `placement: approximate` in the manifest. Pass `--fallback-location none` to drop them instead.
-   6. The manifest records a `skipped` array for every photo that didn't get exact placement, including the reason and hours outside the GPX window — useful for auditing after a long run.
-5. **Compress** — write a small thumbnail (400 px longer-side) and a display image (2160 px longer-side WebP Q90 by default) to `hosted-photos/<slug>/`. Both caps apply to the *longer* side so portrait drone shots don't blow up. Originals are never touched.
-6. **Cluster** — group photos within `--cluster-radius` metres (default 50) into a single marker.
-7. **Publish** — write `manifest.json` + `route.geojson` to `web/trips/<slug>/`, symlink the compressed images in, and update `web/trips/index.json` and the year/trip HTML pages.
-
-## Quick start
-
-### Prerequisites
+## Setup
 
 ```bash
 brew install exiftool
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
 ```
 
-### Run a single trip
+## Process trips
 
-```bash
-./venv/bin/python process_trip.py \
-  --name "My Trip" \
-  --gpx "/path/to/track.gpx" \
-  --photos "/path/to/photos"
-```
-
-`--output` defaults to `web/trips/<slug>`, where `<slug>` is derived from `--name`. Override with `--output ...` if you want. `--gpx` is optional — omit it for trips with no GPS recording (see [Placement](#placement-priority)).
-
-### Run many trips (`process_all.py` + `trips.json`)
-
-For more than a one-off, list your trips in `config/trips.json` (gitignored — it holds your paths) and let the batch runner drive `process_trip.py` once per trip:
-
-```bash
-./venv/bin/python process_all.py                 # process unprocessed trips
-./venv/bin/python process_all.py --trip "Name"   # scope to one (substring match)
-```
-
-Each entry looks like:
+List trips in `config/trips.json` (gitignored, since it holds your paths; see `config/trips.example.json`):
 
 ```jsonc
 {
-  "public":  [ { "name": "<trip-name>", "edits": "/path/to/photos", "gpx": "/path/to/track.gpx", "raws": "/path/to/originals", "options": { } } ],
-  "private": [ { "name": "<trip-name>", "edits": "/path/to/photos", "options": { "fallback_location": "<lat>,<lon>" } } ]
+  "public":  [ { "name": "<trip name>", "edits": "/path/to/edits", "gpx": "/path/to/track.gpx", "raws": "/path/to/raws", "options": { } } ],
+  "private": [ { "name": "<trip name>", "edits": "/path/to/edits", "options": { "fallback_location": "<lat>,<lon>" } } ]
 }
 ```
 
-`options` keys include `geosync`, `cluster_radius`, `fallback_location`, `filter_raws`, `only_edits_dirs`, `split_offroute_private`, and more (see `config/trips.example.json`). Trips in `public` show by default; `private` trips sit behind a second password gate (see [Public / private](#public--private)).
-
-### Updating after edits change
-
-If you add, replace, or delete edited photos in a trip's folder, reprocess just the delta with incremental update mode — no config change needed:
+Trips in the second block only show with the second password. Then:
 
 ```bash
-./venv/bin/python process_all.py --update
+./venv/bin/python process_all.py                  # process new trips
+./venv/bin/python process_all.py --trip "Name"     # one trip (substring match)
+./venv/bin/python process_all.py --update          # only what changed since last run
+./venv/bin/python process_all.py --trip X --reindex  # apply config-only changes (overrides, labels) in seconds
 ```
 
-`--update` reprocesses only trips whose edits are newer than their last output, and within each, only the changed/new/deleted photos (re-encoding changed ones, reusing the rest, and removing orphaned images for deleted ones). It compares against a per-trip `source_state.json` baseline; the **first** `--update` on a trip processed before this feature adopts the current files as the baseline (so it catches *new* photos but not an *overwrite-in-place*). To stamp baselines up front without reprocessing:
+`options` keys include `geosync`, `cluster_radius`, `fallback_location`, `filter_raws`, `only_edits_dirs` and `geotag_overrides`. A single trip can also be run directly:
 
 ```bash
-./venv/bin/python process_all.py --reindex
+./venv/bin/python process_trip.py --name "My Trip" --photos /path/to/edits --gpx /path/to/track.gpx
 ```
 
-To force a full re-run while reusing already-encoded images (e.g. after a logic change): `--force --skip-existing-images`.
-
-### View the map
+`process_all.py` rebuilds the site collections at the end of a run. To rebuild them on their own:
 
 ```bash
-cd web && python3 -m http.server 8000
+./venv/bin/python build_collections.py   # China hub, stats, covers (+ the search index)
+./venv/bin/python build_blogs.py         # blogs
 ```
 
-Open http://localhost:8000. All processed trips appear together. Each trip page lives at `/<year>/<slug>/`.
+## Run it locally
 
-<a name="public--private"></a>
-### Public / private
+```bash
+./serve.sh        # http://localhost:8788
+```
 
-Trips are two-tiered: those in the `public` block of `trips.json` are visible to any visitor; those in `private` are hidden behind a second "see all" password. Deployment reads the public/private split and stamps a flag into the trip index so the frontend knows what to reveal. Both the trip config and the coordinates file are gitignored, so location data never enters the repo.
+This runs the site under Wrangler with the same middleware as production, so passwords and gating behave as they will live. For a quick look without any of that, `cd web && python3 -m http.server 8000` also works.
+
+## Deploy
+
+```bash
+set -a; source .env.deploy; set +a
+venv/bin/python deploy.py                 # everything
+venv/bin/python deploy.py --skip-images   # code and data only
+```
+
+`deploy.py` refreshes the stats, covers and search indexes, uploads changed images to R2 (by size, deleting orphans), pushes the site to the Pages repo that Cloudflare builds from, and backs up the gitignored `config/` to a separate repo. The first-time Cloudflare setup is in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## CLI options
 
-Common `process_trip.py` options (run `--help` for the full list):
+Common `process_trip.py` options (`--help` for the full list):
 
 ```
---name TEXT                Trip name for display  [required]
---photos PATH              Path to photos directory  [required]
---gpx PATH                 Path to GPX file (omit for no-GPS trips)
---output PATH              Metadata output dir (default: web/trips/<slug>)
---hosted-photos-dir PATH   Root for compressed image storage (default: <project>/hosted-photos)
---geosync TEXT             Timezone offset for camera sync (e.g., +02:00)
---gpx-tolerance-hours FLOAT  Hours outside GPX window before fallback kicks in (default: 2)
---fallback-location LAT,LON  Lat,lon for photos w/ no GPS + outside GPX window
-                             (default: GPX centroid; pass "none" to drop)
---cluster-radius INTEGER   Clustering radius in meters
---raws-root PATH           Raw directory tree — folder names become building/location titles
---only-edits-dirs          Keep only photos under a folder named "Edits" (in-tree layouts)
---skip-existing-images     Reuse encoded images; recompute placement/clusters/manifest only
---update / --reindex       Incremental delta reprocess / stamp update baseline
---raws PATH                Path to original DNG files for DJI drone GPS data
---format [webp|jpeg]       Image format for thumbnails/display (default: webp)
---quality INTEGER          Encoder quality 1-100 (default: 90)
---display-longest INTEGER  Max longer-side for display images in px (default: 2160)
---thumbnail-longest INTEGER Max longer-side for thumbnails in px (default: 400)
---test-mode PERCENT        Process only X% of photos (e.g., 10 for 10%)
---dry-run                  Preview without writing files
+--name TEXT                  Trip name  [required]
+--photos PATH                Edited photos directory  [required]
+--gpx PATH                   GPX file (omit for trips without a track)
+--geosync TEXT               Camera time zone offset, e.g. +02:00
+--raws PATH                  Drone DNGs, for their embedded GPS
+--raws-root PATH             Raw directory tree; folder names become place names
+--fallback-location LAT,LON  Where unplaced photos go ("none" drops them)
+--cluster-radius INTEGER     Marker clustering radius in metres
+--only-edits-dirs            Only photos under a folder named "Edits"
+--update / --reindex         Incremental reprocess / config-only refresh
+--skip-existing-images       Reuse encoded images, recompute everything else
+--format [webp|jpeg]         Image format (default: webp)
+--quality INTEGER            Encoder quality (default: 90)
+--display-longest INTEGER    Display image longer side in px (default: 2160)
+--dry-run                    Preview without writing files
 ```
 
 ## Output layout
 
 ```
-hosted-photos/                  # gitignored — the bytes
-  <trip-slug>/
-    thumbnails/<id>.webp        # ~30 KB each, ~400 px longer-side
-    display/<id>.webp           # ~500-1100 KB each, ~2160 px longer-side
+hosted-photos/<slug>/            # gitignored: the image bytes
+  thumbnails/<id>.webp           # ~30 KB, 400 px longer side
+  display/<id>.webp              # ~500-1100 KB, 2160 px longer side
 
-web/                            # tracked — the site
-  index.html                    # all trips overview
-  <year>/index.html             # one year of trips
-  <year>/<trip-slug>/index.html # single trip
-  trips/
-    index.json                  # auto-generated trip directory
-    <trip-slug>/
-      manifest.json             # photo list + clusters + camera settings
-      route.geojson             # GPX converted for Leaflet
-      thumbnails -> ../../../hosted-photos/<trip-slug>/thumbnails   (symlink)
-      display    -> ../../../hosted-photos/<trip-slug>/display      (symlink)
+web/                             # the site
+  index.html, map.html, galleries.html, gallery.html,
+  china.html, blogs.html, search.html, about.html
+  trips/index.json               # trip directory
+  trips/<slug>/manifest.json     # photos, clusters, camera settings
+  trips/<slug>/route.geojson     # the route
+  collections/*.json             # generated: China hub, stats, covers, search (gitignored)
+  blogs/<slug>.html              # generated blog pages
+functions/                       # Cloudflare Pages middleware and the image proxy
 ```
 
-`hosted-photos/` and the symlinks under `web/trips/*/` are in `.gitignore` — the bytes never go into the repo.
+## Hosting and compression
 
-## Compression
+Pages serves the site (HTML, JS, JSON); R2 holds the images and serves them through a small Pages Function. R2 has **no egress fees**, so traffic never costs anything, and 10 GB of storage is free.
 
-The defaults (`webp`, `q=90`, longest-side `2160 px`) are tuned to keep fine detail (snow texture, ridgelines, rock edges) intact on drone shots while still cutting library size by ~50% vs uncompressed source. The longer-side cap matters: portrait drone shots (4536×8064) would otherwise become 1920×3413 monsters that waste bytes on resolution the lightbox can't display.
+| Profile | Per display image | Notes |
+|---|---:|---|
+| `--quality 85 --display-longest 1920` | ~540 KB | Fine on most cameras, soft on drone detail |
+| `--quality 90 --display-longest 2160` **(default)** | ~700 KB | Indistinguishable from source on most shots |
+| `--quality 92 --display-longest 2400` | ~1100 KB | Near-lossless |
 
-Sample sizes per display image, mixed library average:
-
-| Profile | Per display | 30k photos | Notes |
-|---|---:|---:|---|
-| `--quality 80 --display-longest 1600` | ~350 KB | ~10 GB | Visibly soft on detail-heavy drone shots |
-| `--quality 85 --display-longest 1920` | ~540 KB | ~16 GB | OK for Sony, soft on DJI |
-| `--quality 90 --display-longest 2160` **(default)** | ~700 KB | ~21 GB | Indistinguishable from source on most shots |
-| `--quality 92 --display-longest 2400` | ~1100 KB | ~33 GB | True near-lossless |
-| `--format jpeg --quality 92 --display-longest 2400` | ~1400 KB | ~42 GB | Fallback for hosts without WebP |
-
-WebP is ~30% smaller than JPEG at the same dimensions and quality, and Safari has supported it since 14 — global browser support is ~97%. Decode is fast and there are no perceptual artifacts at Q80.
-
-If a future host requires JPEG: `--format jpeg --quality 90`. No other code changes needed.
-
-### Changing clustering retroactively
-
-Cluster radii are baked into the manifest at process time, but you can change them across the whole library at any point without re-encoding photos:
+At the default, 15,000 photos come to just under 9 GB. The size caps apply to the longer side, so portrait drone shots don't balloon. To re-encode an existing library without re-placing anything:
 
 ```bash
-# Re-cluster one trip
-./venv/bin/python tools/recluster.py --trip <trip-slug> --cluster-radius 25
-
-# Re-cluster every trip in web/trips/
-./venv/bin/python tools/recluster.py --trip all --cluster-radius 20
+./venv/bin/python tools/recompress.py --trip all --quality 85 --display-longest 1920
+./venv/bin/python tools/recluster.py --trip all --cluster-radius 25   # change marker clustering
 ```
 
-Visual (Leaflet) clustering lives in `web/js/app.js` (`clusterRadius`, `disableClusteringAtZoom`) and is read on every page load — no rebuild needed, just refresh.
+Beyond the free 10 GB, R2 charges about $0.015 per GB per month, so even a 30,000-photo library would cost well under $1 a month.
 
-### Changing compression retroactively
+## Local tools
 
-`process_trip.py` is destructive on re-run (it expects GPX + source photos). To re-encode an already-processed library at different quality/format/dimensions without re-doing GPX matching, use `tools/recompress.py`:
+A set of owner-side tools lives in `tools/` and runs only on the laptop:
 
-```bash
-# One trip, bump to WebP Q95
-./venv/bin/python tools/recompress.py --trip <trip-slug> --quality 95
+- **Pickers** (small local web pages) for tile covers, gallery highlights, bridge photos and province corrections.
+- **Lightroom plugins** to import photos from a list and sync edits made for posts.
+- **People index**: local face clustering across the archive.
+- **Phone library** (`tools/build_phone_site.py`): browse phone photos by trip or month, never deployed.
+- **Video browser** (`video_browse/`): search clip proxies and build Resolve projects.
 
-# Every trip in web/trips/, switch to JPEG for a host that doesn't support WebP
-./venv/bin/python tools/recompress.py --trip all --format jpeg --quality 90
+## Preparing input
 
-# Smaller library — re-encode at lower quality
-./venv/bin/python tools/recompress.py --trip all --quality 82 --display-longest 1600
-```
-
-It reads each manifest's `source.photos_path` (recorded at first process), regenerates only the thumbnail + display images, updates the manifest's `compression` block and the per-photo `thumbnail`/`display` paths (handling extension changes), and recreates the symlinks. If the originals have moved, pass `--photos /new/path` to override.
-
-The host-side workflow after a recompress is just: re-sync `hosted-photos/<trip>/` to your bucket. Manifest paths change with the format (`.webp` → `.jpg`) so the front-end picks up the new files automatically.
-
-## Preparing input data
-
-### GPX
-- Strava: Activity → ⋯ → **Export GPX**
-- Garmin Connect: Activity → ⋯ → Export → GPX
-- Combine per-day tracks into one file or pass them individually; the script handles multiple `<trk>` segments inside one file.
-
-### Photos
-- Need valid EXIF `DateTimeOriginal`.
-- Sub-folders called `Compressed/`, `Phone/`, or `Videos/` are skipped automatically.
-- If your camera was set to local time, pass `--geosync` (e.g. `+02:00` for CET). For UTC cameras, omit it.
-- Drone photos: pass `--raws <path-to-DNGs>` to use the drone's embedded GPS instead of GPX interpolation.
+- **GPX**: export from Strava or Garmin Connect. Several days can go in one file or be merged with `tools/reconstruction/gpx_merge.py`.
+- **No GPX?** `tools/reconstruction/timeline_to_gpx.py` builds one from a Google Timeline export.
+- **Photos** need EXIF `DateTimeOriginal`. Set `--geosync` if the camera was on local time.
 
 ## Stack
 
-- **Python** — Pillow (WebP/JPEG), gpxpy, Click, tqdm
-- **ExifTool** — for writing geotags back to JPEGs
-- **Frontend** — Leaflet, Leaflet.markercluster, GLightbox
+- **Python**: Pillow, gpxpy, Click, tqdm, ExifTool
+- **Front end**: plain JavaScript, Leaflet + markercluster, PhotoSwipe
+- **Hosting**: Cloudflare Pages, Pages Functions and R2

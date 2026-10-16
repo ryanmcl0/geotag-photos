@@ -941,7 +941,9 @@ window.Posts = (function () {
     function initPostsPage() {
         const root = document.getElementById('posts-app');
         if (!root) return;
-        Promise.all([ready, autoReady()]).then(([ok]) => {
+        const reelsP = window.PostsReels ? PostsReels.load() : Promise.resolve(null);
+        Promise.all([ready, autoReady(), reelsP]).then(([ok, , reels]) => {
+            reelsDoc = reels;
             if (!ok) {
                 // Cookie present but the API rejects it (stale after a password
                 // change): fall back to the prompt instead of a dead page.
@@ -964,8 +966,11 @@ window.Posts = (function () {
     const phoneOpen = new Set();
 
     // Which manager tab is showing: 'ig' / 'xhs' (hand-made drafts by
-    // platform) or 'auto' (suggestions from tools/auto_curate_posts.py).
+    // platform), 'auto' (suggestions from tools/auto_curate_posts.py) or
+    // 'reels' (the video pipeline's reels and their posting schedule, localhost
+    // only: posts-reels.js).
     let activeTab = 'ig';
+    let reelsDoc = null;
     try {
         activeTab = localStorage.getItem('posts_tab') || 'ig';
         if (activeTab === 'main') activeTab = 'ig';   // pre-platform value
@@ -982,7 +987,8 @@ window.Posts = (function () {
         const h1 = document.createElement('h1');
         h1.textContent = 'Posts';
         head.appendChild(h1);
-        if (activeTab !== 'auto') {
+        if (activeTab === 'reels' && !reelsDoc) activeTab = 'ig';   // the live site has no reels manifest
+        if (activeTab === 'ig' || activeTab === 'xhs') {
             const plat = activeTab;
             const newBtn = document.createElement('button');
             newBtn.type = 'button';
@@ -1015,7 +1021,9 @@ window.Posts = (function () {
         const autoCount = autoDoc ? autoDoc.posts.length : 0;
         [['ig', `Instagram (${igCount})`],
          ['xhs', `Xiaohongshu (${xhsCount})`],
-         ['auto', `Auto curated (${autoCount})`]].forEach(([id, label]) => {
+         ['auto', `Auto curated (${autoCount})`],
+         ...(reelsDoc ? [['reels', `Reels (${reelsDoc.reels.filter(r => r.kind !== 'one_shot').length})`]] : [])
+        ].forEach(([id, label]) => {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'posts-tab' + (activeTab === id ? ' active' : '');
@@ -1031,6 +1039,10 @@ window.Posts = (function () {
 
         if (activeTab === 'auto') {
             renderAutoList(root);
+            return;
+        }
+        if (activeTab === 'reels') {
+            PostsReels.render(root, reelsDoc, () => renderManager(root));
             return;
         }
 

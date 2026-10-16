@@ -1157,6 +1157,7 @@ async function loadTripData() {
         // Frame every pin straight away from the bounds stamped in the index, rather
         // than sitting on a default view until all trips have loaded and then jumping.
         const framed = await fitToIndexBounds(trips);
+        focusAtParam();
 
         // Fetch the trips' data a few at a time in parallel; they are still built
         // one by one in index order, so colours and layering are unchanged.
@@ -1177,7 +1178,7 @@ async function loadTripData() {
         updateTripInfo();
         await syncPrivateCoverage();
         // Already framed from the index: only refit if something ended up off-screen.
-        fitMapToBounds({ onlyIfOffscreen: framed });
+        if (!focusAtParam()) fitMapToBounds({ onlyIfOffscreen: framed });
 
     } catch (error) {
         console.error('Failed to load trip data:', error);
@@ -2077,6 +2078,17 @@ function fitMapToBounds({ onlyIfOffscreen = false } = {}) {
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
         map.fitBounds(bounds, { padding: [50, 50], animate: !isMobile });
     }
+}
+
+/**
+ * ?at=lat,lon (from site search: a place on a trip's map) opens zoomed in on that
+ * spot instead of the whole route. Returns true when it set the view.
+ */
+function focusAtParam() {
+    const m = (VIEW_CONFIG.at || '').match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
+    if (!m) return false;
+    map.setView([parseFloat(m[1]), parseFloat(m[2])], 14, { animate: false });
+    return true;
 }
 
 /**

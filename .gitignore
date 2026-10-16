@@ -14,6 +14,8 @@ hosted-photos/
 
 # Pulled Instagram post drafts (full-size photos, posts_pull.py output)
 /Posts/
+# Post re-edits written back to Edits, waiting for a reprocess (reedits.py)
+/.posts_reedits_pending.json
 
 # Symlinks into hosted-photos/
 web/trips/*/thumbnails

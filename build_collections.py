@@ -821,7 +821,12 @@ def _subtile_for(entry, photos, extra=None):
            'photos': [_photo_ref(p, with_year=True) for p in photos]}
     if entry.get('name_zh'):
         sub['name_zh'] = entry['name_zh']
-    bits = [x for x in (entry.get('subtitle'), entry.get('province')) if x]
+    # The province follows the description, unless the description already names
+    # it ("a 13 km run of panels out in Xinjiang · Xinjiang").
+    desc, province = entry.get('subtitle'), entry.get('province')
+    if desc and province and re.search(rf'\b{re.escape(province)}\b', desc, re.I):
+        province = None
+    bits = [x for x in (desc, province) if x]
     if bits:
         sub['subtitle'] = ' · '.join(bits)
     if entry.get('mw'):

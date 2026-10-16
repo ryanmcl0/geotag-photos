@@ -330,15 +330,21 @@
     const cover = useYear ? pickCover(shown) : s.cover;
     const total = useYear ? shown.length : s.count;
 
+    // A long subtitle is a description: set it in the body face, sentence case, so
+    // it doesn't run to three spaced-out capital lines. The stat (MW, km) and the
+    // photo count share one line. Any tile with text under its name gets the
+    // deeper overlay, so it stays readable over a bright sky.
     const zh = s.name_zh ? `<div class="tile-zh">${esc(s.name_zh)}</div>` : '';
-    const sub = s.subtitle ? `<div class="tile-sub">${esc(s.subtitle)}</div>` : '';
-    const stat = s.infographic ? `<div class="tile-sub">${esc(s.infographic)}</div>` : '';
-    const count = total ? `<div class="tile-sub">${total} photos</div>` : '';
+    const isDesc = (s.subtitle || '').length > 28;
+    const sub = s.subtitle
+      ? `<div class="tile-sub${isDesc ? ' tile-sub--desc' : ''}">${esc(s.subtitle)}</div>` : '';
+    const meta = [s.infographic && esc(s.infographic), total && `${total} photos`].filter(Boolean).join(' · ');
+    const rich = Boolean(zh || s.subtitle || s.infographic);
     const inner = `
       ${imgTag(cover)}
-      <div class="tile-overlay">
+      <div class="tile-overlay${rich ? ' tile-overlay--rich' : ''}">
         <div class="tile-title">${esc(s.title)}</div>
-        ${zh}${sub}${stat}${count}
+        ${zh}${sub}${meta ? `<div class="tile-sub">${meta}</div>` : ''}
       </div>`;
 
     const blogs = s.blogs || [];

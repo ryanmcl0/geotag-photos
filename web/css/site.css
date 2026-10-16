@@ -287,7 +287,10 @@ img { display: block; }
 .rv.in { opacity: 1; transform: none; }
 
 /* tier search (Urbex): filters the tiles below in place as you type */
-.tier-search { display: flex; align-items: baseline; gap: 16px; margin: 22px 0 0; max-width: 560px; }
+.tier-tools { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 14px 40px; margin: 18px 0 0; }
+.tier-tools .yearbar { margin: 0; }
+.tier-search { display: flex; align-items: baseline; gap: 16px; margin: 0 0 0 auto; width: min(380px, 100%); }
+@media (max-width: 760px) { .tier-search { margin-left: 0; width: 100%; } }
 .tier-search__input { flex: 1; min-width: 0; background: transparent; color: var(--text); border: 0; border-bottom: 1px solid var(--line); padding: 8px 0; font-family: var(--body); font-size: 16px; outline: none; transition: border-color .2s; }
 .tier-search__input::placeholder { color: var(--muted); }
 .tier-search__input:focus { border-bottom-color: var(--text); }

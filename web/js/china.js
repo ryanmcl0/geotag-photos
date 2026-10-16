@@ -771,14 +771,17 @@
     const initial = q && q !== 'all' && years.includes(Number(q)) ? Number(q) : 'all';
     const asSet = y => (y === 'all' ? null : new Set([y]));
     const search = buildTierSearch(tile, parseHash().query.q || '');
+    // one row: years on the left, search out to the right (wraps under on phones)
+    const tools = el('div', 'tier-tools');
     if (years.length > 1) {
-      app.appendChild(buildYearBar(years, y => {
+      tools.appendChild(buildYearBar(years, y => {
         setHashQuery({ year: y === 'all' ? null : y });
         paintTieredSections(tile, asSet(y));
         search.apply();
       }, initial));
     }
-    app.appendChild(search.bar);
+    tools.appendChild(search.bar);
+    app.appendChild(tools);
     const host = el('div');
     host.id = 'tier-host';
     app.appendChild(host);

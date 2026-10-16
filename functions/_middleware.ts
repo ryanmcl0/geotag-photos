@@ -99,10 +99,12 @@ async function bridgesPreviewEnabled(context: EventContext<Env, string, unknown>
 // trip_blogs.json maps trips to blog slugs + titles, which blogs.html already shows.
 // gallery_descriptions.json and gallery_regions.json only ever hold public trips'
 // text (private trips' regions sit in gallery_regions.all.json, gated like the rest).
+// search.json is the public search index (build_search.py builds it from public
+// sources only); its full twin search.all.json stays gated like every other file.
 const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json',
     '/collections/gallery_covers.json', '/collections/gallery_highlights.json',
     '/collections/trip_blogs.json', '/collections/gallery_descriptions.json',
-    '/collections/gallery_regions.json'];
+    '/collections/gallery_regions.json', '/collections/search.json'];
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
     if (['/rooftopping', '/rooftopping.html'].includes(path)) return true;

@@ -220,15 +220,24 @@ def load_geotag_overrides(raw_overrides: list) -> list:
     Parse geotag_overrides from trip config. Each entry has ids_from, ids_to (strings
     with numeric suffix, e.g. "RM101884"), lat, lon, and an optional building that
     replaces the raw-folder label (a friend's card filed under their name rather
-    than the place). Returns (from_num, to_num, lat, lon, building) tuples.
+    than the place). Instead of a range, `stems` lists exact edit filename stems:
+    ranges compare ALL digits of a stem, so cameras whose numbers overlap
+    ("DSC00040" and "#S__0040" are both 40) or suffixed exports ("146A6205-2"
+    reads as 14662052) can't be told apart by a range.
+    Returns (from_num, to_num, lat, lon, building, stems) tuples; stems is a set
+    (ranges unused) or None.
     """
     result = []
     for o in (raw_overrides or []):
         try:
+            lat, lon = float(o['lat']), float(o['lon'])
+            if o.get('stems'):
+                result.append((None, None, lat, lon, o.get('building') or None,
+                               {str(s).lower() for s in o['stems']}))
+                continue
             from_num = int(''.join(filter(str.isdigit, str(o['ids_from']))))
             to_num   = int(''.join(filter(str.isdigit, str(o['ids_to']))))
-            result.append((from_num, to_num, float(o['lat']), float(o['lon']),
-                           o.get('building') or None))
+            result.append((from_num, to_num, lat, lon, o.get('building') or None, None))
         except (KeyError, ValueError):
             pass
     return result
@@ -287,12 +296,17 @@ def apply_time_override(photo_stem: str, photo_time, overrides: list):
 def apply_geotag_override(photo_stem: str, overrides: list) -> Optional[dict]:
     """Return fixed {lat, lon[, building]} if photo_stem's numeric ID falls in any
     override range."""
-    digits = ''.join(filter(str.isdigit, photo_stem))
-    if not digits or not overrides:
+    if not overrides:
         return None
-    num = int(digits)
-    for from_num, to_num, lat, lon, building in overrides:
-        if from_num <= num <= to_num:
+    digits = ''.join(filter(str.isdigit, photo_stem))
+    num = int(digits) if digits else None
+    stem = photo_stem.lower()
+    for from_num, to_num, lat, lon, building, stems in overrides:
+        if stems is not None:
+            hit = stem in stems
+        else:
+            hit = num is not None and from_num <= num <= to_num
+        if hit:
             return {'lat': lat, 'lon': lon, **({'building': building} if building else {})}
     return None
 
@@ -735,7 +749,10 @@ def _parse_exif_gps(record: dict) -> Optional[dict]:
     lon = record.get('GPSLongitude')
     if lat is None or lon is None:
         return None
-    lat, lon = float(lat), float(lon)
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None   # GPS tags present but blank (seen on a 2022 Korea edit)
     if abs(lat) < 0.001 and abs(lon) < 0.001:
         return None
     return {'lat': lat, 'lon': lon}

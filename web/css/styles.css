@@ -78,6 +78,16 @@ body {
     transition: opacity .15s, color .15s;
 }
 .sidebar-homeicon:hover { opacity: 1; color: #e11d48; }
+.sidebar-searchicon {
+    display: inline-flex;
+    align-items: center;
+    margin-left: auto;
+    margin-right: -4px;
+    color: inherit;
+    opacity: .65;
+    transition: opacity .15s, color .15s;
+}
+.sidebar-searchicon:hover { opacity: 1; color: #e11d48; }
 
 .sidebar-header h2 {
     font-size: 1.1rem;

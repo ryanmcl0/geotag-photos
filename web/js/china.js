@@ -755,10 +755,17 @@
   // roofs: height-tier sections, one tile per building → its gallery
   function renderTieredTiles(tile) {
     app.innerHTML = '';
+    let mastTop = null;
     if (DATA.tiles.length === 1) {
       // single-facet collection (e.g. Rooftopping): masthead instead of facet heading
       setCrumbs([]);
-      app.appendChild(buildMasthead());
+      const mast = buildMasthead();
+      // the search sits on the title's line, out to the right
+      const h1 = mast.querySelector('h1');
+      mastTop = el('div', 'masthead-top');
+      h1.replaceWith(mastTop);
+      mastTop.appendChild(h1);
+      app.appendChild(mast);
     } else {
       setCrumbs([{ label: DATA.title, href: '#' }, { label: tile.title }]);
       app.appendChild(el('div', 'section-head',
@@ -770,43 +777,175 @@
     const q = parseHash().query.year;
     const initial = q && q !== 'all' && years.includes(Number(q)) ? Number(q) : 'all';
     const asSet = y => (y === 'all' ? null : new Set([y]));
+    const search = buildTierSearch(tile, parseHash().query.q || '');
+    // one row: years on the left, search out to the right (wraps under on phones)
+    const tools = el('div', 'tier-tools');
     if (years.length > 1) {
-      app.appendChild(buildYearBar(years, y => {
+      tools.appendChild(buildYearBar(years, y => {
         setHashQuery({ year: y === 'all' ? null : y });
         paintTieredSections(tile, asSet(y));
+        search.apply();
       }, initial));
     }
+    (mastTop || tools).appendChild(search.bar);
+    if (tools.children.length) app.appendChild(tools);
     const host = el('div');
     host.id = 'tier-host';
     app.appendChild(host);
     paintTieredSections(tile, asSet(initial));
+    search.apply();
   }
 
   // selected: null = all years, otherwise Set of years to show
   function paintTieredSections(tile, selected) {
     const host = document.getElementById('tier-host');
     host.innerHTML = '';
+    // `unit` names what a sub-tile is (building / site / road); roofs predate it.
+    const unit = tile.unit || 'building';
+    const units = n => `${n} ${esc(unit)}${n !== 1 ? 's' : ''}`;
     (tile.sections || []).forEach(sec => {
       const subs = sec.subtiles.filter(s =>
         !selected || (s.years || []).some(y => selected.has(y)));
       if (!subs.length) return;
-      // `unit` names what a sub-tile is (building / site / road); roofs predate it.
       // An untitled section (highways' single flat list) renders without a header bar.
-      const unit = tile.unit || 'building';
+      let head = null;
       if (sec.title) {
-        host.appendChild(el('div', 'tier-head',
-          `<h3>${esc(sec.title)}</h3><span class="count">${subs.length} ${esc(unit)}${subs.length !== 1 ? 's' : ''}</span>`));
+        head = el('div', 'tier-head',
+          `<h3>${esc(sec.title)}</h3><span class="count">${units(subs.length)}</span>`);
+        host.appendChild(head);
       }
       const grid = el('div', 'tiles tiles--dense tiles--mosaic');
       // one year selected → tiles deep-link into that year of the building's gallery
       const only = selected && selected.size === 1 ? [...selected][0] : 'all';
-      subs.forEach(s => grid.appendChild(buildSubtile(tile, s, only)));
+      subs.forEach(s => {
+        const t = buildSubtile(tile, s, only);
+        t.dataset.search = searchText(s);
+        grid.appendChild(t);
+      });
+      // the search box filters these in place: tile visibility, section count, empty state
+      grid._tier = { head, units };
       host.appendChild(grid);
       observeReveal(grid, '.tile');
     });
     if (!host.children.length) {
       host.appendChild(el('p', 'gallery-empty', 'Nothing for the selected years.'));
     }
+  }
+
+  /* ---------------- tier search: fuzzy filter as you type ---------------- */
+  // Lowercase, accents stripped (Évasion → evasion), punctuation to spaces.
+  const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9一-鿿]+/g, ' ').trim();
+
+  function searchText(s) {
+    return fold([s.title, s.name_zh, s.city, s.country, s.province, s.height_label || s.subtitle,
+      s.crane_m ? 'crane' : '', s.underground ? 'underground tunnel' : ''].join(' '));
+  }
+
+  // Optimal string alignment distance, capped: true when a and b are within `max` edits
+  // (an adjacent swap counts as one, so "bishpsogate" still finds Bishopsgate).
+  function within(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return false;
+    let prev2 = null, prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      let rowMin = i;
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+          v = Math.min(v, prev2[j - 2] + 1);
+        }
+        cur.push(v);
+        rowMin = Math.min(rowMin, v);
+      }
+      if (rowMin > max) return false;
+      prev2 = prev; prev = cur;
+    }
+    return prev[b.length] <= max;
+  }
+
+  // One query word against a tile's folded text: a plain substring, a typo'd word
+  // start (1 edit from 4 letters, 2 from 7), or its letters in order within a tight
+  // span ("lmrk" → landmark). Loose enough to forgive typing, tight enough that
+  // two or three letters don't match every tile.
+  function wordMatches(q, text, words) {
+    if (text.includes(q)) return true;
+    if (q.length < 3) return false;
+    const max = q.length >= 7 ? 2 : q.length >= 4 ? 1 : 0;
+    if (max && words.some(w => within(q, w.slice(0, q.length), max))) return true;
+    if (q.length >= 4) {
+      for (let start = text.indexOf(q[0]); start >= 0; start = text.indexOf(q[0], start + 1)) {
+        let i = start, k = 0;
+        while (i < text.length && k < q.length && i - start <= q.length + 2) {
+          if (text[i] === q[k]) k++;
+          i++;
+        }
+        if (k === q.length) return true;
+      }
+    }
+    return false;
+  }
+
+  function buildTierSearch(tile, initial) {
+    const bar = el('div', 'tier-search');
+    bar.innerHTML = `<input type="search" class="tier-search__input" autocomplete="off"
+        spellcheck="false" placeholder="Search ${esc((tile.unit || 'building') + 's')}, cities, countries"
+        aria-label="Search">
+      <span class="tier-search__count" aria-live="polite"></span>`;
+    const input = bar.querySelector('input');
+    const count = bar.querySelector('.tier-search__count');
+    input.value = initial;
+
+    function apply() {
+      const host = document.getElementById('tier-host');
+      if (!host) return;
+      const qs = fold(input.value).split(' ').filter(Boolean);
+      const tiles = [...host.querySelectorAll('.tiles .tile')];
+      // Exact first: when some tiles contain every typed word, show only those, so
+      // "busan" doesn't drag in "Business". Typo-tolerant matching is the fallback
+      // for when nothing matches as typed.
+      const exact = new Set(tiles.filter(t => qs.every(q => (t.dataset.search || '').includes(q))));
+      const pass = exact.size ? (t => exact.has(t)) : (t => {
+        const text = t.dataset.search || '';
+        const words = text.split(' ');
+        return qs.every(q => wordMatches(q, text, words));
+      });
+      let shown = 0, total = 0;
+      host.querySelectorAll('.tiles').forEach(grid => {
+        let n = 0;
+        grid.querySelectorAll('.tile').forEach(t => {
+          const ok = !qs.length || pass(t);
+          t.hidden = !ok;
+          if (ok) { n++; t.classList.add('in'); }   // reveal at once; no scroll-in fade while searching
+        });
+        total += grid.querySelectorAll('.tile').length;
+        shown += n;
+        grid.hidden = !n;
+        const meta = grid._tier || {};
+        if (meta.head) {
+          meta.head.hidden = !n;
+          meta.head.querySelector('.count').innerHTML = meta.units(n);
+        }
+      });
+      let empty = host.querySelector('.tier-search__empty');
+      if (qs.length && !shown) {
+        if (!empty) host.appendChild(empty = el('p', 'gallery-empty tier-search__empty'));
+        empty.textContent = `Nothing matches “${input.value.trim()}”.`;
+      } else if (empty) {
+        empty.remove();
+      }
+      count.textContent = qs.length ? `${shown} of ${total}` : '';
+    }
+
+    input.addEventListener('input', () => {
+      setHashQuery({ q: input.value.trim() || null });   // Back from a building keeps the search
+      apply();
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && input.value) { input.value = ''; input.dispatchEvent(new Event('input')); }
+    });
+    return { bar, apply };
   }
 
   function renderSubGallery(tile, s) {
@@ -822,7 +961,7 @@
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}${sub}
       <span class="count" id="gallery-count">${(s.photos || []).length} photos</span>`));
     // lightbox caption: name · height · province/city (bridges + buildings carry these)
-    const caption = [s.title, s.height_m ? `${s.height_m} m` : null, s.province || s.city || null]
+    const caption = [s.title, s.height_label || (s.height_m ? `${s.height_m} m` : null), s.province || s.city || null]
       .filter(Boolean).join(' · ');
     const photos = (s.photos || []).map(p => ({ ...p, title: caption }));
 

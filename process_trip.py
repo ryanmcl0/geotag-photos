@@ -735,7 +735,10 @@ def _parse_exif_gps(record: dict) -> Optional[dict]:
     lon = record.get('GPSLongitude')
     if lat is None or lon is None:
         return None
-    lat, lon = float(lat), float(lon)
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None   # GPS tags present but blank (seen on a 2022 Korea edit)
     if abs(lat) < 0.001 and abs(lon) < 0.001:
         return None
     return {'lat': lat, 'lon': lon}

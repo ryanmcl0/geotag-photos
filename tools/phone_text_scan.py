@@ -19,6 +19,8 @@ Then:
                       WeChat "Translated by Weixin"...), with their text
   list english        ordinary photos with English text in them: signs,
                       menus, packaging. Chinglish lives here.
+  list signs          photos CLIP thinks are signs, shopfronts, menus or labels
+                      but where OCR found no English, for the ones it misread
   list cars           photos ranked by CLIP "a car" score, plus any whose text
                       names a car brand
   sheet OUT KEY...    contact sheet (JPEG) of the given photos, for review
@@ -76,6 +78,10 @@ CAR_PROMPTS = ['a photo of a car', 'a close-up of a car badge or logo', 'the fro
                'the back of a car with its model name']
 NOT_CAR_PROMPTS = ['a photo of a street', 'a photo of a landscape', 'a screenshot of a phone',
                    'a photo of food', 'a car dashboard seen from the driver seat']
+SIGN_PROMPTS = ['a sign with text on it', 'a shop front with a sign', 'a warning sign',
+                'a restaurant menu', 'a product label with writing']
+NOT_SIGN_PROMPTS = ['a photo of a landscape', 'a photo of a person', 'a screenshot of a phone',
+                    'a photo of a car', 'a photo of a building']
 
 
 def photos(trip_ids):
@@ -214,25 +220,18 @@ def cmd_list(args):
             if len(re.findall(r'[A-Za-z]{3,}', text)) >= args.min_words:
                 print(f'{k}: {text}')
 
+    elif args.kind == 'signs':
+        # Signs whose English OCR couldn't read (small, stylised, at an angle):
+        # anything OCR found English in is already covered by `list english`.
+        for k, s in clip_ranked(SIGN_PROMPTS, NOT_SIGN_PROMPTS):
+            if k in skip or k not in meta or s < args.min_score:
+                continue
+            if not re.search(r'[A-Za-z]{3,}', compact(ocr.get(k, []))):
+                print(f'{s:+.3f} {k}')
+
     elif args.kind == 'cars':
-        import numpy as np
-        import torch
-        from transformers import CLIPModel, CLIPProcessor
-        z = np.load(CACHE / 'clip.npz')
-        model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32').eval()
-        proc = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
-        with torch.no_grad():
-            t = model.get_text_features(**proc(text=CAR_PROMPTS + NOT_CAR_PROMPTS,
-                                               return_tensors='pt', padding=True))
-            if hasattr(t, 'pooler_output'):
-                t = t.pooler_output
-            t = (t / t.norm(dim=-1, keepdim=True)).numpy()
-        sims = z['embs'].astype(np.float32) @ t.T
-        n = len(CAR_PROMPTS)
-        score = sims[:, :n].max(1) - sims[:, n:].max(1)
-        ranked = sorted(zip(z['keys'], score), key=lambda x: -x[1])
         shown = set()
-        for k, s in ranked:
+        for k, s in clip_ranked(CAR_PROMPTS, NOT_CAR_PROMPTS):
             if k in skip or k not in meta or s < args.min_score:
                 continue
             shown.add(k)
@@ -241,6 +240,25 @@ def cmd_list(args):
             text = compact(ocr.get(k, []), latin_only=True, limit=120)
             if k not in shown and CAR_WORDS.search(text):
                 print(f'  text {k}  {text}')
+
+
+def clip_ranked(want, against):
+    """[(key, score)] best first: how much closer each photo is to the best
+    `want` prompt than to the best `against` prompt."""
+    import numpy as np
+    import torch
+    from transformers import CLIPModel, CLIPProcessor
+    z = np.load(CACHE / 'clip.npz')
+    model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32').eval()
+    proc = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
+    with torch.no_grad():
+        t = model.get_text_features(**proc(text=want + against, return_tensors='pt', padding=True))
+        if hasattr(t, 'pooler_output'):
+            t = t.pooler_output
+        t = (t / t.norm(dim=-1, keepdim=True)).numpy()
+    sims = z['embs'].astype(np.float32) @ t.T
+    score = sims[:, :len(want)].max(1) - sims[:, len(want):].max(1)
+    return sorted(zip(z['keys'], score), key=lambda x: -x[1])
 
 
 def cmd_sheet(args):
@@ -274,10 +292,10 @@ def main():
     p = sub.add_parser('clip')
     p.add_argument('--workers', type=int, default=3, help='thumbnail loader threads')
     p = sub.add_parser('list')
-    p.add_argument('kind', choices=['translations', 'english', 'cars'])
+    p.add_argument('kind', choices=['translations', 'english', 'signs', 'cars'])
     p.add_argument('--all', action='store_true', help='include photos already in a category')
     p.add_argument('--min-words', type=int, default=2, help='english: Latin words needed')
-    p.add_argument('--min-score', type=float, default=0.0, help='cars: CLIP margin cut-off')
+    p.add_argument('--min-score', type=float, default=0.0, help='signs/cars: CLIP margin cut-off')
     p = sub.add_parser('sheet')
     p.add_argument('out')
     p.add_argument('keys', nargs='+')

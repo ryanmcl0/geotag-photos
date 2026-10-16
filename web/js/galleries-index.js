@@ -19,6 +19,10 @@
     // Unfiltered index, kept so the non-trip toggle can re-render from source.
     let ALL_TRIPS = [];
 
+    // Phone library only: curated cross-trip sets (tools/build_phone_categories.py)
+    // shown under their own "Categories" tab instead of a year.
+    let CATEGORIES = [];
+
     function applyNonTrip(trips) {
         return window.NonTrip ? window.NonTrip.filterTrips(trips) : trips;
     }
@@ -78,6 +82,12 @@
         // Pinned cover from config wins — no manifest fetch needed. Tiles render
         // ~300–900px wide, so use the 2160px display webp (like the China hub),
         // not the 400px thumbnail, or covers look soft/upscaled.
+        // Category tiles name their cover explicitly ({trip, id} from another trip).
+        if (card.dataset.coverTrip) {
+            img.src = Gallery.photoUrl({ trip: card.dataset.coverTrip, id: card.dataset.coverId }, 'display');
+            return;
+        }
+
         const pinned = COVERS[tripId];
         if (pinned && pinned.src) { img.src = `${BASE}${pinned.src}`; return; }
         if (pinned && pinned.id) {
@@ -138,6 +148,50 @@
         return card;
     }
 
+    function buildCategoryTile(cat) {
+        const card = el('a', 'tile');
+        card.href = `${BASE}gallery.html?trip=${encodeURIComponent(cat.id)}&library=phone`;
+        card.dataset.tripId = cat.id;
+        if (cat.cover) {
+            card.dataset.coverTrip = cat.cover.trip;
+            card.dataset.coverId = cat.cover.id;
+        }
+        const n = cat.photo_count;
+        card.innerHTML = `
+            <img class="tile-img" loading="lazy" alt="">
+            <div class="tile-overlay">
+                <div class="tile-title">${cat.name}</div>
+                <div class="tile-sub">${n} photo${n === 1 ? '' : 's'}</div>
+            </div>
+        `;
+        return card;
+    }
+
+    // One section per category group ("China"), hidden unless the Categories
+    // tab is selected.
+    function renderCategories(app, io) {
+        const groups = new Map();
+        CATEGORIES.forEach(c => {
+            const g = c.group || 'Categories';
+            if (!groups.has(g)) groups.set(g, []);
+            groups.get(g).push(c);
+        });
+        groups.forEach((cats, name) => {
+            const section = el('div', 'gallery-year');
+            section.dataset.catSection = '1';
+            section.appendChild(el('div', 'section-head',
+                `<h2>${name}</h2><span class="count">${cats.length} ${cats.length === 1 ? 'category' : 'categories'}</span>`));
+            const grid = el('div', 'tiles tiles--dense');
+            cats.forEach(c => {
+                const tile = buildCategoryTile(c);
+                grid.appendChild(tile);
+                io.observe(tile);
+            });
+            section.appendChild(grid);
+            app.appendChild(section);
+        });
+    }
+
     function render(trips) {
         const app = document.getElementById('galleries-app');
         if (!app) return;
@@ -178,8 +232,16 @@
             app.querySelectorAll('[data-year-section]').forEach(sec => {
                 sec.style.display = (value === 'all' || sec.dataset.yearSection === value) ? '' : 'none';
             });
+            app.querySelectorAll('[data-cat-section]').forEach(sec => {
+                sec.style.display = value === 'categories' ? '' : 'none';
+            });
+            // Kept in the hash so Back from a category gallery lands on the tab.
+            history.replaceState(null, '', location.pathname + location.search +
+                (value === 'all' ? '' : `#${value}`));
         }
-        [['all', 'All'], ...years.map(y => [String(y), String(y)])].forEach(([val, label]) => {
+        const tabs = [['all', 'All'], ...years.map(y => [String(y), String(y)])];
+        if (CATEGORIES.length) tabs.push(['categories', 'Categories']);
+        tabs.forEach(([val, label]) => {
             const btn = el('button', '', label);
             btn.type = 'button';
             btn.dataset.year = val;
@@ -225,7 +287,10 @@
             app.appendChild(section);
         });
 
-        select('all');
+        if (CATEGORIES.length) renderCategories(app, io);
+
+        const wanted = location.hash.slice(1);
+        select(buttons.some(b => b.dataset.year === wanted) ? wanted : 'all');
     }
 
     // Sticky year headings sit just below the sticky topnav — keep their offset
@@ -249,6 +314,16 @@
             const cRes = await fetch(`${BASE}collections/gallery_covers.json?t=${Date.now()}`);
             if (cRes.ok) COVERS = await cRes.json();
         } catch (e) { /* no overrides → auto-pick everywhere */ }
+
+        if (PHONE_LIB) {
+            try {
+                const kRes = await fetch(`${DATA_BASE}categories/index.json?t=${Date.now()}`);
+                // content-type guard: a missing file comes back as the HTML index
+                if (kRes.ok && (kRes.headers.get('content-type') || '').includes('json')) {
+                    CATEGORIES = ((await kRes.json()).categories || []).filter(c => c.photo_count);
+                }
+            } catch (e) { /* no categories built: no tab */ }
+        }
 
         try {
             const res = await fetch(`${DATA_BASE}trips/index.json?t=${Date.now()}`);

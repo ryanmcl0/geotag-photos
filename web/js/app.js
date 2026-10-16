@@ -699,6 +699,16 @@ function initMap() {
         if (el) mapEl.appendChild(el);
     });
 
+    // A tall phone screen fits the whole world's width long before its height, so
+    // the first view was a strip of map between two empty bands. On a portrait
+    // screen, don't zoom out past the point where the world fills the height.
+    const fillHeight = () => {
+        const size = map.getSize();
+        map.setMinZoom(size.y > size.x ? Math.log2(size.y / 256) : 0);
+    };
+    fillHeight();
+    window.addEventListener('orientationchange', () => setTimeout(fillHeight, 400));
+
     initMapStyleControl();
     initFitControl();
     initDoubleTapZoom();
@@ -2357,13 +2367,13 @@ function rebuildLightbox() {
             photoIndexMap[`${manifest.tripId}::${photo.id}`] = pswpItems.length;
             const cluster = clusterByPhoto[photo.id] || {};
             const thumbUrl = resolveUrl(manifest.tripPath, photo.thumbnail);
-            // If the thumbnail is already in the browser cache (shown in map markers/popups),
-            // use its aspect ratio to size the slide so msrc shows immediately.
-            const probe = new Image();
-            probe.src = thumbUrl;
+            // Size the slide from the aspect ratio the manifest records, so msrc shows
+            // at the right shape immediately. (This used to probe each thumbnail with
+            // new Image(), which downloaded every photo's thumbnail on page load:
+            // 25-35 MB on a phone before anything was tapped.)
             let w = 2160, h = 1440, needsSize = true; // provisional; corrected on open
-            if (probe.complete && probe.naturalWidth > 0) {
-                const ratio = probe.naturalWidth / probe.naturalHeight;
+            const ratio = photo.ar;
+            if (ratio > 0) {
                 w = ratio >= 1 ? 2160 : Math.round(2160 * ratio);
                 h = ratio >= 1 ? Math.round(2160 / ratio) : 2160;
                 needsSize = false; // ratio-correct, no distortion

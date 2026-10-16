@@ -129,9 +129,32 @@ window.Unlock = (function () {
         });
     }
 
+    // Phones: the top bar slides away while scrolling down and comes back on any
+    // scroll up (styles in site.css). --topnav-h lets things that stick under the
+    // bar (galleries year headings, the blog day rail) sit just below it.
+    function bindAutoHide() {
+        const nav = document.querySelector('.topnav');
+        if (!nav) return;
+        const phone = window.matchMedia('(max-width: 760px)');
+        const measure = () => document.documentElement.style.setProperty('--topnav-h', nav.offsetHeight + 'px');
+        measure();
+        window.addEventListener('resize', measure);
+        let lastY = window.scrollY;
+        window.addEventListener('scroll', () => {
+            const y = window.scrollY;
+            if (Math.abs(y - lastY) < 6) return;   // ignore jitter and iOS bounce
+            const away = phone.matches && y > lastY && y > nav.offsetHeight &&
+                !nav.querySelector('.nav-more.open');
+            nav.classList.toggle('topnav--away', away);
+            document.documentElement.classList.toggle('nav-away', away);
+            lastY = y;
+        }, { passive: true });
+    }
+
     function bind() {
         bindNavMore();
         bindSearch();
+        bindAutoHide();
         document.querySelectorAll('[data-gated]').forEach(t => {
             t.addEventListener('click', e => {
                 if (unlocked()) return;

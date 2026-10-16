@@ -78,6 +78,29 @@
 }
 .pswp__button.posts-pick-btn:hover { opacity: 1; }
 
+/* ---------- lightbox photo actions (opened from a post's carousel) ---------- */
+.posts-manage-bar {
+  position: absolute; z-index: 1600; left: 50%; transform: translateX(-50%);
+  top: calc(52px + env(safe-area-inset-top, 0px));
+  display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 16px);
+  padding: 6px; border-radius: 12px; background: rgba(0,0,0,.6);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.posts-manage-bar button {
+  background: rgba(255,255,255,.1); color: #fff; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 8px; padding: 8px 11px; font-size: 13px; line-height: 1;
+  white-space: nowrap; cursor: pointer; touch-action: manipulation;
+}
+.posts-manage-bar button:hover:not(:disabled) { background: rgba(255,255,255,.2); }
+.posts-manage-bar button.is-on { background: #1d4ed8; border-color: #1d4ed8; }
+.posts-manage-bar button:disabled { opacity: .35; cursor: default; }
+.posts-manage-status { color: #fbbf24; font-size: 12px; padding: 0 6px; white-space: nowrap; }
+.posts-manage-status[hidden], .posts-manage-bar button[hidden] { display: none; }
+@media (max-width: 480px) {
+  .posts-manage-bar { gap: 4px; padding: 5px; }
+  .posts-manage-bar button { padding: 9px 8px; font-size: 12px; }
+}
+
 /* ---------- sitewide "Posts mode" pill ---------- */
 #posts-pill {
   position: fixed; left: 18px; bottom: 18px; z-index: 3000;

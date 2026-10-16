@@ -660,6 +660,70 @@ window.Posts = (function () {
         gallery.listen('afterChange', refresh);
         gallery.listen('close', () => { pill.style.display = 'none'; });
         ready.then(ok => { if (ok) refresh(); });
+
+        attachManageBar(gallery, pswpEl, opts);
+    }
+
+    /** Opened from a post's carousel thumbnail: the same photo actions as the
+     *  thumbnail (blur faces, map card, waitlist, remove) in a bar under the top
+     *  controls, acting on whichever photo is showing. */
+    function attachManageBar(gallery, pswpEl, opts) {
+        const old = pswpEl && pswpEl.querySelector('.posts-manage-bar');
+        if (old) old.remove();
+        if (!pswpEl || !opts || !opts.manage || !opts.defaultPostId) return;
+        const { root, set } = opts.manage;
+        const postId = opts.defaultPostId;
+        const bar = document.createElement('div');
+        bar.className = 'posts-manage-bar';
+        // PhotoSwipe treats a touch anywhere in the viewer as a swipe or a tap on
+        // the photo and cancels it, so these buttons would never get their click
+        // on a phone. Keep their touches to themselves.
+        ['pointerdown', 'touchstart', 'mousedown'].forEach(t =>
+            bar.addEventListener(t, e => e.stopPropagation(), { passive: true }));
+        const current = () => gallery.currItem && gallery.currItem.ref;
+        const button = (title, act) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.title = title;
+            b.addEventListener('click', e => {
+                e.stopPropagation();
+                const ref = current();
+                if (!ref || b.disabled) return;
+                Promise.resolve(act(root, postId, ref, set)).then(paint);
+            });
+            bar.appendChild(b);
+            return b;
+        };
+        const blur = button('Blur faces when pulled', toggleBlur);
+        const map = button('Map card: press for the next style', cycleMap);
+        const wait = set === 'main' ? button('Move to the waitlist (keeps it on this post, out of the carousel)', demoteToWaitlist) : null;
+        const rm = button('Remove from this post', removeFromPost);
+        const status = document.createElement('span');
+        status.className = 'posts-manage-status';
+        bar.appendChild(status);
+
+        function paint() {
+            const ref = current();
+            const st = ref ? photoState(postId, ref, set) : { where: 'gone' };
+            const inCarousel = st.where === 'carousel';
+            const ph = st.ph || {};
+            blur.textContent = ph.blur ? '🙂 Blur on' : '🙂 Blur faces';
+            blur.classList.toggle('is-on', !!ph.blur);
+            map.textContent = ph.map ? `🗺 ${MAP_SHORT[ph.map]}` : '🗺 Map card';
+            map.classList.toggle('is-on', !!ph.map);
+            if (wait) wait.textContent = '⇩ Waitlist';
+            rm.textContent = '✕ Remove';
+            // Off the carousel, the actions don't apply: show where it went instead.
+            [blur, map, wait, rm].forEach(b => { if (b) b.hidden = !inCarousel; });
+            status.textContent = st.where === 'waitlist' ? '⇩ On the waitlist'
+                : st.where === 'gone' ? 'Removed from this post' : '';
+            status.hidden = inCarousel;
+        }
+        gallery.listen('afterChange', paint);
+        document.addEventListener('posts:rendered', paint);
+        gallery.listen('destroy', () => { bar.remove(); document.removeEventListener('posts:rendered', paint); });
+        pswpEl.appendChild(bar);
+        ready.then(ok => { if (ok) paint(); });
     }
 
     // ---------- Grid select mode ----------
@@ -909,6 +973,9 @@ window.Posts = (function () {
 
     function renderManager(root) {
         updatePill();
+        // An open viewer's photo-action bar repaints from the same state (an Undo
+        // from a toast lands here too).
+        document.dispatchEvent(new Event('posts:rendered'));
         root.innerHTML = '';
         const head = document.createElement('div');
         head.className = 'posts-head';
@@ -2085,6 +2152,114 @@ window.Posts = (function () {
         return cell;
     }
 
+    // ---------- Photo actions ----------
+    // Shared by a carousel thumbnail's buttons and the full-screen viewer opened
+    // from it. Each finds the freshest copy of the post (by id) and the photo (by
+    // key), saves, re-renders the manager behind, and resolves when done.
+
+    const docOf = set => (set === 'auto' ? autoDoc : doc);
+
+    /** Where a photo stands in a post right now: in the carousel (with its
+     *  blur/map marks), on the waitlist, or no longer on the post. */
+    function photoState(postId, ref, set) {
+        const d = docOf(set);
+        const p = d && d.posts.find(x => x.id === postId);
+        if (!p) return { where: 'gone' };
+        const ph = p.photos.find(x => keyOf(x) === keyOf(ref));
+        if (ph) return { where: 'carousel', ph, post: p };
+        if (waitOf(p).some(x => keyOf(x) === keyOf(ref))) return { where: 'waitlist', post: p };
+        return { where: 'gone', post: p };
+    }
+
+    function editPhoto(root, postId, ref, set, fn) {
+        return mutateSet(set || 'main', posts => {
+            const p = posts.find(x => x.id === postId);
+            const ph = p && p.photos.find(x => keyOf(x) === keyOf(ref));
+            if (ph) fn(ph);
+        }).then(() => renderManager(root));
+    }
+
+    // Face-blur mark: ./post.py pull copies a face-pixelated version instead.
+    const toggleBlur = (root, postId, ref, set) =>
+        editPhoto(root, postId, ref, set, ph => { if (ph.blur) delete ph.blur; else ph.blur = true; });
+
+    // Map-card mark: ./post.py pull renders a location card at the post's shape.
+    // Each press moves to the next style, then off.
+    const cycleMap = (root, postId, ref, set) =>
+        editPhoto(root, postId, ref, set, ph => {
+            const next = MAP_STYLES[(MAP_STYLES.indexOf(ph.map || null) + 1) % MAP_STYLES.length];
+            if (next) ph.map = next; else delete ph.map;
+        });
+
+    /** Park the photo on the post's waitlist: still attached (marks kept), out of
+     *  the carousel, freeing a slot against the cap. Undo puts it back in place. */
+    function demoteToWaitlist(root, postId, ref, set) {
+        const M = fn => mutateSet(set || 'main', fn);
+        const result = {};
+        let at = -1, name = '';
+        return M(posts => {
+            const p = posts.find(x => x.id === postId);
+            if (!p) return;
+            const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
+            if (i === -1) return;
+            if (waitOf(p).length >= WAITLIST_MAX) { result.full = true; return; }
+            at = i; name = p.name;
+            const moved = p.photos.splice(i, 1)[0];
+            if (!p.waitlist) p.waitlist = [];
+            p.waitlist.push(moved);
+            result.ok = true;
+        }).then(okSave => {
+            renderManager(root);
+            if (result.full) { toast(`Waitlist is full (${WAITLIST_MAX})`); return; }
+            if (!okSave || !result.ok) return;
+            toast(`Waitlisted in "${name}"`, { label: 'Undo', fn: () => {
+                M(posts => {
+                    const p = posts.find(x => x.id === postId);
+                    if (!p) return;
+                    const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
+                    if (wi === -1) return;
+                    if (countOf(p) >= capOf(p)) return;   // carousel filled up meanwhile
+                    const back = p.waitlist.splice(wi, 1)[0];
+                    if (!p.waitlist.length) delete p.waitlist;
+                    p.photos.splice(Math.min(at, p.photos.length), 0, back);
+                }).then(() => renderManager(root));
+            } });
+        });
+    }
+
+    /** Take the photo off the post (after a confirm). Main drafts keep it in the
+     *  card's History; auto suggestions are regenerated wholesale, so no History. */
+    function removeFromPost(root, postId, ref, set) {
+        const M = fn => mutateSet(set || 'main', fn);
+        const st = photoState(postId, ref, set);
+        const name = st.post ? st.post.name : '';
+        if (!confirm(set === 'auto'
+            ? `Remove this photo from "${name}"?`
+            : `Remove this photo from "${name}"? It stays in the card's History.`)) return Promise.resolve();
+        let at = -1;
+        return M(posts => {
+            const p = posts.find(x => x.id === postId);
+            if (!p) return;
+            const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
+            if (i === -1) return;
+            at = i;
+            const gone = p.photos.splice(i, 1)[0];
+            if (set !== 'auto') rememberRemoval(p, gone, false);
+        }).then(okSave => {
+            renderManager(root);
+            if (!okSave || at === -1) return;
+            toast(`Removed from "${name}"`, { label: 'Undo', fn: () => {
+                M(posts => {
+                    const p = posts.find(x => x.id === postId);
+                    if (!p || p.photos.some(ph => keyOf(ph) === keyOf(ref))) return;
+                    if (countOf(p) >= capOf(p)) return;   // filled up meanwhile
+                    p.photos.splice(Math.min(at, p.photos.length), 0, { ...ref });
+                    unhistory(p, keyOf(ref));
+                }).then(() => renderManager(root));
+            } });
+        });
+    }
+
     function renderThumb(root, post, ref, idx, set) {
         const M = fn => mutateSet(set || 'main', fn);
         const cell = document.createElement('div');
@@ -2104,7 +2279,10 @@ window.Posts = (function () {
         img.addEventListener('click', () => {
             // Auto-suggestion sets are pseudo-posts whose id matches no draft;
             // the override lookup falls back to the current post for those.
-            if (window.Gallery) Gallery.openLightbox(post.photos, idx, { defaultPostId: post.id });
+            // manage: the viewer carries this post's photo actions (blur, map,
+            // waitlist, remove) so they work full screen too.
+            if (window.Gallery) Gallery.openLightbox(post.photos, idx,
+                { defaultPostId: post.id, manage: { root, set: set || 'main' } });
         });
 
         const move = pos => M(posts => {
@@ -2126,112 +2304,32 @@ window.Posts = (function () {
         right.type = 'button'; right.textContent = '▶'; right.title = 'Move later';
         right.disabled = idx === post.photos.length - 1;
         right.addEventListener('click', () => move(idx + 1));
-        // Face-blur mark: flags this photo so ./post.py pull copies a
-        // face-pixelated version instead of the straight original.
+
         const blurBtn = document.createElement('button');
         blurBtn.type = 'button';
         blurBtn.textContent = '🙂';
         blurBtn.title = ref.blur ? 'Face blur ON — pull copies a censored version'
                                  : 'Blur faces when pulled';
         if (ref.blur) blurBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
-        blurBtn.addEventListener('click', () => {
-            M(posts => {
-                const p = posts.find(x => x.id === post.id);
-                if (!p) return;
-                const ph = p.photos.find(x => keyOf(x) === keyOf(ref));
-                if (!ph) return;
-                if (ph.blur) delete ph.blur; else ph.blur = true;
-            }).then(() => renderManager(root));
-        });
+        blurBtn.addEventListener('click', () => toggleBlur(root, post.id, ref, set));
 
-        // Map-card mark: flags this photo so ./post.py pull renders a location
-        // card into <post>/maps/, at the post's own shape. Clicking cycles the
-        // styles, since which one carries the story changes with the photo.
         const mapBtn = document.createElement('button');
         mapBtn.type = 'button';
         mapBtn.textContent = '🗺';
         mapBtn.title = ref.map ? `Map card: ${MAP_LABELS[ref.map]} — click for the next style`
                                : `Add a map card (${MAP_LABELS[MAP_STYLES[1]]})`;
         if (ref.map) mapBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
-        mapBtn.addEventListener('click', () => {
-            M(posts => {
-                const p = posts.find(x => x.id === post.id);
-                if (!p) return;
-                const ph = p.photos.find(x => keyOf(x) === keyOf(ref));
-                if (!ph) return;
-                const next = MAP_STYLES[(MAP_STYLES.indexOf(ph.map || null) + 1) % MAP_STYLES.length];
-                if (next) ph.map = next; else delete ph.map;
-            }).then(() => renderManager(root));
-        });
+        mapBtn.addEventListener('click', () => cycleMap(root, post.id, ref, set));
 
-        // Demote: park the photo on the post's waitlist instead of removing it.
-        // It stays attached to the post (and keeps its blur/map marks) but
-        // leaves the carousel, freeing a slot against the cap.
         const demote = document.createElement('button');
         demote.type = 'button';
         demote.textContent = '⇩';
         demote.title = 'Demote to the waitlist (keeps it on this post, out of the carousel)';
-        demote.addEventListener('click', () => {
-            const at = idx;
-            const result = {};
-            M(posts => {
-                const p = posts.find(x => x.id === post.id);
-                if (!p) return;
-                const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
-                if (i === -1) return;
-                if (waitOf(p).length >= WAITLIST_MAX) { result.full = true; return; }
-                const moved = p.photos.splice(i, 1)[0];
-                if (!p.waitlist) p.waitlist = [];
-                p.waitlist.push(moved);
-                result.ok = true;
-            }).then(okSave => {
-                renderManager(root);
-                if (result.full) { toast(`Waitlist is full (${WAITLIST_MAX})`); return; }
-                if (!okSave || !result.ok) return;
-                toast(`Waitlisted in "${post.name}"`, { label: 'Undo', fn: () => {
-                    M(posts => {
-                        const p = posts.find(x => x.id === post.id);
-                        if (!p) return;
-                        const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
-                        if (wi === -1) return;
-                        if (countOf(p) >= capOf(p)) return;   // carousel filled up meanwhile
-                        const back = p.waitlist.splice(wi, 1)[0];
-                        if (!p.waitlist.length) delete p.waitlist;
-                        p.photos.splice(Math.min(at, p.photos.length), 0, back);
-                    }).then(() => renderManager(root));
-                } });
-            });
-        });
+        demote.addEventListener('click', () => demoteToWaitlist(root, post.id, ref, set));
 
         const rm = document.createElement('button');
         rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove from post';
-        rm.addEventListener('click', () => {
-            if (!confirm(set === 'auto'
-                ? `Remove this photo from "${post.name}"?`
-                : `Remove this photo from "${post.name}"? It stays in the card's History.`)) return;
-            const at = idx;
-            M(posts => {
-                const p = posts.find(x => x.id === post.id);
-                if (!p) return;
-                const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
-                if (i === -1) return;
-                const gone = p.photos.splice(i, 1)[0];
-                // Auto suggestions are regenerated wholesale, so no History there.
-                if (set !== 'auto') rememberRemoval(p, gone, false);
-            }).then(okSave => {
-                renderManager(root);
-                if (!okSave) return;
-                toast(`Removed from "${post.name}"`, { label: 'Undo', fn: () => {
-                    M(posts => {
-                        const p = posts.find(x => x.id === post.id);
-                        if (!p || p.photos.some(ph => keyOf(ph) === keyOf(ref))) return;
-                        if (countOf(p) >= capOf(p)) return;   // filled up meanwhile
-                        p.photos.splice(Math.min(at, p.photos.length), 0, { ...ref });
-                        unhistory(p, keyOf(ref));
-                    }).then(() => renderManager(root));
-                } });
-            });
-        });
+        rm.addEventListener('click', () => removeFromPost(root, post.id, ref, set));
         controls.append(left, rm, right);
 
         // Desktop drag to reorder; phones use the arrow buttons.

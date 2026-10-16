@@ -755,10 +755,17 @@
   // roofs: height-tier sections, one tile per building → its gallery
   function renderTieredTiles(tile) {
     app.innerHTML = '';
+    let mastTop = null;
     if (DATA.tiles.length === 1) {
       // single-facet collection (e.g. Rooftopping): masthead instead of facet heading
       setCrumbs([]);
-      app.appendChild(buildMasthead());
+      const mast = buildMasthead();
+      // the search sits on the title's line, out to the right
+      const h1 = mast.querySelector('h1');
+      mastTop = el('div', 'masthead-top');
+      h1.replaceWith(mastTop);
+      mastTop.appendChild(h1);
+      app.appendChild(mast);
     } else {
       setCrumbs([{ label: DATA.title, href: '#' }, { label: tile.title }]);
       app.appendChild(el('div', 'section-head',
@@ -780,8 +787,8 @@
         search.apply();
       }, initial));
     }
-    tools.appendChild(search.bar);
-    app.appendChild(tools);
+    (mastTop || tools).appendChild(search.bar);
+    if (tools.children.length) app.appendChild(tools);
     const host = el('div');
     host.id = 'tier-host';
     app.appendChild(host);

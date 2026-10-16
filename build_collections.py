@@ -1124,6 +1124,9 @@ def main(collection, do_category, force):
     stamp_road_km(click.echo)
     stamp_trip_bounds(click.echo)
     save_dims_cache()
+    # Site search reads the collections written above, so it goes last.
+    from build_search import build as build_search
+    build_search(click.echo)
 
 
 def _all_subtiles(tile):

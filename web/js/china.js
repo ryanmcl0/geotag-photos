@@ -822,7 +822,7 @@
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}${sub}
       <span class="count" id="gallery-count">${(s.photos || []).length} photos</span>`));
     // lightbox caption: name · height · province/city (bridges + buildings carry these)
-    const caption = [s.title, s.height_m ? `${s.height_m} m` : null, s.province || s.city || null]
+    const caption = [s.title, s.height_label || (s.height_m ? `${s.height_m} m` : null), s.province || s.city || null]
       .filter(Boolean).join(' · ');
     const photos = (s.photos || []).map(p => ({ ...p, title: caption }));
 

@@ -637,6 +637,50 @@ def upload_source_index(config: 'DeployConfig', dry_run: bool = False):
           f"{len(body) / 1024:.0f} KB")
 
 
+def upload_access_index(config: 'DeployConfig', dry_run: bool = False):
+    """Upload the privacy lists the Functions enforce to R2 (_state/access_index.json:
+    functions/photos/private_index.json plus the trips this deploy lists as public).
+    Never served (the /photos proxy 404s every _ prefix); the nightly leak probe in
+    cloudflare-infra (scripts/leak_probe.py) reads it through the API to know which
+    bucket objects must stay hidden, and then tries to fetch them from the site."""
+    doc = json.loads(Path('functions/photos/private_index.json').read_text())
+    trips = json.loads(Path('web/trips/index.json').read_text()).get('trips', [])
+    doc['public_trips'] = sorted(t['id'] for t in trips if t.get('public') is not False)
+    body = json.dumps(doc, separators=(',', ':')).encode()
+    if dry_run:
+        print(f"    [dry-run] would upload _state/access_index.json ({len(body) / 1024:.0f} KB)")
+        return
+    R2Uploader(config).s3.put_object(
+        Bucket=config.r2_bucket, Key='_state/access_index.json', Body=body,
+        ContentType='application/json')
+    print(f"    ✓ _state/access_index.json: {len(doc['public_trips'])} public trips, "
+          f"{len(doc['private_trips'])} private trips")
+
+
+def leaked_secrets(secrets: dict) -> list:
+    """(name, where) for every secret value found in the public repo's tracked files
+    or in the built site (web/, what gets deployed), ignoring case. The public repo
+    is on GitHub, so a password written into a comment there is public. A value
+    only counts as a whole token: a numeric password inside a GPS coordinate is
+    not a leak."""
+    import re
+    pats = {n: re.compile(r'(?<![A-Za-z0-9])' + re.escape(v) + r'(?![A-Za-z0-9])', re.I)
+            for n, v in secrets.items() if v and len(v) >= 4}
+    files = subprocess.run(['git', 'ls-files', '-z'], capture_output=True, text=True).stdout.split('\0')
+    files += [str(f) for f in Path('web').rglob('*')
+              if f.is_file() and not f.is_symlink()
+              and not {'display', 'thumbnails', 'phone'} & set(f.parts)
+              and f.suffix.lower() in ('.html', '.json', '.geojson', '.js', '.css', '.txt', '.xml', '.gpx', '.md')]
+    hits = set()
+    for f in dict.fromkeys(files):
+        try:
+            text = Path(f).read_text(errors='ignore')
+        except (OSError, ValueError):
+            continue
+        hits |= {(n, f) for n, pat in pats.items() if pat.search(text)}
+    return sorted(hits)
+
+
 def upload_people_index(config: 'DeployConfig', dry_run: bool = False):
     """Upload the People page document to R2 (_state/people.json, served by the
     posts-gated /api/people). Built by tools/people_index.py from the local-only
@@ -925,6 +969,7 @@ def main():
     parser.add_argument('--skip-expeditions', action='store_true', help='Do not rebuild Expedition Tours; ship web/expeditions/ as it is')
     parser.add_argument('--prune-force', action='store_true', help='Allow pruning even when many trips would be removed (overrides the safety guard)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
+    parser.add_argument('--skip-security-tests', action='store_true', help='Do not run tests/security_local.sh before deploying (the secret guard still runs)')
     parser.add_argument('--trip', help='Upload only a specific trip slug')
     args = parser.parse_args()
 
@@ -955,6 +1000,25 @@ def main():
     if args.dry_run:
         print(f"   Mode:     DRY RUN")
     print()
+
+    # Security gates, before anything is uploaded. A password in the public repo
+    # or the built pages stops the deploy; so does any failure of the local attack
+    # suite (tests/security_local.sh), which runs the Functions under wrangler and
+    # tries to reach every class of private file the way an outsider would.
+    leaks = leaked_secrets({n: os.getenv(n) for n in (
+        'CF_SITE_PASSWORD', 'CF_ALL_PASSWORD', 'CF_POSTS_PASSWORD', 'CF_QR_ACCESS_TOKEN',
+        'CF_COOKIE_SECRET', 'CF_API_TOKEN', 'CF_R2_SECRET_KEY')})
+    if leaks:
+        for name, where in leaks:
+            print(f"   ✗ {name} appears in {where}")
+        sys.exit("Refusing to deploy: a secret is written into a public or deployed file.")
+    if not args.skip_security_tests and not args.dry_run:
+        print("🛡  Local security tests (tests/security_local.sh)...")
+        t = subprocess.run(['zsh', 'tests/security_local.sh'], capture_output=True, text=True)
+        if t.returncode != 0:
+            print(t.stdout[-4000:], t.stderr[-2000:])
+            sys.exit("Refusing to deploy: the local security tests failed (output above).")
+        print(f"    ✓ {t.stdout.strip().splitlines()[-1]}\n")
 
     # Step 0-pre: Photos re-edited for a post and written back to Edits by
     # `./post.py pull`. Reprocessing them here is what makes "the next deploy"
@@ -1095,6 +1159,7 @@ def main():
     print("🗂️  Uploading photo source index...")
     upload_source_index(config, dry_run=args.dry_run)
     upload_people_index(config, dry_run=args.dry_run)
+    upload_access_index(config, dry_run=args.dry_run)
     print()
 
     # Step 2: Patch manifests with CDN URLs
@@ -1167,6 +1232,13 @@ def main():
                     success = False
                 else:
                     print("    ✓ Pushed to origin/main — CF Pages will auto-deploy")
+                    # Once the build is live, cloudflare-infra's leak probe attacks the
+                    # site (scripts/leak_probe.py); a failure there emails you.
+                    probe = _sp.run(['gh', 'workflow', 'run', 'leak-probe.yml',
+                                     '-R', 'ryanmcl0/cloudflare-infra', '-f', 'wait=true'],
+                                    check=False, capture_output=True, text=True)
+                    print("    ✓ Leak probe queued (runs once the build is live)" if probe.returncode == 0
+                          else f"    ⚠️  Leak probe not queued: {(probe.stderr or probe.stdout).strip()}")
         else:
             print("🌐 Deploying to Cloudflare Pages (Direct)...")
             success = deployer.deploy(dry_run=args.dry_run)

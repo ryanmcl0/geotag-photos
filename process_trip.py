@@ -1477,11 +1477,11 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{year} - Travel Photography Map</title>
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css"/>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
+    <link rel="stylesheet" href="/vendor/leaflet@1.9.4/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="/vendor/leaflet.markercluster@1.4.1/MarkerCluster.css"/>
+    <link rel="stylesheet" href="/vendor/leaflet.markercluster@1.4.1/MarkerCluster.Default.css"/>
+    <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/photoswipe.css"/>
+    <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/default-skin/default-skin.css"/>
     <link rel="stylesheet" href="../css/styles.css"/>
     <script defer src="/js/analytics.js"></script>
     <script defer src="/js/photo-guard.js"></script>
@@ -1536,10 +1536,10 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
             basePath: '../'
         }};
     </script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+    <script src="/vendor/leaflet@1.9.4/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="/vendor/leaflet.markercluster@1.4.1/leaflet.markercluster.js"></script>
+    <script src="/vendor/photoswipe@4.1.3/photoswipe.min.js"></script>
+    <script src="/vendor/photoswipe@4.1.3/photoswipe-ui-default.min.js"></script>
     <script src="../js/sidebar.js"></script>
     <script src="../js/app.js"></script>
 </body>
@@ -1558,11 +1558,11 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{trip_name} - Travel Photography Map</title>
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css"/>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
+    <link rel="stylesheet" href="/vendor/leaflet@1.9.4/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="/vendor/leaflet.markercluster@1.4.1/MarkerCluster.css"/>
+    <link rel="stylesheet" href="/vendor/leaflet.markercluster@1.4.1/MarkerCluster.Default.css"/>
+    <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/photoswipe.css"/>
+    <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/default-skin/default-skin.css"/>
     <link rel="stylesheet" href="../../css/styles.css"/>
     <script defer src="/js/analytics.js"></script>
     <script defer src="/js/photo-guard.js"></script>
@@ -1617,10 +1617,10 @@ def generate_html_pages(output_path: Path, trip_name: str, trip_id: str, year: i
             basePath: '../../'
         }};
     </script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+    <script src="/vendor/leaflet@1.9.4/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="/vendor/leaflet.markercluster@1.4.1/leaflet.markercluster.js"></script>
+    <script src="/vendor/photoswipe@4.1.3/photoswipe.min.js"></script>
+    <script src="/vendor/photoswipe@4.1.3/photoswipe-ui-default.min.js"></script>
     <script src="../../js/sidebar.js"></script>
     <script src="../../js/app.js"></script>
 </body>

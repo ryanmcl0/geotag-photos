@@ -600,8 +600,17 @@ window.Posts = (function () {
         gallery.listen('destroy', () => {
             if (currentGallery === gallery) { currentGallery = null; lightboxPostId = null; }
         });
+        // The viewer element is reused by every open, so its buttons are added
+        // once; the badge and the photo-action bar belong to this gallery and
+        // are attached on every open.
         const bar = pswpEl && pswpEl.querySelector('.pswp__top-bar');
-        if (!bar || bar.querySelector('.posts-add-btn')) return;
+        if (bar && !bar.querySelector('.posts-add-btn')) addViewerButtons(bar);
+        attachBadge(gallery, pswpEl);
+        attachManageBar(gallery, pswpEl, opts);
+    }
+
+    /** "+ Post" and its post picker, in the viewer's top bar. */
+    function addViewerButtons(bar) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'pswp__button posts-add-btn';
@@ -632,7 +641,10 @@ window.Posts = (function () {
         const closeBtn = bar.querySelector('.pswp__button--close');
         bar.insertBefore(btn, closeBtn || null);
         bar.insertBefore(pick, closeBtn || null);
+    }
 
+    function attachBadge(gallery, pswpEl) {
+        if (!pswpEl) return;
         // Same "already in a post" pill as the grids. The map has no thumbnails
         // of its own, so the viewer is the only place its photos can carry one.
         let pill = pswpEl.querySelector('.posts-badge--lightbox');
@@ -659,8 +671,6 @@ window.Posts = (function () {
         gallery.listen('afterChange', refresh);
         gallery.listen('close', () => { pill.style.display = 'none'; });
         ready.then(ok => { if (ok) refresh(); });
-
-        attachManageBar(gallery, pswpEl, opts);
     }
 
     /** Opened from a post's carousel thumbnail: the same photo actions as the

@@ -1515,21 +1515,31 @@ window.Posts = (function () {
             handle.addEventListener('mousedown', () => { card.draggable = true; });
             bar.insertBefore(handle, bar.firstChild);
             card.addEventListener('dragstart', e => {
-                if (!card.draggable) return;   // a thumb drag bubbling up
+                if (!card.draggable || e.target !== card) return;   // a thumb drag bubbling up
                 e.dataTransfer.setData('text/posts-card', post.id);
                 e.dataTransfer.effectAllowed = 'move';
             });
             card.addEventListener('dragend', () => { card.draggable = false; });
+            // Also takes a photo dragged from another draft's carousel: dropped
+            // anywhere on the card (collapsed too) it joins the end.
+            const accepts = e => e.dataTransfer.types.includes('text/posts-card')
+                || draggedFromOtherDraft(post);
             card.addEventListener('dragover', e => {
-                if (!e.dataTransfer.types.includes('text/posts-card')) return;
+                if (!accepts(e)) return;
                 e.preventDefault();
                 card.classList.add('drag-over');
             });
             card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
             card.addEventListener('drop', e => {
-                if (!e.dataTransfer.types.includes('text/posts-card')) return;
+                if (!accepts(e)) return;
                 e.preventDefault();
                 card.classList.remove('drag-over');
+                if (draggedFromOtherDraft(post)) {
+                    const dragged = draggedPhoto;
+                    draggedPhoto = null;
+                    movePhotoToPost(root, dragged.postId, dragged.ref, post.id);
+                    return;
+                }
                 movePostTo(root, e.dataTransfer.getData('text/posts-card'), post);
             });
 
@@ -2278,6 +2288,59 @@ window.Posts = (function () {
         });
     }
 
+    // The carousel photo being dragged on the manager ({postId, ref, set}).
+    // dataTransfer contents can't be read until the drop, so this is how
+    // dragover tells a photo from another draft apart from an in-post reorder.
+    let draggedPhoto = null;
+    const draggedFromOtherDraft = post => !!draggedPhoto && draggedPhoto.set === 'main'
+        && draggedPhoto.postId !== post.id;
+
+    /** Move a carousel photo out of one draft into another, marks and all, at
+     *  index `at` of the target's carousel (the end when omitted). Refused with
+     *  a toast when the target is full or already has the photo; Undo puts it
+     *  back where it was. */
+    function movePhotoToPost(root, fromId, ref, toId, at) {
+        const to = doc.posts.find(p => p.id === toId);
+        if (!to) return;
+        const k = keyOf(ref);
+        if (to.photos.some(ph => keyOf(ph) === k)) { toast(`Already in ${postLabel(to)}`); return; }
+        if (waitOf(to).some(ph => keyOf(ph) === k)) {
+            toast(`Already on the waitlist of ${postLabel(to)}`);
+            return;
+        }
+        if (countOf(to) >= capOf(to)) { toast(`${postLabel(to)} is full (${countOf(to)}/${capOf(to)})`); return; }
+        if (!orientationOk(toId, [ref])) return;
+        const result = {};
+        mutate(posts => {
+            const src = posts.find(p => p.id === fromId);
+            const dst = posts.find(p => p.id === toId);
+            if (!src || !dst) return;
+            if (dst.photos.some(ph => keyOf(ph) === k) || waitOf(dst).some(ph => keyOf(ph) === k)) return;
+            if (countOf(dst) >= capOf(dst)) { result.full = true; return; }
+            const [it, i] = takeOut(src, 'photos', ref);
+            if (!it) return;
+            putBack(dst, 'photos', it, at === undefined ? dst.photos.length : at);
+            unhistory(dst, k);
+            Object.assign(result, { ok: true, from: i, src: src.name,
+                                    label: postLabel(dst), count: countOf(dst), cap: capOf(dst) });
+        }).then(okSave => {
+            renderManager(root);
+            if (result.full) { toast(`${postLabel(to)} is full`); return; }
+            if (!okSave || !result.ok) return;
+            toast(`Moved from "${result.src}" to ${result.label} (${result.count}/${result.cap})`,
+                { label: 'Undo', fn: () => {
+                mutate(posts => {
+                    const src = posts.find(p => p.id === fromId);
+                    const dst = posts.find(p => p.id === toId);
+                    if (!src || !dst || sectionOf(src, ref)) return;
+                    if (!roomIn(src, 'photos')) return;   // filled up meanwhile
+                    const [it] = takeOut(dst, 'photos', ref);
+                    if (it) putBack(src, 'photos', it, result.from);
+                }).then(() => renderManager(root));
+            } });
+        });
+    }
+
     function renderThumb(root, post, ref, idx, set) {
         const M = fn => mutateSet(set || 'main', fn);
         const cell = document.createElement('div');
@@ -2350,18 +2413,37 @@ window.Posts = (function () {
         rm.addEventListener('click', () => removeFromPost(root, post.id, ref, set));
         controls.append(left, rm, right);
 
-        // Desktop drag to reorder; phones use the arrow buttons.
+        // Desktop drag to reorder, or onto another draft's photo to move it
+        // there at that spot (dropping anywhere else on that card appends it).
+        // Phones use the arrow buttons. Card drags pass through to the card.
+        const accepts = () => !!draggedPhoto
+            && (draggedPhoto.postId === post.id || (draggedFromOtherDraft(post) && set === 'main'));
         cell.addEventListener('dragstart', e => {
             e.dataTransfer.setData('text/plain', keyOf(ref));
             e.dataTransfer.effectAllowed = 'move';
+            draggedPhoto = { postId: post.id, ref, set: set || 'main' };
         });
-        cell.addEventListener('dragover', e => { e.preventDefault(); cell.classList.add('drag-over'); });
+        cell.addEventListener('dragend', () => { draggedPhoto = null; });
+        cell.addEventListener('dragover', e => {
+            if (!accepts()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            cell.classList.add('drag-over');
+        });
         cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'));
         cell.addEventListener('drop', e => {
+            if (!accepts()) return;
             e.preventDefault();
+            e.stopPropagation();
             cell.classList.remove('drag-over');
-            const fromKey = e.dataTransfer.getData('text/plain');
-            if (!fromKey || fromKey === keyOf(ref)) return;
+            const dragged = draggedPhoto;
+            draggedPhoto = null;
+            if (dragged.postId !== post.id) {
+                movePhotoToPost(root, dragged.postId, dragged.ref, post.id, idx);
+                return;
+            }
+            const fromKey = keyOf(dragged.ref);
+            if (fromKey === keyOf(ref)) return;
             M(posts => {
                 const p = posts.find(x => x.id === post.id);
                 if (!p) return;

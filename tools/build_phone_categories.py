@@ -9,6 +9,7 @@ into an existing phone trip, so nothing is copied or re-linked on the NAS.
 
 Reads:  local_browse/phone_categories.json   (the curated lists, git-ignored)
         web/phone/trips/<trip>/manifest.json  (ar, timestamp, trip name)
+        web/trips/<trip>/manifest.all.json    (same, for camera photos)
 Writes: web/phone/categories/index.json
         web/phone/categories/<id>/manifest.json
 
@@ -22,9 +23,11 @@ phone_categories.json:
         "photos": [{"trip": "phone-...", "id": "IMG_1234", "note": "Range Orver"}]
     }]}
 
-A photo's optional "note" becomes its lightbox caption. Everything under
-web/phone/ is git-ignored and never deployed; rerun this after editing the
-JSON (no NAS reads, only the local manifests).
+A photo's optional "note" becomes its lightbox caption. A ref may also name a
+camera trip (any id without the "phone-" prefix, e.g. a phone screen shot on
+the Sony): Gallery.photoUrl already routes those to the camera library.
+Everything under web/phone/ is git-ignored and never deployed; rerun this
+after editing the JSON (no NAS reads, only the local manifests).
 """
 import json
 import shutil
@@ -34,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "local_browse" / "phone_categories.json"
 TRIPS = ROOT / "web" / "phone" / "trips"
+CAMERA_TRIPS = ROOT / "web" / "trips"
 OUT = ROOT / "web" / "phone" / "categories"
 
 
@@ -43,13 +47,17 @@ def main():
     cats = json.loads(SRC.read_text()).get("categories", [])
 
     names = {t["id"]: t["name"] for t in json.loads((TRIPS / "index.json").read_text())["trips"]}
+    names.update({t["id"]: t["name"]
+                  for t in json.loads((CAMERA_TRIPS / "index.json").read_text())["trips"]})
     manifests = {}
 
     def lookup(trip, pid):
         if trip not in manifests:
-            path = TRIPS / trip / "manifest.json"
+            base = TRIPS / trip if trip.startswith("phone-") else CAMERA_TRIPS / trip
+            # Camera trips keep private photos only in the unfiltered manifest.
+            path = next((p for p in (base / "manifest.all.json", base / "manifest.json") if p.exists()), None)
             manifests[trip] = ({p["id"]: p for p in json.loads(path.read_text())["photos"]}
-                               if path.exists() else {})
+                               if path else {})
         return manifests[trip].get(pid)
 
     if OUT.exists():

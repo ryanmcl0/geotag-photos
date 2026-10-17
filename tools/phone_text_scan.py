@@ -19,6 +19,8 @@ Then:
                       WeChat "Translated by Weixin"...), with their text
   list english        ordinary photos with English text in them: signs,
                       menus, packaging. Chinglish lives here.
+  list match --pattern REGEX
+                      photos whose OCR text (either language) matches REGEX
   list signs          photos CLIP thinks are signs, shopfronts, menus or labels
                       but where OCR found no English, for the ones it misread
   list cars           photos ranked by CLIP "a car" score, plus any whose text
@@ -220,6 +222,17 @@ def cmd_list(args):
             if len(re.findall(r'[A-Za-z]{3,}', text)) >= args.min_words:
                 print(f'{k}: {text}')
 
+    elif args.kind == 'match':
+        # Free-text search over the OCR (Chinese and English), for theme
+        # categories that are easiest to find by what the photos say.
+        if not args.pattern:
+            sys.exit('list match needs --pattern REGEX')
+        pat = re.compile(args.pattern, re.I)
+        for k in keys:
+            text = compact(ocr.get(k, []), limit=args.limit)
+            if pat.search(text):
+                print(f'## {k}\n{text}\n')
+
     elif args.kind == 'signs':
         # Signs whose English OCR couldn't read (small, stylised, at an angle):
         # anything OCR found English in is already covered by `list english`.
@@ -292,10 +305,12 @@ def main():
     p = sub.add_parser('clip')
     p.add_argument('--workers', type=int, default=3, help='thumbnail loader threads')
     p = sub.add_parser('list')
-    p.add_argument('kind', choices=['translations', 'english', 'signs', 'cars'])
+    p.add_argument('kind', choices=['translations', 'english', 'match', 'signs', 'cars'])
     p.add_argument('--all', action='store_true', help='include photos already in a category')
     p.add_argument('--min-words', type=int, default=2, help='english: Latin words needed')
     p.add_argument('--min-score', type=float, default=0.0, help='signs/cars: CLIP margin cut-off')
+    p.add_argument('--pattern', help='match: regex searched in each photo\'s OCR text')
+    p.add_argument('--limit', type=int, default=500, help='match: characters of text to print')
     p = sub.add_parser('sheet')
     p.add_argument('out')
     p.add_argument('keys', nargs='+')

@@ -282,10 +282,11 @@ def sync_config_backup(dry_run: bool = False):
             '--exclude', '.classify_cache.json',
             '--exclude', '.dims_cache.json',
             '--exclude', '*.bak',
-            # local_browse/ + plan doc + expeditions/ are synced separately
+            # local_browse/ + plan doc + expeditions/ + blog sources are synced separately
             # below: protect them from this rsync's --delete
             '--exclude', 'local_browse',
             '--exclude', '/expeditions',
+            '--exclude', '/content_blogs',
             '--exclude', 'PHONE_PHOTOS_PLAN.md',
             str(src) + '/', str(target_path) + '/'
         ], check=True, capture_output=True)
@@ -334,6 +335,19 @@ def sync_config_backup(dry_run: bool = False):
                   f"→ {target_path}/claude_skills")
         except subprocess.CalledProcessError as e:
             print(f"    ✗ private skills sync failed: {e.stderr.decode()}")
+
+    # Blog sources (git-ignored here): the English and Chinese markdown plus the
+    # reconstructed images some posts use, which may exist nowhere else.
+    blogs = Path('content/blogs')
+    if blogs.is_dir():
+        try:
+            subprocess.run([
+                'rsync', '-av', '--delete', '--exclude', '.DS_Store',
+                str(blogs) + '/', str(target_path / 'content_blogs') + '/'
+            ], check=True, capture_output=True)
+            print(f"    ✓ Synced content/blogs/ (blog sources, en + zh) → {target_path}/content_blogs")
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ blog sources sync failed: {e.stderr.decode()}")
 
     backup_expeditions_source(target_path)
 

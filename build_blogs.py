@@ -515,9 +515,9 @@ POST_TEMPLATE = '''<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{title} · Ryan's Travels</title>
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"/>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"/>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/photoswipe.css"/>
+    <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/default-skin/default-skin.css"/>
+    <link rel="stylesheet" href="/vendor/leaflet@1.9.4/leaflet.css"/>
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
     <script defer src="/js/analytics.js"></script>
@@ -547,9 +547,9 @@ POST_TEMPLATE = '''<!DOCTYPE html>
 
     <script>window.BLOG = {data};</script>
     <script>document.body.classList.add('blog-' + (window.BLOG.ui || 'v1'));</script>
-    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/vendor/photoswipe@4.1.3/photoswipe.min.js"></script>
+    <script src="/vendor/photoswipe@4.1.3/photoswipe-ui-default.min.js"></script>
+    <script src="/vendor/leaflet@1.9.4/leaflet.js"></script>
     <script src="/js/unlock.js"></script>
     <script src="/js/gallery.js"></script>
     <script src="/js/blog.js"></script>

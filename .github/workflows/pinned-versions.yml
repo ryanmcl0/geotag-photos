@@ -1,0 +1,52 @@
+# Weekly check for newer releases of pinned dependencies (self-hosted libraries
+# in web/vendor/, CDN URLs, the actions below). Changes nothing: it keeps one
+# open issue labelled "pinned-versions" listing what is behind, comments on it
+# when a new release appears, and closes it once everything is current.
+name: Pinned versions
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for newer releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/check_pinned_versions.py --out report.md
+
+      - name: Update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          LABEL=pinned-versions
+          gh label create "$LABEL" --color BFD4F2 \
+            --description "Opened by the weekly pinned-versions check" --force
+          num=$(gh issue list --label "$LABEL" --state open --json number -q '.[0].number')
+
+          if grep -q '^All pinned dependencies are up to date' report.md; then
+            if [ -n "$num" ]; then gh issue close "$num" --comment "Everything pinned is up to date now."; fi
+            exit 0
+          fi
+
+          # Fingerprint of the table, so an unchanged list doesn't notify every week.
+          digest=$(grep '^|' report.md | sha256sum | cut -c1-16)
+          printf '\n@%s\n<!-- digest:%s -->\n' "$OWNER" "$digest" >> report.md
+
+          if [ -z "$num" ]; then
+            gh issue create --title "Pinned dependencies have newer releases" \
+              --label "$LABEL" --body-file report.md
+          elif ! gh issue view "$num" --json body -q .body | grep -q "digest:$digest"; then
+            gh issue edit "$num" --body-file report.md
+            gh issue comment "$num" --body "A newer release has come out since the last check; the list above is updated. @$OWNER"
+          fi

@@ -20,7 +20,10 @@ source .env.deploy
 PORT=${SECURITY_TEST_PORT:-8799}
 B="http://127.0.0.1:$PORT"
 TMP=$(mktemp -d)
-trap 'kill $(lsof -ti tcp:$PORT -sTCP:LISTEN) 2>/dev/null; rm -rf "$TMP"' EXIT
+# Stopping a server = everything started with this run's --persist-to: killing only the
+# port's listener (workerd) left the npm and wrangler parents running after every
+# run (2026-10-17: ~50 of them had piled up).
+trap '{ pkill -f -- "--persist-to $TMP"; kill $(lsof -ti tcp:$PORT -sTCP:LISTEN); } 2>/dev/null; rm -rf "$TMP"' EXIT
 pass=0; fail=0
 
 # --- one key per privacy class -------------------------------------------------
@@ -66,7 +69,7 @@ start(){   # start(with_secret)
     for i in $(seq 1 60); do curl -s -o /dev/null "$B/robots.txt" && return 0; sleep 1; done
     echo "security_local: wrangler did not start"; tail -20 "$TMP/wrangler.log"; exit 1
 }
-stop(){ kill $(lsof -ti tcp:$PORT -sTCP:LISTEN) 2>/dev/null; sleep 2; }
+stop(){ { pkill -f -- "--persist-to $TMP"; kill $(lsof -ti tcp:$PORT -sTCP:LISTEN); } 2>/dev/null; sleep 2; }
 
 # expect <label> <allowed codes, e.g. 404|302> curl-args...
 expect(){

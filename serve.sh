@@ -95,6 +95,7 @@ npx wrangler pages dev web --ip 0.0.0.0 --port "$PORT" \
     --binding CF_SITE_PASSWORD="$CF_SITE_PASSWORD" \
     --binding CF_QR_ACCESS_TOKEN="$CF_QR_ACCESS_TOKEN" \
     --binding CF_ALL_PASSWORD="$CF_ALL_PASSWORD" \
-    --binding CF_POSTS_PASSWORD="$CF_POSTS_PASSWORD" &
+    --binding CF_POSTS_PASSWORD="$CF_POSTS_PASSWORD" \
+    --binding CF_COOKIE_SECRET="$CF_COOKIE_SECRET" &
 WRANGLER_PID=$!
 wait "$WRANGLER_PID"

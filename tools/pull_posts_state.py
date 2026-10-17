@@ -12,6 +12,7 @@ Usage: source .env.deploy && python3 tools/pull_posts_state.py
 One-way: never writes to production.
 """
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -23,11 +24,13 @@ SITE_URL = (os.environ.get("CF_SITE_URL") or (f"https://{PROJECT}.pages.dev" if 
 LOCAL = "http://localhost:8788"
 
 
-def token(var):
-    pw = os.environ.get(var)
-    if not pw:
-        sys.exit(f"{var} not set — source .env.deploy first")
-    return hashlib.sha256(pw.encode()).hexdigest()
+def token(var, tier):
+    """A tier's cookie value, matching the server's tokenFor(): hex HMAC-SHA256
+    keyed by CF_COOKIE_SECRET over "<tier>\\n<password>"."""
+    pw, key = os.environ.get(var), os.environ.get("CF_COOKIE_SECRET")
+    if not (pw and key):
+        sys.exit(f"{var} / CF_COOKIE_SECRET not set — source .env.deploy first")
+    return hmac.new(key.encode(), f"{tier}\n{pw}".encode(), hashlib.sha256).hexdigest()
 
 
 def api(base, cookies, method="GET", body=None):
@@ -43,8 +46,8 @@ def api(base, cookies, method="GET", body=None):
 def main():
     if not SITE_URL:
         sys.exit("CF_SITE_URL / CF_PAGES_PROJECT not set — source .env.deploy first")
-    cookies = (f"posts_auth={token('CF_POSTS_PASSWORD')}; "
-               f"site_auth={token('CF_SITE_PASSWORD')}")
+    cookies = (f"posts_auth={token('CF_POSTS_PASSWORD', 'posts')}; "
+               f"site_auth={token('CF_SITE_PASSWORD', 'site')}")
     prod = api(SITE_URL, cookies)
     local = api(LOCAL, cookies)
     api(LOCAL, cookies, "PUT", {"baseVersion": local["version"], "posts": prod["posts"]})

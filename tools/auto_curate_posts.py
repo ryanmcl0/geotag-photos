@@ -37,6 +37,7 @@ cached in local_browse/clip_embeddings.npz so later runs are instant.
 """
 import argparse
 import hashlib
+import hmac
 import json
 import math
 import re
@@ -759,6 +760,15 @@ def load_env():
     return env
 
 
+def token_for(env, tier, password):
+    """A tier's cookie value, matching the server's tokenFor(): hex HMAC-SHA256
+    keyed by CF_COOKIE_SECRET over "<tier>\\n<password>"."""
+    key = env.get('CF_COOKIE_SECRET')
+    if not key:
+        sys.exit('CF_COOKIE_SECRET not set (env or .env.deploy)')
+    return hmac.new(key.encode(), f'{tier}\n{password}'.encode(), hashlib.sha256).hexdigest()
+
+
 def push(doc_posts, target, mode='replace', which='auto'):
     env = load_env()
     pw = env.get('CF_POSTS_PASSWORD')
@@ -774,11 +784,11 @@ def push(doc_posts, target, mode='replace', which='auto'):
     else:
         base = target.rstrip('/')
     url = f'{base}/api/posts' + ('?set=auto' if which == 'auto' else '')
-    tok = hashlib.sha256(pw.encode()).hexdigest()
+    tok = token_for(env, 'posts', pw)
     cookies = [f'posts_auth={tok}']
     site_pw = env.get('CF_SITE_PASSWORD')
     if site_pw:
-        cookies.insert(0, f'site_auth={hashlib.sha256(site_pw.encode()).hexdigest()}')
+        cookies.insert(0, f"site_auth={token_for(env, 'site', site_pw)}")
     hdrs = {'Cookie': '; '.join(cookies), 'User-Agent': 'auto-curate/1.0',
             'Content-Type': 'application/json'}
 

@@ -41,6 +41,7 @@ CF_ALL_PASSWORD (passed to the dev server so "See All" works locally).
 import argparse
 import contextlib
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -82,17 +83,21 @@ def load_env():
     return env
 
 
-def token_for(password):
-    """Hex SHA-256, matching the server's tokenFor() cookie scheme."""
-    return hashlib.sha256(password.encode()).hexdigest()
+def token_for(env, tier, password):
+    """A tier's cookie value, matching the server's tokenFor(): hex HMAC-SHA256
+    keyed by CF_COOKIE_SECRET over "<tier>\\n<password>"."""
+    key = env.get('CF_COOKIE_SECRET')
+    if not key:
+        sys.exit('CF_COOKIE_SECRET not set (env or .env.deploy)')
+    return hmac.new(key.encode(), f'{tier}\n{password}'.encode(), hashlib.sha256).hexdigest()
 
 
 def cookie_header(env):
-    cookies = [f"posts_auth={token_for(env['CF_POSTS_PASSWORD'])}"]
+    cookies = [f"posts_auth={token_for(env, 'posts', env['CF_POSTS_PASSWORD'])}"]
     if env.get('CF_SITE_PASSWORD'):
-        cookies.insert(0, f"site_auth={token_for(env['CF_SITE_PASSWORD'])}")
+        cookies.insert(0, f"site_auth={token_for(env, 'site', env['CF_SITE_PASSWORD'])}")
     if env.get('CF_ALL_PASSWORD'):
-        cookies.append(f"all_access={token_for(env['CF_ALL_PASSWORD'])}")
+        cookies.append(f"all_access={token_for(env, 'all', env['CF_ALL_PASSWORD'])}")
     return '; '.join(cookies)
 
 

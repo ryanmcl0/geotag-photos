@@ -7,7 +7,7 @@ window.Unlock = (function () {
     function unlocked() {
         return document.cookie.split(';').some(c => {
             const t = c.trim();
-            return t.startsWith('all_access=') && t.length > 'all_access='.length;
+            return t.startsWith('all_access_ui=') && t.length > 'all_access_ui='.length;
         });
     }
 
@@ -80,9 +80,9 @@ window.Unlock = (function () {
         if (u) document.querySelectorAll('.tile--locked').forEach(t => t.classList.remove('tile--locked'));
     }
 
+    // The all_access cookie is HttpOnly: only the server can clear it.
     function lock() {
-        document.cookie = 'all_access=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-        location.reload();
+        fetch('/auth-lock', { method: 'POST', body: new URLSearchParams({ tier: 'all' }) }).finally(() => location.reload());
     }
 
     function bindNavMore() {

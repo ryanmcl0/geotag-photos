@@ -63,11 +63,13 @@
             return;
         }
 
+        // Category photos group by the trip they came from rather than by day.
         const groups = [];
         for (const p of photos) {
+            const key = p.group || p.date;
             const last = groups[groups.length - 1];
-            if (last && last.date === p.date) last.photos.push(p);
-            else groups.push({ date: p.date, photos: [p] });
+            if (last && last.key === key) last.photos.push(p);
+            else groups.push({ key, label: p.group || formatDateBanner(p.date), photos: [p] });
         }
 
         if (groups.length < 2) {
@@ -82,7 +84,7 @@
             const banner = document.createElement('div');
             banner.className = 'gallery-date-banner';
             banner.innerHTML =
-                `<span class="gallery-date-label">${formatDateBanner(g.date)}</span>` +
+                `<span class="gallery-date-label">${g.label}</span>` +
                 `<span class="gallery-date-count">${g.photos.length} photo${g.photos.length === 1 ? '' : 's'}</span>`;
             container.appendChild(banner);
             const sub = document.createElement('div');
@@ -247,7 +249,7 @@
         bar.replaceChildren(title, mark, desc, links);
         renderWatermark(mark, trip);
 
-        if (!trip.pending) {
+        if (!trip.pending && !trip.category) {
             const phoneLib = new URLSearchParams(location.search).get('library') === 'phone';
             const mapHref = `${VIEW_CONFIG.basePath}map.html?mode=trip&trip=${encodeURIComponent(trip.id)}` +
                 `&year=${tripYear(trip)}${phoneLib ? '&library=phone' : ''}`;
@@ -314,6 +316,14 @@
             const idxRes = await fetch(`${base}trips/index.json?t=${Date.now()}`);
             const index = await idxRes.json();
             trip = (index.trips || []).find(t => t.id === VIEW_CONFIG.tripId);
+            // Phone library categories (tools/build_phone_categories.py) open here
+            // too; their photos point back into the phone trips they came from.
+            if (!trip && base.endsWith('phone/')) {
+                const catRes = await fetch(`${base}categories/index.json?t=${Date.now()}`);
+                if (catRes.ok) {
+                    trip = ((await catRes.json()).categories || []).find(t => t.id === VIEW_CONFIG.tripId);
+                }
+            }
         } catch (e) {
             setInfo('Error loading trip');
             grid.innerHTML = '<p class="gallery-empty">Could not load trips.</p>';
@@ -351,11 +361,12 @@
             .slice()
             .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''))
             .map(p => ({
-                trip: trip.id,
+                trip: p.trip || trip.id,
                 id: p.id,
                 ar: p.ar,
-                title: p.building || '',
-                date: (p.timestamp || '').slice(0, 10)
+                title: p.note || p.building || '',
+                date: (p.timestamp || '').slice(0, 10),
+                group: trip.category ? (p.trip_name || ' ') : undefined
             }));
 
         setInfo(

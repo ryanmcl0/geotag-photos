@@ -600,8 +600,17 @@ window.Posts = (function () {
         gallery.listen('destroy', () => {
             if (currentGallery === gallery) { currentGallery = null; lightboxPostId = null; }
         });
+        // The viewer element is reused by every open, so its buttons are added
+        // once; the badge and the photo-action bar belong to this gallery and
+        // are attached on every open.
         const bar = pswpEl && pswpEl.querySelector('.pswp__top-bar');
-        if (!bar || bar.querySelector('.posts-add-btn')) return;
+        if (bar && !bar.querySelector('.posts-add-btn')) addViewerButtons(bar);
+        attachBadge(gallery, pswpEl);
+        attachManageBar(gallery, pswpEl, opts);
+    }
+
+    /** "+ Post" and its post picker, in the viewer's top bar. */
+    function addViewerButtons(bar) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'pswp__button posts-add-btn';
@@ -632,7 +641,10 @@ window.Posts = (function () {
         const closeBtn = bar.querySelector('.pswp__button--close');
         bar.insertBefore(btn, closeBtn || null);
         bar.insertBefore(pick, closeBtn || null);
+    }
 
+    function attachBadge(gallery, pswpEl) {
+        if (!pswpEl) return;
         // Same "already in a post" pill as the grids. The map has no thumbnails
         // of its own, so the viewer is the only place its photos can carry one.
         let pill = pswpEl.querySelector('.posts-badge--lightbox');
@@ -659,8 +671,6 @@ window.Posts = (function () {
         gallery.listen('afterChange', refresh);
         gallery.listen('close', () => { pill.style.display = 'none'; });
         ready.then(ok => { if (ok) refresh(); });
-
-        attachManageBar(gallery, pswpEl, opts);
     }
 
     /** Opened from a post's carousel thumbnail: the same photo actions as the
@@ -695,7 +705,7 @@ window.Posts = (function () {
         };
         const blur = button('Blur faces when pulled', toggleBlur);
         const map = button('Map card: press for the next style', cycleMap);
-        const wait = set === 'main' ? button('Move to the waitlist (keeps it on this post, out of the carousel)', demoteToWaitlist) : null;
+        const wait = set === 'main' ? button('Move to the waitlist (keeps it on this post, out of the carousel or Phone section)', demoteToWaitlist) : null;
         const rm = button('Remove from this post', removeFromPost);
         const status = document.createElement('span');
         status.className = 'posts-manage-status';
@@ -705,6 +715,9 @@ window.Posts = (function () {
             const ref = current();
             const st = ref ? photoState(postId, ref, set) : { where: 'gone' };
             const inCarousel = st.where === 'carousel';
+            // A Phone pick gets blur, waitlist and remove; map cards are for
+            // the carousel only.
+            const inPhone = st.where === 'phone';
             const ph = st.ph || {};
             blur.textContent = ph.blur ? '🙂 Blur on' : '🙂 Blur faces';
             blur.classList.toggle('is-on', !!ph.blur);
@@ -713,10 +726,11 @@ window.Posts = (function () {
             if (wait) wait.textContent = '⇩ Waitlist';
             rm.textContent = '✕ Remove';
             // Off the carousel, the actions don't apply: show where it went instead.
-            [blur, map, wait, rm].forEach(b => { if (b) b.hidden = !inCarousel; });
+            map.hidden = !inCarousel;
+            [blur, wait, rm].forEach(b => { if (b) b.hidden = !(inCarousel || inPhone); });
             status.textContent = st.where === 'waitlist' ? '⇩ On the waitlist'
                 : st.where === 'gone' ? 'Removed from this post' : '';
-            status.hidden = inCarousel;
+            status.hidden = inCarousel || inPhone;
         }
         gallery.listen('afterChange', paint);
         document.addEventListener('posts:rendered', paint);
@@ -1814,7 +1828,7 @@ window.Posts = (function () {
                     img.addEventListener('error', () => thumbFailed(img, ref));
                     img.addEventListener('click', () => {
                         if (window.Gallery) Gallery.openLightbox(photoRefs, photoRefs.indexOf(ref),
-                            { defaultPostId: post.id });
+                            { defaultPostId: post.id, manage: { root, set: set || 'main' } });
                     });
                     cell.appendChild(img);
                 } else {
@@ -1846,37 +1860,20 @@ window.Posts = (function () {
                 rm.title = 'Remove from Phone section';
                 rm.style.cssText = 'position:absolute;top:3px;right:3px;background:rgba(0,0,0,.65);' +
                     'color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px';
-                rm.addEventListener('click', () => {
-                    const what = ref.id ? 'photo' : 'video';
-                    if (!confirm(`Remove this ${what} from the Phone section of "${post.name}"?`
-                        + (set !== 'auto' ? ` It stays in the card's History.` : ''))) return;
-                    let at = -1;
-                    M(posts => {
-                        const pp = posts.find(x => x.id === post.id);
-                        if (!pp || !pp.phone) return;
-                        const i = pp.phone.findIndex(r => keyOf(r) === keyOf(ref));
-                        if (i === -1) return;
-                        at = i;
-                        const gone = pp.phone.splice(i, 1)[0];
-                        if (set !== 'auto') rememberRemoval(pp, gone, true);
-                        if (!pp.phone.length) delete pp.phone;
-                    }).then(okSave => {
-                        renderManager(root);
-                        if (!okSave) return;
-                        toast(`Removed from "${post.name}" (Phone)`, { label: 'Undo', fn: () => {
-                            M(posts => {
-                                const pp = posts.find(x => x.id === post.id);
-                                if (!pp) return;
-                                if ((pp.phone || []).some(r => keyOf(r) === keyOf(ref))) return;
-                                if (platformOf(pp) === 'xhs' && countOf(pp) >= capOf(pp)) return;
-                                if (!pp.phone) pp.phone = [];
-                                pp.phone.splice(Math.min(Math.max(at, 0), pp.phone.length), 0, { ...ref });
-                                unhistory(pp, keyOf(ref));
-                            }).then(() => renderManager(root));
-                        } });
-                    });
-                });
+                rm.addEventListener('click', () => removeFromPost(root, post.id, ref, set));
                 cell.appendChild(rm);
+                if (ref.id) {
+                    const blurBtn = document.createElement('button');
+                    blurBtn.type = 'button';
+                    blurBtn.textContent = '🙂';
+                    blurBtn.title = ref.blur ? 'Face blur on: pull copies a censored JPEG'
+                                             : 'Blur faces when pulled';
+                    blurBtn.style.cssText = 'position:absolute;bottom:3px;left:3px;border:none;' +
+                        'border-radius:4px;cursor:pointer;font-size:11px;padding:1px 4px;' +
+                        `background:${ref.blur ? '#1d4ed8' : 'rgba(0,0,0,.65)'}`;
+                    blurBtn.addEventListener('click', () => toggleBlur(root, post.id, ref, set));
+                    cell.appendChild(blurBtn);
+                }
                 // Same soft "take it out" as the carousel's ⇩: park the phone
                 // photo on the waitlist instead of dropping it (photos only —
                 // the waitlist renders thumbnails, which videos don't have).
@@ -1887,40 +1884,7 @@ window.Posts = (function () {
                     demote.title = 'Demote to the waitlist (keeps it on this post, out of the Phone section)';
                     demote.style.cssText = 'position:absolute;top:3px;right:30px;background:rgba(0,0,0,.65);' +
                         'color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px';
-                    demote.addEventListener('click', () => {
-                        let at = -1;
-                        const result = {};
-                        M(posts => {
-                            const pp = posts.find(x => x.id === post.id);
-                            if (!pp || !pp.phone) return;
-                            const i = pp.phone.findIndex(r => keyOf(r) === keyOf(ref));
-                            if (i === -1) return;
-                            if (waitOf(pp).length >= WAITLIST_MAX) { result.full = true; return; }
-                            at = i;
-                            const moved = pp.phone.splice(i, 1)[0];
-                            if (!pp.phone.length) delete pp.phone;
-                            if (!pp.waitlist) pp.waitlist = [];
-                            pp.waitlist.push(moved);
-                            result.ok = true;
-                        }).then(okSave => {
-                            renderManager(root);
-                            if (result.full) { toast(`Waitlist is full (${WAITLIST_MAX})`); return; }
-                            if (!okSave || !result.ok) return;
-                            toast(`Waitlisted in "${post.name}" (from Phone)`, { label: 'Undo', fn: () => {
-                                M(posts => {
-                                    const pp = posts.find(x => x.id === post.id);
-                                    if (!pp) return;
-                                    const wi = waitOf(pp).findIndex(r => keyOf(r) === keyOf(ref));
-                                    if (wi === -1) return;
-                                    if (platformOf(pp) === 'xhs' && countOf(pp) >= capOf(pp)) return;
-                                    const back = pp.waitlist.splice(wi, 1)[0];
-                                    if (!pp.waitlist.length) delete pp.waitlist;
-                                    if (!pp.phone) pp.phone = [];
-                                    pp.phone.splice(Math.min(at, pp.phone.length), 0, back);
-                                }).then(() => renderManager(root));
-                            } });
-                        });
-                    });
+                    demote.addEventListener('click', () => demoteToWaitlist(root, post.id, ref, set));
                     cell.appendChild(demote);
                 }
                 pstrip.appendChild(cell);
@@ -2171,13 +2135,16 @@ window.Posts = (function () {
     const docOf = set => (set === 'auto' ? autoDoc : doc);
 
     /** Where a photo stands in a post right now: in the carousel (with its
-     *  blur/map marks), on the waitlist, or no longer on the post. */
+     *  blur/map marks), in the Phone section, on the waitlist, or no longer on
+     *  the post. */
     function photoState(postId, ref, set) {
         const d = docOf(set);
         const p = d && d.posts.find(x => x.id === postId);
         if (!p) return { where: 'gone' };
         const ph = p.photos.find(x => keyOf(x) === keyOf(ref));
         if (ph) return { where: 'carousel', ph, post: p };
+        const phone = (p.phone || []).find(x => keyOf(x) === keyOf(ref));
+        if (phone) return { where: 'phone', ph: phone, post: p };
         if (waitOf(p).some(x => keyOf(x) === keyOf(ref))) return { where: 'waitlist', post: p };
         return { where: 'gone', post: p };
     }
@@ -2185,12 +2152,14 @@ window.Posts = (function () {
     function editPhoto(root, postId, ref, set, fn) {
         return mutateSet(set || 'main', posts => {
             const p = posts.find(x => x.id === postId);
-            const ph = p && p.photos.find(x => keyOf(x) === keyOf(ref));
+            const ph = p && (p.photos.find(x => keyOf(x) === keyOf(ref))
+                || (p.phone || []).find(x => keyOf(x) === keyOf(ref)));
             if (ph) fn(ph);
         }).then(() => renderManager(root));
     }
 
-    // Face-blur mark: ./post.py pull copies a face-pixelated version instead.
+    // Face-blur mark: ./post.py pull copies a face-pixelated version instead
+    // (carousel and Phone photos alike).
     const toggleBlur = (root, postId, ref, set) =>
         editPhoto(root, postId, ref, set, ph => { if (ph.blur) delete ph.blur; else ph.blur = true; });
 
@@ -2202,20 +2171,53 @@ window.Posts = (function () {
             if (next) ph.map = next; else delete ph.map;
         });
 
+    /** The list a photo sits in on post p: its carousel or its Phone section. */
+    function sectionOf(p, ref) {
+        if (p.photos.some(ph => keyOf(ph) === keyOf(ref))) return 'photos';
+        if ((p.phone || []).some(ph => keyOf(ph) === keyOf(ref))) return 'phone';
+        return null;
+    }
+
+    /** Whether a photo can go back into section of p (Undo). The carousel has a
+     *  cap; the Phone section only counts against it on Xiaohongshu. */
+    function roomIn(p, section) {
+        if (section === 'phone' && platformOf(p) !== 'xhs') return true;
+        return countOf(p) < capOf(p);
+    }
+
+    /** Take ref out of p's section, returning [it, its index] (or [null, -1]).
+     *  An emptied Phone section is dropped, like the strip always did. */
+    function takeOut(p, section, ref) {
+        const list = section === 'phone' ? (p.phone || []) : p.photos;
+        const i = list.findIndex(ph => keyOf(ph) === keyOf(ref));
+        if (i === -1) return [null, -1];
+        const it = list.splice(i, 1)[0];
+        if (section === 'phone' && !p.phone.length) delete p.phone;
+        return [it, i];
+    }
+
+    function putBack(p, section, it, at) {
+        if (section === 'phone' && !p.phone) p.phone = [];
+        const list = section === 'phone' ? p.phone : p.photos;
+        list.splice(Math.min(Math.max(at, 0), list.length), 0, it);
+    }
+
     /** Park the photo on the post's waitlist: still attached (marks kept), out of
-     *  the carousel, freeing a slot against the cap. Undo puts it back in place. */
+     *  the carousel or Phone section, freeing a slot against the cap. Undo puts
+     *  it back where it was. */
     function demoteToWaitlist(root, postId, ref, set) {
         const M = fn => mutateSet(set || 'main', fn);
         const result = {};
-        let at = -1, name = '';
+        let at = -1, name = '', section = null;
         return M(posts => {
             const p = posts.find(x => x.id === postId);
             if (!p) return;
-            const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
-            if (i === -1) return;
+            section = sectionOf(p, ref);
+            if (!section) return;
             if (waitOf(p).length >= WAITLIST_MAX) { result.full = true; return; }
-            at = i; name = p.name;
-            const moved = p.photos.splice(i, 1)[0];
+            name = p.name;
+            const [moved, i] = takeOut(p, section, ref);
+            at = i;
             if (!p.waitlist) p.waitlist = [];
             p.waitlist.push(moved);
             result.ok = true;
@@ -2223,48 +2225,53 @@ window.Posts = (function () {
             renderManager(root);
             if (result.full) { toast(`Waitlist is full (${WAITLIST_MAX})`); return; }
             if (!okSave || !result.ok) return;
-            toast(`Waitlisted in "${name}"`, { label: 'Undo', fn: () => {
+            toast(`Waitlisted in "${name}"${section === 'phone' ? ' (from Phone)' : ''}`,
+                { label: 'Undo', fn: () => {
                 M(posts => {
                     const p = posts.find(x => x.id === postId);
                     if (!p) return;
                     const wi = waitOf(p).findIndex(ph => keyOf(ph) === keyOf(ref));
                     if (wi === -1) return;
-                    if (countOf(p) >= capOf(p)) return;   // carousel filled up meanwhile
+                    if (!roomIn(p, section)) return;   // filled up meanwhile
                     const back = p.waitlist.splice(wi, 1)[0];
                     if (!p.waitlist.length) delete p.waitlist;
-                    p.photos.splice(Math.min(at, p.photos.length), 0, back);
+                    putBack(p, section, back, at);
                 }).then(() => renderManager(root));
             } });
         });
     }
 
-    /** Take the photo off the post (after a confirm). Main drafts keep it in the
-     *  card's History; auto suggestions are regenerated wholesale, so no History. */
+    /** Take the photo (or Phone video) off the post, after a confirm. Main
+     *  drafts keep it in the card's History; auto suggestions are regenerated
+     *  wholesale, so no History. */
     function removeFromPost(root, postId, ref, set) {
         const M = fn => mutateSet(set || 'main', fn);
         const st = photoState(postId, ref, set);
         const name = st.post ? st.post.name : '';
+        const fromPhone = st.where === 'phone';
+        const what = ref.id ? 'photo' : 'video';
+        const where = fromPhone ? `the Phone section of "${name}"` : `"${name}"`;
         if (!confirm(set === 'auto'
-            ? `Remove this photo from "${name}"?`
-            : `Remove this photo from "${name}"? It stays in the card's History.`)) return Promise.resolve();
-        let at = -1;
+            ? `Remove this ${what} from ${where}?`
+            : `Remove this ${what} from ${where}? It stays in the card's History.`)) return Promise.resolve();
+        let at = -1, section = null;
         return M(posts => {
             const p = posts.find(x => x.id === postId);
             if (!p) return;
-            const i = p.photos.findIndex(ph => keyOf(ph) === keyOf(ref));
-            if (i === -1) return;
+            section = sectionOf(p, ref);
+            if (!section) return;
+            const [gone, i] = takeOut(p, section, ref);
             at = i;
-            const gone = p.photos.splice(i, 1)[0];
-            if (set !== 'auto') rememberRemoval(p, gone, false);
+            if (set !== 'auto') rememberRemoval(p, gone, section === 'phone');
         }).then(okSave => {
             renderManager(root);
             if (!okSave || at === -1) return;
-            toast(`Removed from "${name}"`, { label: 'Undo', fn: () => {
+            toast(`Removed from "${name}"${section === 'phone' ? ' (Phone)' : ''}`, { label: 'Undo', fn: () => {
                 M(posts => {
                     const p = posts.find(x => x.id === postId);
-                    if (!p || p.photos.some(ph => keyOf(ph) === keyOf(ref))) return;
-                    if (countOf(p) >= capOf(p)) return;   // filled up meanwhile
-                    p.photos.splice(Math.min(at, p.photos.length), 0, { ...ref });
+                    if (!p || sectionOf(p, ref)) return;
+                    if (!roomIn(p, section)) return;   // filled up meanwhile
+                    putBack(p, section, { ...ref }, at);
                     unhistory(p, keyOf(ref));
                 }).then(() => renderManager(root));
             } });

@@ -107,6 +107,9 @@ const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.
     '/collections/gallery_regions.json', '/collections/search.json'];
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
+    // A Chinese sidecar (x.zh.json, written by i18n_zh.py next to x.json) is gated
+    // exactly like the file it translates.
+    path = path.replace(/\.zh\.json$/, '.json');
     if (['/rooftopping', '/rooftopping.html'].includes(path)) return true;
     // Private trip plans: gate the whole /plans/ section (hub, plan pages, their
     // JSON/GPX/JS/CSS) behind the all-access password, like Urbex/Videos.
@@ -259,8 +262,10 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const allPassword = context.env.CF_ALL_PASSWORD;
     const isAuthPath = ['/login', '/login.html', '/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path);
     // The tab icon is needed on the login page itself, before anyone is signed in;
-    // robots.txt must reach crawlers, which never sign in.
-    if (path === '/icons/favicon.svg' || path === '/robots.txt') return context.next();
+    // robots.txt must reach crawlers, which never sign in. So is the language layer
+    // (interface wording only, the same text as the public repo).
+    if (path === '/icons/favicon.svg' || path === '/robots.txt' ||
+        path === '/js/i18n.js' || path === '/js/i18n-zh.js') return context.next();
 
     // With the site gate off there is nothing to sign in to: old links and QR
     // invites (/login#qr=...) land on the map instead of a login form.

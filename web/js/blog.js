@@ -14,9 +14,11 @@
   const root = document.getElementById('blog');
   if (!root) return;
   const v2 = data.ui === 'v2';
+  // Chinese mode (js/i18n.js) shows the post's translated sections when it has them.
+  const sections = (window.I18N && window.I18N.lang === 'zh' && data.sections_zh) || data.sections;
 
-  const DAY_RE = /^Day\s*(\d+(?:\s*&\s*\d+)?)\s*[:\-–]*\s*(.*)$/i;
-  const KM_RE = /\s*(\d[\d,]*)\s*km\b/i;
+  const DAY_RE = /^(?:Day\s*(\d+(?:\s*&\s*\d+)?)|第\s*(\d+(?:\s*[&和至-]\s*\d+)?)\s*天)\s*[:：\-–]*\s*(.*)$/i;
+  const KM_RE = /\s*(\d[\d,]*)\s*(?:km\b|公里)/i;
 
   function plain(html) {
     const d = document.createElement('div');
@@ -27,17 +29,19 @@
   const dayAnchors = [];   // {id, label, el}
   let paraCount = 0;
 
-  data.sections.forEach(sec => {
+  sections.forEach(sec => {
     if (sec.type === 'heading') {
       const text = plain(sec.html);
       const m = v2 && text.match(DAY_RE);
       if (m) {
-        const id = 'day-' + m[1].replace(/\s*&\s*/, '-');
+        m[1] = m[1] || m[2];
+        m[2] = m[3];
+        const id = 'day-' + m[1].replace(/\s*[&和至-]\s*/, '-');
         const wrap = document.createElement('div');
         wrap.className = 'day-strip';
         wrap.id = id;
         // strip a redundant repeated "Day N:" prefix (source typo) from the title
-        let rest = (m[2] || '').replace(/^Day\s*\d+(?:\s*&\s*\d+)?\s*[:\-–]*\s*/i, '');
+        let rest = (m[2] || '').replace(/^(?:Day\s*\d+(?:\s*&\s*\d+)?|第\s*\d+\s*天)\s*[:：\-–]*\s*/i, '');
         let km = '';
         const k = rest.match(KM_RE);
         if (k) {

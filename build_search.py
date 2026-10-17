@@ -305,12 +305,18 @@ class Builder:
             for sec in blog.get('sections', []):
                 if sec.get('type') == 'text':
                     paras += [re.sub(r'\s+', ' ', TAGS.sub('', p)).strip() for p in sec.get('paragraphs', [])]
+            # The Chinese version, numbered the same way (search.js uses it in zh mode).
+            paras_zh = []
+            for sec in blog.get('sections_zh') or []:
+                if sec.get('type') == 'text':
+                    paras_zh += [re.sub(r'\s+', ' ', TAGS.sub('', p)).strip() for p in sec.get('paragraphs', [])]
             st = meta.get('stats') or {}
             self.add(k='blog', id=slug, t=meta.get('title') or slug,
                      s=' · '.join(x for x in (str(meta.get('year') or ''),
                                               f"{st['words']:,} words" if st.get('words') else '') if x),
                      u=f"blogs/{slug}.html", c=_cover(meta.get('cover')),
-                     y=[meta['year']] if meta.get('year') else None, b=paras or None)
+                     y=[meta['year']] if meta.get('year') else None, b=paras or None,
+                     bz=paras_zh if paras_zh and len(paras_zh) == len(paras) else None)
 
     def videos(self):
         for v in (_load(ROOT / 'config' / 'videos.json', {}) or {}).get('videos', []):

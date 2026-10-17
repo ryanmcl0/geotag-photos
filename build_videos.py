@@ -22,6 +22,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import i18n_zh
+
 ROOT = Path(__file__).resolve().parent
 VIDEOS_JSON = ROOT / "config" / "videos.json"
 ROOFTOPPING_JSON = ROOT / "web" / "collections" / "rooftopping.json"
@@ -138,13 +140,16 @@ def build() -> None:
             </div>
         </section>''')
     body = "\n".join(sections)
+    # Chinese for the titles and places baked into this (gated) page.
+    i18n = i18n_zh.head_tag() + i18n_zh.page_script(
+        [x for v in doc.get("videos", []) for x in v.values() if isinstance(x, str)])
 
     page = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Videos · Ryan's Travels</title>
+{i18n}    <title>Videos · Ryan's Travels</title>
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="css/site.css"/>
     <script defer src="/js/analytics.js"></script>

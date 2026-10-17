@@ -1034,6 +1034,11 @@ def main():
         # so its public half matches exactly what this deploy makes public.
         from build_search import build as build_search
         build_search(print)
+        # Chinese sidecars last of all, from the settled data files (each is gated
+        # like the file it translates), plus the language script on generated pages.
+        import i18n_zh
+        i18n_zh.write_sidecars(print)
+        i18n_zh.tag_pages(print)
         print()
 
     # Step 1e: Build Expedition Tours into web/expeditions/ (only where the private

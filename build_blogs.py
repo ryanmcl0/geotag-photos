@@ -40,6 +40,7 @@ from pathlib import Path
 import click
 
 import build_collections as bc
+import i18n_zh
 import photo_privacy
 
 ROOT = Path(__file__).parent.resolve()
@@ -379,6 +380,7 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
     n_photos = 0
     words = 0
     first_cover = None
+    resolved = {}   # photo path → ref, reused for the Chinese version
 
     for b in blocks:
         if b['type'] == 'heading':
@@ -403,6 +405,7 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
                         continue                 # tracked in assets.unresolved
                 elif first_cover is None and ref.get('ar', 0) >= 1.2:
                     first_cover = ref
+                resolved[path] = ref
                 refs.append(ref)
             if refs:
                 n_photos += len(refs)
@@ -414,6 +417,8 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
     if not dry_run and assets.used_ids:
         ensure_asset_links(aslug)
 
+    zh = build_zh(blog, resolved)
+
     read_minutes = words / READ_WPM + n_photos * SECONDS_PER_PHOTO / 60
     data = {
         'slug': blog['slug'], 'title': blog['title'], 'display_title': display_title,
@@ -422,6 +427,8 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
         'ui': blog.get('ui') or 'v2',   # v2 = day rail + progress bar (set "ui":"v1" to opt out)
         'trips': blog.get('trips') or [],  # trip slug(s) → mini overview map at top of post
         'sections': sections,
+        'sections_zh': zh['sections'] if zh else None,
+        'display_title_zh': zh['title'] if zh else None,
         'stats': {'words': words, 'photos': n_photos,
                   'read': humanize_minutes(read_minutes),
                   'km': road_km_for(blog)},
@@ -444,6 +451,31 @@ def build_blog(blog, resolver, force_assets=False, dry_run=False, echo=click.ech
             echo(f"      → {n_desktop} are ~/Desktop screenshots: re-run build_blogs.py in a "
                  f"terminal with Full Disk Access to compress them in.")
     return data
+
+
+def build_zh(blog, resolved):
+    """The Chinese version from content/blogs/<slug>.zh.md, if there is one: the same
+    file translated line for line (photo lines unchanged), so its photo blocks reuse
+    the English pass's resolved photos. The page embeds both; blog.js shows the
+    Chinese one when the site is in Chinese (js/i18n.js)."""
+    src = (ROOT / blog['source']).with_suffix('.zh.md')
+    if not src.exists():
+        return None
+    blocks = parse_source(src.read_text())
+    title = None
+    if blocks and blocks[0]['type'] == 'heading':
+        title = re.sub(r'\s*\d{4}\s*$', '', blocks.pop(0)['text'])
+    sections = []
+    for b in blocks:
+        if b['type'] == 'heading':
+            sections.append({'type': 'heading', 'level': b['level'], 'html': inline_html(b['text'])})
+        elif b['type'] == 'text':
+            sections.append({'type': 'text', 'paragraphs': [inline_html(p) for p in b['paragraphs']]})
+        else:
+            refs = [resolved[p] for p in b['paths'] if p in resolved]
+            if refs:
+                sections.append({'type': 'photos', 'photos': refs})
+    return {'sections': sections, 'title': title}
 
 
 # ---------------------------------------------------------------- rendering
@@ -513,7 +545,7 @@ POST_TEMPLATE = '''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>{title} · Ryan's Travels</title>
+{i18n}    <title>{title} · Ryan's Travels</title>
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/photoswipe.css"/>
     <link rel="stylesheet" href="/vendor/photoswipe@4.1.3/default-skin/default-skin.css"/>
@@ -576,7 +608,7 @@ INDEX_TEMPLATE = '''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Blogs · Ryan's Travels</title>
+{i18n}    <title>Blogs · Ryan's Travels</title>
     <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg">
     <link rel="stylesheet" href="/css/site.css"/>
     <link rel="stylesheet" href="/css/blog.css"/>
@@ -639,9 +671,21 @@ def render_post(data):
         read=data['stats']['read'],
         pswp=PSWP,
         data=json.dumps({'sections': data['sections'], 'ui': data.get('ui', 'v1'),
-                         'trips': data.get('trips', [])},
-                        separators=(',', ':')),
+                         'trips': data.get('trips', []),
+                         **({'sections_zh': data['sections_zh']} if data.get('sections_zh') else {})},
+                        separators=(',', ':')).replace('</', '<\\/'),
+        i18n=i18n_zh.head_tag() + _title_script(data),
     )
+
+
+def _title_script(data):
+    """Chinese for the post's own title (from its .zh.md), else the shared table."""
+    en = data.get('display_title') or data['title']
+    zh = data.get('display_title_zh')
+    if zh:
+        js = json.dumps({en: zh, data['title']: zh}, ensure_ascii=False).replace('</', '<\\/')
+        return f'    <script>window.I18N_PAGE={js};</script>\n'
+    return i18n_zh.page_script([en, data['title']])
 
 
 def render_index(built, pending):
@@ -669,8 +713,10 @@ def render_index(built, pending):
                 <div class="tile-inner"><div class="tile-title">{html.escape(b['title'], quote=False)}</div>
                     <div class="pending-tag">{b['year']} · Coming soon</div></div>
             </div>''')
+    titles = [d['title'] for d in built] + [b['title'] for b in pending]
     return INDEX_TEMPLATE.format(nav=NAV.format(blogs_active=' class="active"'),
-                                 tiles='\n'.join(tiles))
+                                 tiles='\n'.join(tiles),
+                                 i18n=i18n_zh.head_tag() + i18n_zh.page_script(titles))
 
 
 # ---------------------------------------------------------------- CLI

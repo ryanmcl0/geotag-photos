@@ -417,6 +417,14 @@ def _strip(manifest: dict, ids: set) -> dict:
     """Manifest minus `ids`, with now-empty clusters dropped."""
     out = dict(manifest)
     out['photos'] = [p for p in manifest.get('photos', []) if p['id'] not in ids]
+    # The placement diagnostics carry id, timestamp and coords too, and name the
+    # photo a fallback placement was borrowed from.
+    if 'skipped' in manifest:
+        out['skipped'] = [
+            {k: v for k, v in s.items()
+             if not (k == 'nearest_photo_id' and v in ids)}
+            for s in manifest['skipped'] if s.get('id') not in ids
+        ]
     out['clusters'] = [
         c2 for c2 in (
             {**c, 'photo_ids': [i for i in (c.get('photo_ids') or []) if i not in ids]}

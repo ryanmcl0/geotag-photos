@@ -27,7 +27,7 @@ test('local previews, owner pages, owner sessions and opt-outs never load Umami'
         'https://photos.example.com/plans/', 'https://photos.example.com/gallery?library=phone']) {
         assert.equal(setup({ url }).scripts.length, 0, url);
     }
-    for (const options of [{ cookie: 'posts_auth=abc' }, { disabled: true }, { privacy: true }]) {
+    for (const options of [{ cookie: 'posts_ui=1' }, { disabled: true }, { privacy: true }]) {
         assert.equal(setup(options).scripts.length, 0);
     }
 });
@@ -49,7 +49,7 @@ test('opening slide and swipes count once per index change, never preloads', () 
     callbacks.afterChange();
     assert.equal(env.events.length, 2);
     assert.equal(env.events[1].data.photo, 'albania/photo2');
-    env.document.cookie = 'all_access=unlocked';
+    env.document.cookie = 'all_access_ui=1';
     index = 2;
     callbacks.afterChange();
     assert.equal(env.events.length, 3, 'private gallery navigation remains tracked after unlocking');
@@ -69,7 +69,7 @@ test('payloads strip arbitrary query strings and hashes while keeping trip and c
 test('owner mode cancels automatic pageviews and queued events', () => {
     const env = setup();
     env.context.SiteAnalytics.track('photo_view', { photo: 'trip/photo' });
-    env.document.cookie = 'posts_auth=owner';
+    env.document.cookie = 'posts_ui=1';
     env.load();
     assert.equal(env.events.length, 0);
     assert.equal(env.context.siteAnalyticsBeforeSend('event', { url: '/posts' }), false);
@@ -100,7 +100,7 @@ test('filter and outbound clicks have bounded metadata; owner controls are ignor
 
 test('private galleries and existing See All sessions load and send analytics', () => {
     for (const path of ['/gallery?trip=private-trip', '/rooftopping', '/videos']) {
-        const env = setup({ url: 'https://photos.example.com' + path, cookie: 'all_access=secret' });
+        const env = setup({ url: 'https://photos.example.com' + path, cookie: 'all_access_ui=1' });
         assert.equal(env.scripts.length, 1);
         env.load();
         env.context.SiteAnalytics.track('photo_view', { photo: 'private-trip/photo' });

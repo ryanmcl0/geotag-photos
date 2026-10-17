@@ -933,6 +933,12 @@ def main():
     qr_access_token = os.getenv('CF_QR_ACCESS_TOKEN')
     all_password = os.getenv('CF_ALL_PASSWORD')
     posts_password = os.getenv('CF_POSTS_PASSWORD')
+    # HMAC key the Functions sign the login cookies with. Without it no cookie is
+    # ever valid, so a gated site would lock everyone out: refuse to deploy.
+    cookie_secret = os.getenv('CF_COOKIE_SECRET')
+    if (password or all_password or posts_password) and not cookie_secret:
+        sys.exit("CF_COOKIE_SECRET is not set: add a random value to .env.deploy "
+                 "(e.g. openssl rand -hex 32). It signs the login cookies.")
 
     print(f"🚀 Deploying to Cloudflare")
     print(f"   Account:  {config.account_id[:8]}...")
@@ -1134,6 +1140,8 @@ def main():
                 deployer.set_secret('CF_POSTS_PASSWORD', posts_password, dry_run=args.dry_run)
             elif posts_password_in_env:
                 deployer.delete_secret('CF_POSTS_PASSWORD', dry_run=args.dry_run)
+            if cookie_secret:
+                deployer.set_secret('CF_COOKIE_SECRET', cookie_secret, dry_run=args.dry_run)
             print()
 
     # Step 6: Deploy to Pages

@@ -12,7 +12,7 @@ window.SiteAnalytics = (() => {
             /^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(host);
         const preview = host.endsWith('.pages.dev') && host.split('.').length > 3;
         const ownerPath = /^\/(?:login|auth[^/]*|posts|people|plans|phone)(?:[/.]|$)/.test(location.pathname);
-        const ownerSession = /(?:^|;\s*)posts_auth=[^;]+/.test(document.cookie);
+        const ownerSession = /(?:^|;\s*)posts_ui=[^;]+/.test(document.cookie);
         let optedOut = false;
         try { optedOut = !!localStorage.getItem('umami.disabled'); } catch (_) { /* storage unavailable */ }
         return local || preview || ownerPath || ownerSession || optedOut ||

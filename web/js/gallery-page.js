@@ -10,7 +10,7 @@
     function checkAllAccess() {
         return document.cookie.split(';').some(c => {
             const t = c.trim();
-            return t.startsWith('all_access=') && t.length > 'all_access='.length;
+            return t.startsWith('all_access_ui=') && t.length > 'all_access_ui='.length;
         });
     }
 

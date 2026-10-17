@@ -20,7 +20,7 @@ window.Posts = (function () {
     function unlocked() {
         return document.cookie.split(';').some(c => {
             const t = c.trim();
-            return t.startsWith('posts_auth=') && t.length > 'posts_auth='.length;
+            return t.startsWith('posts_ui=') && t.length > 'posts_ui='.length;
         });
     }
 
@@ -73,12 +73,11 @@ window.Posts = (function () {
 
     // Sitewide "Posts mode" pill: shows on every page while the posts_auth
     // cookie is present, links to the /posts manager, and its ✕ exits posts
-    // mode by clearing the cookie (it is not HttpOnly, so JS can).
+    // mode. posts_auth is HttpOnly, so the server clears it (and posts_ui).
     function exitPostsMode() {
         if (!confirm('Exit posts mode? You will need the posts password to get back in.')) return;
-        document.cookie = 'posts_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
-            + (location.protocol === 'https:' ? ' Secure;' : '');
-        location.reload();
+        fetch('/auth-lock', { method: 'POST', body: new URLSearchParams({ tier: 'posts' }) })
+            .finally(() => location.reload());
     }
 
     // A thumbnail that failed to load. Phone-library photos (trip "phone-...")

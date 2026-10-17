@@ -387,7 +387,7 @@
 
     // Public files that list locked items (the trip index) carry no Chinese for
     // them; unlocked visitors get it from a gated table instead.
-    if (/(^|;\s*)all_access=[^;]+/.test(document.cookie)) sidecarFor('/collections/locked_names.json');
+    if (/(^|;\s*)all_access_ui=[^;]+/.test(document.cookie)) sidecarFor('/collections/locked_names.json');
 
     // Native dialogs aren't DOM: translate line by line.
     ['alert', 'confirm', 'prompt'].forEach(function (k) {

@@ -18,15 +18,20 @@ const STATE_KEY = '_state/people.json';
 
 const hex = (buf: ArrayBuffer) =>
     [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-const tokenFor = async (secret: string) =>
-    hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
+// Same HMAC cookie scheme as functions/_middleware.ts (null without the key).
+const tokenFor = async (key: string | undefined, tier: string, secret: string) => {
+    if (!key) return null;
+    const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key),
+        { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return hex(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(tier + '\n' + secret)));
+};
 
-export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWORD: string }> = async (context) => {
+export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWORD: string; CF_COOKIE_SECRET: string }> = async (context) => {
     const pass = context.env.CF_POSTS_PASSWORD;
     const cookies = context.request.headers.get('Cookie') || '';
     const match = cookies.split(';').map(c => c.trim()).find(c => c.startsWith('posts_auth='));
     const val = match ? match.split('=').slice(1).join('=') : null;
-    if (!pass || val !== await tokenFor(pass)) {
+    if (!pass || !val || val !== await tokenFor(context.env.CF_COOKIE_SECRET, 'posts', pass)) {
         return new Response('Not found', { status: 404 });
     }
     if (context.request.method !== 'GET') {

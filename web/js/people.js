@@ -22,7 +22,7 @@ window.People = (function () {
     function unlocked() {
         return document.cookie.split(';').some(c => {
             const t = c.trim();
-            return t.startsWith('posts_auth=') && t.length > 'posts_auth='.length;
+            return t.startsWith('posts_ui=') && t.length > 'posts_ui='.length;
         });
     }
 

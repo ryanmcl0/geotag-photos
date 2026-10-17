@@ -14,14 +14,36 @@ interface Env {
     CF_QR_ACCESS_TOKEN: string;
     CF_ALL_PASSWORD: string;
     CF_POSTS_PASSWORD: string;
+    CF_COOKIE_SECRET: string;
     ASSETS: Fetcher;
     PHOTOS_BUCKET: R2Bucket;
 }
 
 const hex = (buf: ArrayBuffer) =>
     [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-const tokenFor = async (secret: string) =>
-    hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
+// A tier's cookie value: HMAC-SHA256 keyed by CF_COOKIE_SECRET over the tier name
+// and its password. A bare hash of the password could be cracked back to the
+// password offline from one stolen cookie; this can't without the key. Changing
+// the password, or rotating CF_COOKIE_SECRET, signs everyone out. No key = null,
+// which holds() below never accepts (nor a missing cookie), so it fails closed.
+const tokenFor = async (key: string | undefined, tier: string, secret: string) => {
+    if (!key) return null;
+    const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key),
+        { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return hex(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(tier + '\n' + secret)));
+};
+
+// The real tier cookies are HttpOnly so page scripts (or an injected one) can't
+// read them. Pages only need to know whether a tier is unlocked, so each comes
+// with a valueless *_ui twin the scripts check instead.
+const cookie = (name: string, value: string, url: URL, httpOnly: boolean, maxAge = 2592000) =>
+    `${name}=${value};${httpOnly ? ' HttpOnly;' : ''} SameSite=Strict; Path=/; Max-Age=${maxAge}` +
+    (url.protocol === 'https:' ? '; Secure' : '');
+
+// Local dev hosts (wrangler pages dev, incl. a phone on the LAN), as in the /photos proxy.
+const isLocalHost = (h: string) =>
+    ['localhost', '127.0.0.1', '[::1]'].includes(h) || h.endsWith('.local') ||
+    /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
 
 // Short TTL: an isolate can live long past a deploy, and a trip flipped to
 // private must not keep serving under pre-deploy flags until the isolate recycles.
@@ -152,8 +174,14 @@ function authRetryAfter(ip: string): number {
 
 // The site's home is ryanmcl.com. The original pages.dev address and the www host
 // send everyone there, keeping the path, query (and the #qr= fragment, which the
-// browser carries across the redirect). Per-deploy preview hosts
-// (<id>.photo-map-travel.pages.dev) are left alone so they stay testable.
+// browser carries across the redirect).
+//
+// Every other host 404s, the per-deploy ones (<id>.photo-map-travel.pages.dev and
+// branch aliases) included. Pages keeps every deployment online forever at its own
+// address, still bound to the live R2 bucket but running the code and privacy
+// index it shipped with, so an old deploy would keep serving any photo made
+// private (or any trip added) after it. Since this check ships inside each
+// deployment, a deploy stops answering anywhere the moment it is superseded.
 const CANONICAL_HOST = 'ryanmcl.com';
 const REDIRECT_HOSTS = ['photo-map-travel.pages.dev', 'www.ryanmcl.com'];
 
@@ -169,10 +197,18 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         const method = context.request.method;
         return Response.redirect(url.toString(), method === 'GET' || method === 'HEAD' ? 301 : 308);
     }
+    if (url.hostname !== CANONICAL_HOST && !isLocalHost(url.hostname)) {
+        return new Response('Not found', { status: 404 });
+    }
+    const cookieSecret = context.env.CF_COOKIE_SECRET;
     const cookies = context.request.headers.get('Cookie') || '';
     const cookieVal = (name: string) => {
         const m = cookies.split(';').map(c => c.trim()).find(c => c.startsWith(name + '='));
         return m ? m.split('=').slice(1).join('=') : null;
+    };
+    const holds = async (name: string, tier: string, secret: string) => {
+        const v = cookieVal(name);
+        return !!v && v === await tokenFor(cookieSecret, tier, secret);
     };
 
     if (context.request.method === 'POST' && ['/auth', '/auth-qr', '/auth-all', '/auth-posts'].includes(path)) {
@@ -196,15 +232,14 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         const formData = await context.request.formData();
         const submitted = formData.get('token') as string;
 
-        if (sitePassword && qrToken && submitted && submitted === qrToken) {
-            const isSecure = url.protocol === 'https:';
-            const token = await tokenFor(sitePassword);
+        const token = sitePassword && await tokenFor(cookieSecret, 'site', sitePassword);
+        if (token && qrToken && submitted && submitted === qrToken) {
             return new Response(JSON.stringify({ ok: true }), {
                 status: 200,
                 headers: {
                     'Content-Type': 'application/json',
                     'Cache-Control': 'no-store',
-                    'Set-Cookie': `site_auth=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
+                    'Set-Cookie': cookie('site_auth', token, url, true)
                 }
             });
         }
@@ -220,15 +255,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         const submitted = formData.get('password') as string;
 
         if (!allPassword || (submitted && submitted === allPassword)) {
-            const isSecure = url.protocol === 'https:';
-            const token = allPassword ? await tokenFor(allPassword) : '1';
-            return new Response(JSON.stringify({ ok: true }), {
-                status: 200,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Set-Cookie': `all_access=${token}; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
-                }
-            });
+            const token = allPassword ? await tokenFor(cookieSecret, 'all', allPassword) : '1';
+            if (token) {
+                const headers = new Headers({ 'Content-Type': 'application/json' });
+                headers.append('Set-Cookie', cookie('all_access', token, url, true));
+                headers.append('Set-Cookie', cookie('all_access_ui', '1', url, false));
+                return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+            }
         }
         return new Response(JSON.stringify({ ok: false }), {
             status: 401,
@@ -244,18 +277,26 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         const formData = await context.request.formData();
         const submitted = formData.get('password') as string;
 
-        if (postsPassword && submitted && submitted === postsPassword) {
-            const isSecure = url.protocol === 'https:';
-            const token = await tokenFor(postsPassword);
-            return new Response(JSON.stringify({ ok: true }), {
-                status: 200,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Set-Cookie': `posts_auth=${token}; SameSite=Strict; Path=/; Max-Age=2592000${isSecure ? '; Secure' : ''}`
-                }
-            });
+        const token = postsPassword && await tokenFor(cookieSecret, 'posts', postsPassword);
+        if (token && submitted && submitted === postsPassword) {
+            const headers = new Headers({ 'Content-Type': 'application/json' });
+            headers.append('Set-Cookie', cookie('posts_auth', token, url, true));
+            headers.append('Set-Cookie', cookie('posts_ui', '1', url, false));
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
         }
         return new Response('Not found', { status: 404 });
+    }
+
+    // Lock / exit posts mode. The tier cookies are HttpOnly, so the page can't
+    // clear them itself: it posts the tier here, which expires the cookie and its
+    // *_ui twin. Clearing cookies needs no auth.
+    if (path === '/auth-lock' && context.request.method === 'POST') {
+        const tier = (await context.request.formData()).get('tier');
+        const names = tier === 'all' ? ['all_access', 'all_access_ui']
+            : tier === 'posts' ? ['posts_auth', 'posts_ui'] : [];
+        const headers = new Headers({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        for (const n of names) headers.append('Set-Cookie', cookie(n, '', url, !n.endsWith('_ui'), 0));
+        return new Response(JSON.stringify({ ok: names.length > 0 }), { status: names.length ? 200 : 400, headers });
     }
 
     const sitePassword = context.env.CF_SITE_PASSWORD;
@@ -276,12 +317,12 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     // CF Pages strips .html (308 /login.html → /login).
     if (sitePassword && !isAuthPath) {
         // The cookie holds a hash of the password (set by /auth), not the password.
-        const authed = cookieVal('site_auth') === await tokenFor(sitePassword);
+        const authed = await holds('site_auth', 'site', sitePassword);
         if (!authed) return Response.redirect(new URL('/login', context.request.url), 302);
     }
 
     const allAccess = allPassword !== undefined && allPassword !== ''
-        && cookieVal('all_access') === await tokenFor(allPassword);
+        && await holds('all_access', 'all', allPassword);
 
     // Expedition Tours: the DeepEast app, built into web/expeditions/ by deploy.py
     // from the private expeditions/ checkout. It exists only for all-access visitors.
@@ -298,7 +339,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         // the Posts manager loads its thumbnails from these /trips paths.
         const postsPassword = context.env.CF_POSTS_PASSWORD;
         const ownerPhoto = /^\/trips\/[^/]+\/(display|thumbnails)\//.test(path)
-            && !!postsPassword && cookieVal('posts_auth') === await tokenFor(postsPassword);
+            && !!postsPassword && await holds('posts_auth', 'posts', postsPassword);
         if (!allAccess && !ownerPhoto) {
             const isData = /\.(json|geojson)$/.test(path);
             return isData

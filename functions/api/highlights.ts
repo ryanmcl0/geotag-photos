@@ -30,8 +30,13 @@ const STATE_KEY = '_state/posts.json';
 
 const hex = (buf: ArrayBuffer) =>
     [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-const tokenFor = async (secret: string) =>
-    hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
+// Same HMAC cookie scheme as functions/_middleware.ts (null without the key).
+const tokenFor = async (key: string | undefined, tier: string, secret: string) => {
+    if (!key) return null;
+    const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key),
+        { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return hex(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(tier + '\n' + secret)));
+};
 
 interface PhotoRef { trip: string; id: string; ar?: number }
 interface Post {
@@ -55,7 +60,7 @@ function classify(trip: string, id: string): 'blocked' | 'private' | 'public' {
     return 'public';
 }
 
-export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD: string }> = async (context) => {
+export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD: string; CF_COOKIE_SECRET: string }> = async (context) => {
     if (context.request.method !== 'GET') {
         return new Response('Method not allowed', { status: 405, headers: { Allow: 'GET' } });
     }
@@ -66,7 +71,7 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD
     const cookies = context.request.headers.get('Cookie') || '';
     const match = cookies.split(';').map(c => c.trim()).find(c => c.startsWith('all_access='));
     const val = match ? match.split('=').slice(1).join('=') : null;
-    const unlocked = !!pass && val === await tokenFor(pass);
+    const unlocked = !!pass && !!val && val === await tokenFor(context.env.CF_COOKIE_SECRET, 'all', pass);
 
     let doc: PostsDoc = {};
     const obj = await context.env.PHOTOS_BUCKET.get(STATE_KEY);

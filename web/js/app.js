@@ -61,7 +61,7 @@ let coverageLayer = null;         // cluster group holding the currently-shown s
 function checkAllAccess() {
     return document.cookie.split(';').some(c => {
         const t = c.trim();
-        return t.startsWith('all_access=') && t.length > 'all_access='.length;
+        return t.startsWith('all_access_ui=') && t.length > 'all_access_ui='.length;
     });
 }
 
@@ -2200,7 +2200,10 @@ function initMobileControls() {
     document.getElementById('mobile-pw-submit').addEventListener('click', async () => {
         const mode = document.getElementById('mobile-pw-overlay').dataset.mode;
         if (mode === 'lock') {
-            document.cookie = 'all_access=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            // all_access is HttpOnly, so the server clears it; dropping the _ui twin
+            // here flips the page to locked straight away.
+            document.cookie = 'all_access_ui=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            fetch('/auth-lock', { method: 'POST', body: new URLSearchParams({ tier: 'all' }) });
             lockAllAccess();
             window.SidebarNav && window.SidebarNav.refresh();
             closeMobilePwModal();

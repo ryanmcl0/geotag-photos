@@ -473,6 +473,13 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
 .bridge-todo-row--open { border-bottom-color: transparent; }
 .bridge-todo-detail { padding: 0 4px 12px 58px; border-bottom: 1px solid #1d1d1d; font-family: var(--body); font-size: 12.5px; line-height: 1.5; color: #c9a24a; }
 .bridge-todo-detail .bridge-warn { cursor: default; }
+/* nice-to-have rows expand in place: +/− in the rank column, write-up underneath */
+.bridge-todo-row--expandable .bt-rank { font-size: 0; }
+.bridge-todo-row--expandable .bt-rank::before { content: '+'; font-size: 20px; color: #6a6a6a; }
+.bridge-todo-row--expandable.bridge-todo-row--open .bt-rank::before { content: '\2212'; }
+.bridge-todo-more { padding: 0 4px 16px 58px; border-bottom: 1px solid #1d1d1d; }
+.bridge-todo-more .bridge-status-body { padding-top: 0; }
+.bridge-todo-more .bridge-highlight { margin: 0 0 8px; }
 /* desktop: one line per row, overflow ellipsised (the dropdown holds the long notes) */
 @media (min-width: 861px) {
   .bridge-todo-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -493,7 +500,7 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
   .bridge-todo-row .bt-phase { grid-column: 2; }
   .bridge-todo-row .bt-target { grid-column: 3; grid-row: 2; text-align: right; }
   .bridge-todo-row .bt-stage { grid-column: 2 / 4; color: var(--muted); font-size: 12px; }
-  .bridge-todo-detail { padding-left: 44px; }
+  .bridge-todo-detail, .bridge-todo-more { padding-left: 44px; }
 }
 
 /* ---------- landing footer ---------- */

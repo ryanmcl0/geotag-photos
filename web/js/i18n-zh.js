@@ -410,7 +410,7 @@ window.I18N_ZH = {
  "Removed {x}": "移除于 {x}",
  "Removed {x} (from the waitlist)": "移除于 {x}（来自候补区）",
  "Renders + mockups ({n}) →": "效果图与模型图（{n}）→",
- "Renders + reference · HighestBridges": "效果图与参考资料 · HighestBridges",
+ "Renders + reference": "效果图与参考资料",
  "Return to public trips only?": "返回仅公开行程的视图？",
  "road trips": "自驾",
  "Romania": "罗马尼亚",

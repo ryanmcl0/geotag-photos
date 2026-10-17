@@ -430,7 +430,8 @@
       list.appendChild(el('div', 'bridge-extras-head', 'Also visited'));
       extras.forEach(addRow);
     }
-    if (wishlist.length) {
+    // The owner page lists nice-to-haves once, as expandable rows in "Still to do".
+    if (wishlist.length && tile.preview) {
       list.appendChild(el('div', 'bridge-extras-head', 'Nice to have'));
       wishlist.forEach(addRow);
     }
@@ -494,7 +495,8 @@
 
   // "Still to do": every ranked bridge not yet shot, then the not-done nice-to-haves,
   // in one table: build phase, current stage, target/opening date, when last checked.
-  // Owner page only (the preview never calls it). A row scrolls to its list entry.
+  // Owner page only (the preview never calls it). A ranked row scrolls to its list
+  // entry; a nice-to-have has no list entry, so its row expands in place instead.
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmtDate = iso => {
     const [y, m, d] = String(iso).split('-');
@@ -558,7 +560,21 @@
           ? `<button type="button" class="bridge-warn-toggle" aria-expanded="false" title="Show note">${warnIcon(info.warning)}</button>` : ''}${esc(info.state || '')}</span>
         <span class="bt-target">${esc(target)}</span>
         <span class="bt-asof">${info.as_of ? fmtDate(info.as_of) : ''}</span>`;
+      const expandable = s.rank == null;
+      let more = null;
+      if (expandable) {
+        row.classList.add('bridge-todo-row--expandable');
+        row.setAttribute('aria-expanded', 'false');
+        more = buildBridgeTodoMore(tile, s);
+        more.hidden = true;
+      }
       const goTo = () => {
+        if (more) {
+          more.hidden = !more.hidden;
+          row.setAttribute('aria-expanded', String(!more.hidden));
+          row.classList.toggle('bridge-todo-row--open', !more.hidden);
+          return;
+        }
         const dest = document.getElementById(`bridge-row-${s.id}`);
         if (!dest) return;
         dest.classList.add('in', 'bridge-row--flash');
@@ -568,7 +584,12 @@
       row.addEventListener('click', goTo);
       row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(); } });
       table.appendChild(row);
-      if (info.warning) {
+      if (more) {
+        // the warning note lives in the expanded panel, so its toggle just opens that
+        const tog = row.querySelector('.bridge-warn-toggle');
+        if (tog) tog.addEventListener('click', e => { e.stopPropagation(); goTo(); });
+        table.appendChild(more);
+      } else if (info.warning) {
         const detail = el('div', 'bridge-todo-detail', `${warnIcon(info.warning)}${esc(info.warning)}`);
         detail.hidden = true;
         const tog = row.querySelector('.bridge-warn-toggle');
@@ -588,6 +609,28 @@
     }
     wrap.appendChild(table);
     return wrap;
+  }
+
+  // Expanded panel for a nice-to-have row: what its old list entry carried beyond
+  // the table columns (highlight, status write-up + sources, renders).
+  function buildBridgeTodoMore(tile, s) {
+    const info = s.status_info || {};
+    const more = el('div', 'bridge-todo-more');
+    const srcs = (info.sources || []).map(x =>
+      `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` +
+      (x.date ? ` <span class="bridge-status-date">${esc(x.date)}</span>` : '') + '</li>').join('');
+    more.innerHTML = `<div class="bridge-status-body">
+        ${s.highlight ? `<div class="bridge-highlight">★ ${esc(s.highlight)}</div>` : ''}
+        ${info.warning ? `<p class="bridge-warn-note">${warnIcon(info.warning)}${esc(info.warning)}</p>` : ''}
+        ${info.summary ? `<p>${esc(info.summary)}</p>` : ''}
+        ${srcs ? `<ul class="bridge-status-sources">${srcs}</ul>` : ''}
+      </div>`;
+    if ((s.renders || []).length) {
+      const rl = el('a', 'bridge-renders-link', `Renders + mockups (${s.renders.length}) →`);
+      rl.href = `#${tile.id}/${s.id}/renders`;
+      more.querySelector('.bridge-status-body').appendChild(rl);
+    }
+    return more;
   }
 
   // The public preview ships counts, not photo lists.
@@ -696,8 +739,9 @@
   }
 
   // Reference imagery for a not-yet-visited bridge: renders, mockups, maps and
-  // construction shots pulled from HighestBridges. These live outside the photo
-  // pipeline (no thumbnails/display variants), so this is its own simple grid +
+  // construction shots pulled from HighestBridges or Chinese official/news sources.
+  // These live outside the photo pipeline (no thumbnails/display variants), so this
+  // is its own simple grid +
   // overlay rather than Gallery.renderGrid.
   function renderBridgeRenders(tile, s) {
     setCrumbs([{ label: DATA.title, href: '#' }, { label: tile.title, href: `#${tile.id}` },
@@ -705,7 +749,7 @@
     app.innerHTML = '';
     const zh = s.name_zh ? ` <span class="count">${esc(s.name_zh)}</span>` : '';
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}
-      <span class="count">Renders + reference · HighestBridges</span>`));
+      <span class="count">Renders + reference</span>`));
     const grid = el('div', 'render-grid');
     s.renders.forEach((src, i) => {
       const cell = el('button', 'render-cell');

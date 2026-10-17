@@ -23,7 +23,20 @@ say() { echo "$(date '+%F %T') $1" >>"$LOG"; }
 alert() { osascript -e "display notification \"$1\" with title \"Photo Map (local)\"" >/dev/null 2>&1 || true; }
 
 say "launched"
+# Posts: every launch syncs with the live site, also when the server was already
+# up (it outlives the browser tab, so a re-launch used to just open a tab on
+# whatever the last session left). The sync runs in ./post.py mirror; if it has
+# died, start it again (only one ever runs: it holds 127.0.0.1:8790).
+sync_posts() {
+  if curl -s -o /dev/null --max-time 20 -X POST "http://127.0.0.1:8790/sync"; then
+    say "posts synced"
+  else
+    say "posts sync not running — starting it"
+    ( cd "$REPO" && nohup ./post.py mirror --port "$PORT" >>local_browse/serve_site.log 2>&1 & )
+  fi
+}
 if curl -s -o /dev/null --max-time 2 "$URL"; then
+  sync_posts
   open "$URL" && say "server up — opened new tab" || { say "open failed"; alert "Could not open the browser"; }
   exit 0
 fi

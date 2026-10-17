@@ -974,6 +974,69 @@ window.Posts = (function () {
         });
     }
 
+    // Localhost only: the sync with the live site (./post.py mirror, which the
+    // desktop app and ./serve.sh start). A Sync button shows its state; the page
+    // also asks for a sync when it comes back into view and when it closes, and
+    // reloads when the sync brought newer posts down from the live site.
+    const SYNC_URL = ['localhost', '127.0.0.1'].includes(location.hostname)
+        ? 'http://127.0.0.1:8790' : null;
+    let syncEl = null;
+    function syncControl() {
+        if (!syncEl) {
+            syncEl = document.createElement('button');
+            syncEl.type = 'button';
+            syncEl.className = 'posts-sync-btn';
+            syncEl.addEventListener('click', () => syncNow(true));
+            showSync(null);
+            fetch(SYNC_URL + '/status', { cache: 'no-store' })
+                .then(r => r.json()).then(showSync)
+                .catch(() => showSync({ state: 'off' }));
+        }
+        return syncEl;
+    }
+    function showSync(st) {
+        if (!syncEl) return;
+        const state = st ? st.state : 'starting';
+        const label = { in_sync: '⟳ Synced', retry: '⟳ Sync (retrying)', offline: '⟳ Sync (offline)',
+                        off: '⟳ Sync off', busy: '⟳ Syncing…' }[state] || '⟳ Sync';
+        syncEl.textContent = label;
+        syncEl.dataset.state = state;
+        syncEl.title = state === 'off'
+            ? 'The sync is not running: reopen the site from the desktop app, or run ./serve.sh'
+            : (st && st.message ? st.message : '') +
+              (st && st.last_sync ? ' · last ' + st.last_sync.replace('T', ' ') : '');
+    }
+    async function syncNow(manual) {
+        if (!SYNC_URL) return;
+        if (manual) showSync({ state: 'busy' });
+        try {
+            await saveChain;                 // never race a save that is still going out
+            const r = await fetch(SYNC_URL + '/sync', { method: 'POST' });
+            const st = await r.json();
+            showSync(st);
+            const v = st.versions && st.versions.main && st.versions.main.local;
+            const res = st.results || {};
+            if (doc && (res.main === 'down' || res.main === 'both' || res.auto === 'down' || res.auto === 'both' ||
+                        (v && v !== doc.version))) {
+                location.reload();           // newer posts came down: show them
+            } else if (manual) {
+                toast(st.state === 'in_sync' ? 'In sync with the live site' : st.message);
+            }
+        } catch (e) {
+            showSync({ state: 'off' });
+            if (manual) toast('Sync is not running: reopen the site from the desktop app');
+        }
+    }
+    if (SYNC_URL) {
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') syncNow(false);
+        });
+        // Closing the tab: one last sync (a beacon survives the page going away).
+        window.addEventListener('pagehide', () => {
+            try { navigator.sendBeacon(SYNC_URL + '/sync'); } catch (e) { /* best effort */ }
+        });
+    }
+
     // Posts whose Phone <details> is open: renderManager rebuilds every card
     // on each edit, so without this a ⇩/✕ inside the section would collapse it.
     const phoneOpen = new Set();
@@ -1000,6 +1063,7 @@ window.Posts = (function () {
         const h1 = document.createElement('h1');
         h1.textContent = 'Posts';
         head.appendChild(h1);
+        if (SYNC_URL) head.appendChild(syncControl());
         if (activeTab === 'reels' && !reelsDoc) activeTab = 'ig';   // the live site has no reels manifest
         if (activeTab === 'ig' || activeTab === 'xhs') {
             const plat = activeTab;

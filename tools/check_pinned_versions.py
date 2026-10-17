@@ -27,6 +27,13 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Packages deliberately kept on a major version. Newer releases within that
+# major are still reported; a newer major is listed as held, not as an update.
+HOLD = {
+    "photoswipe": (4, "v5 is a rewrite with a new API and no default skin; "
+                      "the lightbox code in app.js, gallery.js and posts.js would need redoing"),
+}
 CDN_RE = re.compile(r"(?:unpkg\.com|cdn\.jsdelivr\.net/npm|cdnjs\.cloudflare\.com/ajax/libs)/"
                     r"((?:@[\w.-]+/)?[\w.-]+)@(\d[\w.-]*)")
 USES_RE = re.compile(r"^\s*-?\s*uses:\s*([\w.-]+/[\w.-]+)(?:/[\w./-]+)?@([\w.-]+)", re.M)
@@ -99,13 +106,16 @@ def main():
     ap.add_argument("--out", help="write the markdown report here")
     a = ap.parse_args()
 
-    rows, errors = [], []
+    rows, held, errors = [], [], []
     for (kind, name, ver), files in sorted(find_pins().items()):
         try:
             latest, same_major = check(kind, name, ver)
         except Exception as e:  # one registry hiccup shouldn't hide the rest
             errors.append(f"- `{name}@{ver}`: {e}")
             continue
+        if name in HOLD and latest and vtuple(latest)[0] > HOLD[name][0]:
+            held.append(f"- `{name}` held on {HOLD[name][0]}.x (latest is {latest}): {HOLD[name][1]}.")
+            latest = None
         if latest or same_major:
             major = latest and vtuple(latest)[0] > vtuple(ver)[0]
             rows.append(f"| `{name}` | {ver} | {same_major or '-'} | {latest or '-'}"
@@ -119,6 +129,8 @@ def main():
                 "web/vendor/<package>@<new version>/ folder and point the pages at it."]
     else:
         body = ["All pinned dependencies are up to date."]
+    if held:
+        body += ["", "Held on purpose (HOLD in tools/check_pinned_versions.py):", *held]
     if errors:
         body += ["", "Could not check:", *errors]
     report = "\n".join(body) + "\n"

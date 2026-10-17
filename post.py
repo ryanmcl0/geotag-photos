@@ -24,11 +24,15 @@ locally therefore never reaches the live site, and deploy.py does not carry
 post state either (it only syncs web/, functions/ and the manifests). So the
 two sides are copied explicitly, here.
 
-`serve` handles that automatically: it seeds the local server from the remote
-on startup, then watches the local state and pushes every change up within a
-few seconds, plus a final push when you Ctrl-C. If the remote changes while
-you serve (an edit from your phone on the live site), the push is held back
-and reported rather than silently overwriting it.
+`serve` and `mirror` (which ./serve.sh and the desktop app start) handle that
+automatically, both ways: an edit made here goes up within seconds, an edit
+made on the phone comes down within half a minute, and edits to different
+posts on both sides combine (merge3, against the last agreed state kept in
+local_browse/posts_sync_base.json). Only the same post changed on both sides
+is a conflict: the live version wins and this laptop's copy is saved under
+local_browse/posts_backups/. The localhost Posts page has a Sync button (and
+syncs when it regains focus or closes); every desktop-app launch syncs too.
+`status` shows whether the two sides match.
 
 Local-only feature note: the phone-photo companion reads web/phone/, which is
 never deployed, so phone selections can only be made through `serve`.
@@ -50,9 +54,11 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import reedits
@@ -63,6 +69,16 @@ SOURCE_EXTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff', '.heic', '.webp')
 LOCAL_BASE = 'http://localhost:8788'
 DEV_PORT = 8788
 CURATE_PORT = 8799
+# The mirror's control port (127.0.0.1 only): the localhost Posts page's Sync
+# button and the desktop launcher ask it to sync now and read its status.
+SYNC_PORT = 8790
+# Last state both sides agreed on, per set: what a two-way merge diffs against.
+# Kept on disk so a restart (or a mirror that died) still merges instead of
+# letting one side overwrite the other.
+SYNC_BASE = ROOT / 'local_browse' / 'posts_sync_base.json'
+# Copies of anything a sync replaced: a laptop version that lost a same-post
+# conflict, or the local document before a first-ever sync.
+SYNC_BACKUPS = ROOT / 'local_browse' / 'posts_backups'
 
 
 def load_env():
@@ -150,13 +166,62 @@ def read_doc(base, env, which='main'):
     return api_call(posts_url(base, which), env)
 
 
-def write_doc(base, env, which, posts, base_version):
-    return api_call(posts_url(base, which), env, method='PUT',
-                    body={'baseVersion': base_version, 'posts': posts})
+def write_doc(base, env, which, posts, base_version, settings=None):
+    body = {'baseVersion': base_version, 'posts': posts}
+    if settings is not None:
+        body['settings'] = settings
+    return api_call(posts_url(base, which), env, method='PUT', body=body)
 
 
 def same_posts(a, b):
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def merge3(base, local, remote):
+    """Two-way sync of post lists against the last copy both sides agreed on.
+
+    Per post (by id): a post only one side changed takes that side's version,
+    adds and deletes included. A post both sides changed differently keeps the
+    live site's version and is returned in `conflicts` with the laptop's
+    version, which the caller saves; a post deleted on one side but edited on
+    the other is kept. Order: the live site's, unless only this laptop
+    reordered; posts the chosen order lacks go after their predecessor in the
+    other side's order (so a new draft at the top stays at the top).
+
+    Returns (merged posts, [(local post, remote post), ...]).
+    """
+    B = {p.get('id'): p for p in base}
+    L = {p.get('id'): p for p in local}
+    R = {p.get('id'): p for p in remote}
+    merged, conflicts = {}, []
+    for i in list(R) + [i for i in L if i not in R] + [i for i in B if i not in R and i not in L]:
+        b, l, r = B.get(i), L.get(i), R.get(i)
+        if same_posts(l, r):
+            pick = r
+        elif same_posts(l, b):
+            pick = r                       # only the live site changed it
+        elif same_posts(r, b):
+            pick = l                       # only this laptop changed it
+        elif l is None or r is None:
+            pick = l if r is None else r   # deleted on one side, edited on the other
+        else:
+            pick = r
+            conflicts.append((l, r))
+        if pick is not None:
+            merged[i] = pick
+
+    def reordered(order):
+        kept = [i for i in order if i in B]
+        return kept != [i for i in B if i in set(kept)]
+    lo, ro = [p.get('id') for p in local], [p.get('id') for p in remote]
+    first, other = (lo, ro) if reordered(lo) and not reordered(ro) else (ro, lo)
+    out = [i for i in first if i in merged]
+    for n, i in enumerate(other):
+        if i in merged and i not in out:
+            prev = next((other[j] for j in range(n - 1, -1, -1) if other[j] in out), None)
+            out.insert(out.index(prev) + 1 if prev is not None else 0, i)
+    out += [i for i in merged if i not in out]
+    return [merged[i] for i in out], conflicts
 
 
 def merge_down(remote_posts, local_posts):
@@ -1549,7 +1614,9 @@ def server_up(base, env):
     try:
         api_call(posts_url(base), env, timeout=3)
         return True
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        # ValueError: an answer that isn't JSON (a login or error page). The mirror
+        # used to crash on that at startup and the whole session ran unsynced.
         return False
 
 
@@ -1601,65 +1668,170 @@ def start_curate_server(port):
 
 
 class RemoteMirror:
-    """Keeps the remote in step with the local dev server.
+    """Keeps the local dev server and the live site in step, both ways.
 
-    Pushes local edits up, but never overwrites a remote change it did not
-    make: the version the remote had after our last write is remembered, and
-    if the remote has moved past it (an edit on the live site from a phone)
-    the push is held and reported instead.
+    Every few seconds it compares the two sides with the last state they
+    agreed on (SYNC_BASE, kept on disk) and merges (merge3): an edit made on
+    the phone comes down, an edit made here goes up, edits to different posts
+    on both sides combine. Only the same post changed on both sides is a
+    conflict: the live version is kept and the laptop's is saved to
+    SYNC_BACKUPS, so nothing is lost. The live site is read at most every
+    REMOTE_EVERY seconds unless something changed here (each read is a
+    Functions request on the free plan).
+
+    Before the first sync on this laptop there is no agreed state: the local
+    document is backed up and merge_down applies (live wins, laptop-only
+    drafts kept).
     """
+
+    REMOTE_EVERY = 30
 
     def __init__(self, env, remote, local=None):
         self.env = env
         self.remote = remote
         self.local = local or LOCAL_BASE
-        self.expect = {}        # set -> remote version we last observed/wrote
-        self.warned = set()
+        self.lock = threading.Lock()
+        try:
+            self.base = json.loads(SYNC_BASE.read_text())
+        except (OSError, ValueError):
+            self.base = {}
+        self.last_remote = 0.0
+        self.status = {'state': 'starting', 'message': 'Starting', 'last_sync': None,
+                       'conflicts': 0, 'versions': {}}
+
+    def _save_base(self):
+        SYNC_BASE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SYNC_BASE.with_name(SYNC_BASE.name + f'.{os.getpid()}.tmp')
+        tmp.write_text(json.dumps(self.base, ensure_ascii=False))
+        os.replace(tmp, SYNC_BASE)
+
+    def _backup(self, label, data):
+        SYNC_BACKUPS.mkdir(parents=True, exist_ok=True)
+        f = SYNC_BACKUPS / f"{time.strftime('%Y%m%d-%H%M%S')}_{label}.json"
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+        return f
+
+    def _sync_set(self, which):
+        """One set, both ways. Returns 'same', 'down', 'up', 'both' or 'merged'."""
+        L = read_doc(self.local, self.env, which)
+        R = read_doc(self.remote, self.env, which)
+        lp, rp = L.get('posts', []), R.get('posts', [])
+        ls, rs = L.get('settings') or {}, R.get('settings') or {}
+        self.status['versions'][which] = {'local': L.get('version', 0), 'live': R.get('version', 0)}
+        if same_posts(lp, rp) and same_posts(ls, rs):
+            if self.base.get(which) != {'posts': rp, 'settings': rs}:
+                self.base[which] = {'posts': rp, 'settings': rs}
+                self._save_base()
+            return 'same'
+        base = self.base.get(which)
+        conflicts = []
+        if base is None:
+            self._backup(f'{which}_local_before_first_sync', L)
+            posts, _kept = merge_down(rp, lp)
+            settings = rs or ls
+        else:
+            posts, conflicts = merge3(base.get('posts', []), lp, rp)
+            bs = base.get('settings') or {}
+            settings = rs if (same_posts(ls, rs) or same_posts(ls, bs)) else ls if same_posts(rs, bs) else rs
+        if conflicts:
+            f = self._backup(f'{which}_conflicts', [{'laptop': l, 'live': r} for l, r in conflicts])
+            self.status['conflicts'] += len(conflicts)
+            names = ', '.join(r.get('name', '?') for _l, r in conflicts[:3])
+            print(f"\n⚠️  {which}: {len(conflicts)} post(s) changed on both sides ({names}). "
+                  f"Kept the live site's; this laptop's copy is in {f}")
+        down = not (same_posts(posts, lp) and same_posts(settings, ls))
+        up = not (same_posts(posts, rp) and same_posts(settings, rs))
+        # Local first: if the page saved meanwhile (409) nothing has been written
+        # anywhere, and the next tick merges again from fresh copies. Only when
+        # both writes landed does the agreed state move on.
+        if down:
+            write_doc(self.local, self.env, which, posts, L.get('version', 0), settings)
+        if up:
+            write_doc(self.remote, self.env, which, posts, R.get('version', 0), settings)
+        self.base[which] = {'posts': posts, 'settings': settings}
+        self._save_base()
+        what = 'both' if down and up else 'down' if down else 'up'
+        arrow = {'down': '⇣ from', 'up': '⇡ to', 'both': '⇅ with'}[what]
+        print(f"   {arrow} the live site: {which} ({len(posts)} posts)")
+        return what
+
+    def sync(self, force_remote=False):
+        """Sync both sets now (thread-safe). Returns the status dict."""
+        with self.lock:
+            local_changed = any(
+                not same_posts(read_doc(self.local, self.env, w).get('posts', []),
+                               (self.base.get(w) or {}).get('posts'))
+                for w in SETS) if not force_remote else True
+            if not (force_remote or local_changed or
+                    time.time() - self.last_remote >= self.REMOTE_EVERY):
+                return self.status
+            try:
+                results = {w: self._sync_set(w) for w in SETS}
+                self.last_remote = time.time()
+                self.status.update(state='in_sync', last_sync=time.strftime('%Y-%m-%dT%H:%M:%S'),
+                                   message='In sync with the live site', results=results)
+            except urllib.error.HTTPError as e:
+                self.status.update(state='retry', message=f'Live site busy (HTTP {e.code}); retrying')
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                self.status.update(state='offline', message=f'Live site not reachable ({e}); retrying')
+            return self.status
 
     def seed_local(self):
-        print('⇣ Seeding the local dev server from the live site...')
-        for which in SETS:
-            src = read_doc(self.remote, self.env, which)
-            dst = read_doc(self.local, self.env, which)
-            posts, kept = merge_down(src.get('posts', []), dst.get('posts', []))
-            if not same_posts(posts, dst.get('posts', [])):
-                write_doc(self.local, self.env, which, posts, dst.get('version', 0))
-            self.expect[which] = src.get('version', 0)
-            extra = (f", kept {len(kept)} made here: "
-                     f"{', '.join(p.get('name', '?') for p in kept[:3])}" if kept else '')
-            print(f"   ↳ {which}: {len(src.get('posts', []))} posts from the live site{extra}")
+        """Startup: one full sync (kept for the callers that seed first)."""
+        print('⇅ Syncing posts with the live site...')
+        st = self.sync(force_remote=True)
+        print(f"   ↳ {st['message']}")
 
-    def push(self, quiet=False):
-        """Push any local change up. Returns the number of sets written."""
-        written = 0
-        for which in SETS:
-            try:
-                local = read_doc(self.local, self.env, which)
-                remote = read_doc(self.remote, self.env, which)
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError):
-                continue
-            if same_posts(local.get('posts', []), remote.get('posts', [])):
-                self.expect[which] = remote.get('version', 0)
-                self.warned.discard(which)
-                continue
-            if which in self.expect and remote.get('version') != self.expect[which]:
-                if which not in self.warned:
-                    print(f"\n⚠️  The live site's {which} posts changed while serving "
-                          f"(v{self.expect[which]} → v{remote.get('version')}).\n"
-                          "    Not overwriting it. Finish here, then choose:\n"
-                          "      ./post.py push --force   keep what is on this laptop\n"
-                          "      ./post.py sync           take the live version instead")
-                    self.warned.add(which)
-                continue
-            res = write_doc(self.remote, self.env, which,
-                            local.get('posts', []), remote.get('version', 0))
-            self.expect[which] = res.get('version', remote.get('version', 0) + 1)
-            self.warned.discard(which)
-            written += 1
-            if not quiet:
-                print(f"   ⇡ synced {which} to the live site "
-                      f"({len(local.get('posts', []))} posts, v{self.expect[which]})")
-        return written
+    def serve_control(self, port=SYNC_PORT):
+        """127.0.0.1:<port>: GET /status, POST /sync, for the localhost Posts page
+        and the launcher. Returns the server, or None if the port is taken (another
+        mirror already runs: the caller should not start a second one)."""
+        mirror = self
+        allowed = {f'http://localhost:{DEV_PORT}', f'http://127.0.0.1:{DEV_PORT}'}
+
+        class Handler(BaseHTTPRequestHandler):
+            def _send(self, code, body):
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                origin = self.headers.get('Origin', '')
+                if origin in allowed:
+                    self.send_header('Access-Control-Allow-Origin', origin)
+                    self.send_header('Vary', 'Origin')
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_OPTIONS(self):
+                self.send_response(204)
+                origin = self.headers.get('Origin', '')
+                if origin in allowed:
+                    self.send_header('Access-Control-Allow-Origin', origin)
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+                self.end_headers()
+
+            def do_GET(self):
+                if self.path.startswith('/status'):
+                    self._send(200, mirror.status)
+                else:
+                    self._send(404, {'error': 'not found'})
+
+            def do_POST(self):
+                if self.path.startswith('/sync'):
+                    self._send(200, mirror.sync(force_remote=True))
+                else:
+                    self._send(404, {'error': 'not found'})
+
+            def log_message(self, *a):      # quiet: the dev server log is busy enough
+                pass
+
+        try:
+            srv = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        except OSError:
+            return None
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv
 
 
 def cmd_serve(args):
@@ -1683,6 +1855,9 @@ def cmd_serve(args):
     mirror = RemoteMirror(env, remote, f'http://localhost:{args.port}') if remote else None
     if mirror:
         mirror.seed_local()
+        if not mirror.serve_control():
+            print(f'⚠️  Another sync is already running (port {SYNC_PORT}); not syncing from here.')
+            mirror = None
 
     if not args.no_curate:
         curate = start_curate_server(args.curate_port)
@@ -1711,7 +1886,7 @@ def cmd_serve(args):
         while True:
             time.sleep(args.interval)
             if mirror:
-                mirror.push()
+                mirror.sync()
             if dev and dev.poll() is not None:
                 print('⚠️  The dev server exited.')
                 break
@@ -1722,8 +1897,7 @@ def cmd_serve(args):
     finally:
         if mirror:
             try:
-                if mirror.push(quiet=False) == 0:
-                    print('   ↳ already up to date')
+                print(f"   ↳ {mirror.sync(force_remote=True)['message']}")
             except Exception as e:                      # noqa: BLE001
                 print(f'   ⚠️  Final sync failed: {e}\n'
                       '      Your edits are safe locally; run ./post.py push to retry.')
@@ -1735,13 +1909,13 @@ def cmd_serve(args):
 
 
 def cmd_mirror(args):
-    """Sync a dev server this script did not start, then keep pushing edits up.
+    """Keep a dev server this script did not start in sync with the live site.
 
-    ./serve.sh (and the desktop app that wraps it) runs this in the background,
-    so the posts on localhost are the posts on the live site however the server
-    was started — the drafts used to arrive only when the server happened to be
-    started through ./post.py serve, and a post made on the phone would simply
-    never show up here.
+    ./serve.sh and the desktop app run this in the background. It syncs both
+    ways (RemoteMirror), answers the Posts page's Sync button on 127.0.0.1:
+    SYNC_PORT, keeps retrying while the live site is unreachable (it used to
+    crash on a bad answer at startup and leave the session unsynced), and stops
+    when the dev server goes away. Only one runs: a second exits at once.
     """
     env = require_env()
     remote = remote_base(env)
@@ -1749,11 +1923,10 @@ def cmd_mirror(args):
     if not wait_for_server(local, env, args.wait):
         print('⚠️  posts: no local dev server answered; not syncing drafts.')
         return
-    if not server_up(remote, env):
-        print('⚠️  posts: the live site did not answer; leaving local drafts alone.')
-        return
     mirror = RemoteMirror(env, remote, local)
-    mirror.seed_local()
+    if not mirror.serve_control():
+        print(f'posts: a sync is already running (port {SYNC_PORT}); leaving it to that one.')
+        return
 
     def _stop(signum, _frame):
         raise KeyboardInterrupt
@@ -1762,10 +1935,11 @@ def cmd_mirror(args):
             signal.signal(sig, _stop)
         except (ValueError, OSError, AttributeError):
             pass
-    # Also stop on our own when the dev server goes away. The shell that started
-    # this is supposed to kill it, but it can be killed itself (or crash), and a
-    # mirror left running against a dead server would keep pushing an empty
-    # document at the live site.
+    print(f"⇅ posts: syncing with {remote} (Sync button / status on 127.0.0.1:{SYNC_PORT})")
+    st = mirror.sync(force_remote=True)
+    print(f"   ↳ {st['message']}")
+    # Stop when the dev server goes away: a mirror left running against a dead
+    # server would read an empty document.
     gone = 0
     try:
         while True:
@@ -1776,18 +1950,18 @@ def cmd_mirror(args):
                     break
                 continue
             gone = 0
-            mirror.push()
+            before = mirror.status.get('state')
+            st = mirror.sync()
+            if st.get('state') != before and st.get('state') != 'in_sync':
+                print(f"   ⚠️  {st['message']}")
     except KeyboardInterrupt:
         pass
     finally:
-        # The dev server is usually on its way out too, so a failed last push is
-        # normal: everything up to the previous tick is already on the live site.
         try:
             if server_up(local, env):
-                mirror.push(quiet=True)
+                mirror.sync(force_remote=True)
         except Exception:                               # noqa: BLE001
             pass
-
 
 def cmd_sync(args):
     env = require_env()

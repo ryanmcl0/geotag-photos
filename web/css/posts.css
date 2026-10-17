@@ -231,6 +231,14 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   background: #eee; color: #111; border: none; border-radius: 999px;
   padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
 }
+.posts-sync-btn {
+  margin-left: auto; background: none; color: #aaa; border: 1px solid #333; border-radius: 999px;
+  padding: 6px 14px; font-size: 12px; cursor: pointer;
+}
+.posts-sync-btn:hover { color: #fff; border-color: #555; }
+.posts-sync-btn[data-state="in_sync"] { color: #7bc47f; border-color: #2f4a31; }
+.posts-sync-btn[data-state="off"], .posts-sync-btn[data-state="offline"],
+.posts-sync-btn[data-state="retry"] { color: #e0a85a; border-color: #4d3a20; }
 .posts-empty { color: #888; font-size: 14px; }
 
 .posts-card {

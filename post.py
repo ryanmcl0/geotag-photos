@@ -49,6 +49,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -396,15 +397,29 @@ def _all_face_boxes(img):
     return boxes
 
 
+def _read_image(src):
+    """src decoded for OpenCV, or None. OpenCV has no HEIC decoder (phone
+    originals), so those go through sips to a temporary JPEG first."""
+    import cv2
+    import numpy as np
+    data = np.fromfile(str(src), dtype=np.uint8)   # path-safe on SMB
+    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    if img is not None or Path(src).suffix.lower() not in ('.heic', '.heif'):
+        return img
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / 'frame.jpg'
+        subprocess.run(['sips', '-s', 'format', 'jpeg', '-s', 'formatOptions', 'best',
+                        str(src), '--out', str(out)], capture_output=True)
+        return cv2.imread(str(out), cv2.IMREAD_COLOR) if out.exists() else None
+
+
 def blur_faces_file(src, dst, manual=(), detect=True):
     """Write a copy of src to dst with every detected face pixelated, plus the
     hand-marked `manual` boxes (fractions of the frame, see cmd_blur) the
     detector can't see: hooded or turned-away heads. Returns the face count
     (0 = wrote a plain copy; caller may warn)."""
     import cv2
-    import numpy as np
-    data = np.fromfile(str(src), dtype=np.uint8)   # path-safe on SMB
-    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    img = _read_image(src)
     if img is None:
         if Path(src) != Path(dst):   # in-place re-blur: leave the file alone
             shutil.copy2(src, dst)
@@ -1008,8 +1023,18 @@ def previous_sources(dest_dir):
             if r.get('source') and r.get('id')}
 
 
+def phone_dest(phone_dir, i, ref, src):
+    """Where a phone pick lands in <post>/Phone/. A blur-flagged photo becomes
+    a face-pixelated JPEG under its own name, so toggling the mark swaps one
+    file for the other and the folder alone shows which is which."""
+    if ref.get('blur') and ref.get('id'):
+        return phone_dir / f'{i:02d}_{src.stem}_blurred.jpg'
+    return phone_dir / f'{i:02d}_{src.name}'
+
+
 def sync_phone_dir(phone_dir, plan):
-    """Mirror the plan into <post>/Phone/: copy new, drop unselected copies."""
+    """Mirror the plan into <post>/Phone/: copy new, drop unselected copies,
+    write a blurred JPEG for each blur-flagged photo."""
     phone_dir.mkdir(parents=True, exist_ok=True)
     wanted = {dst.name for _, _, _, dst in plan}
     removed = 0
@@ -1017,17 +1042,40 @@ def sync_phone_dir(phone_dir, plan):
         if f.is_file() and re.match(r'\d+_', f.name) and f.name not in wanted:
             f.unlink()
             removed += 1
+    # Same state file as a post folder, so ./post.py blur works on these too:
+    # its hand-marked boxes are re-applied whenever the copy is regenerated.
+    state_path = phone_dir / '.pull_state.json'
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    manual = state.get('manual_faces', {})
     copied = 0
-    for _, _, src, dst in plan:
-        if dst.exists() and dst.stat().st_size == src.stat().st_size:
+    for _, ref, src, dst in plan:
+        blur = dst.name.endswith('_blurred.jpg')
+        if blur:
+            state.setdefault('blurred', {})[dst.name.split('_', 1)[1]] = True
+            if dst.exists():
+                continue
+        elif dst.exists() and dst.stat().st_size == src.stat().st_size:
             continue
         try:
             mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
         except OSError:
             mb = ''
-        print(f'   ⇣ Phone/{dst.name}: copying{mb}...')
-        shutil.copy2(src, dst)
+        if blur:
+            print(f'   ⇣ Phone/{dst.name}: copying + blurring faces{mb}...')
+            n = blur_faces_file(src, dst, manual.get(dst.name.split('_', 1)[1], ()))
+            if n == 0:
+                print(f'      no faces found, mark them by hand: ./post.py blur "{dst}"')
+            elif n < 0:
+                print(f'      ⚠️  could not decode {src.name}, copied unblurred')
+        else:
+            print(f'   ⇣ Phone/{dst.name}: copying{mb}...')
+            shutil.copy2(src, dst)
         copied += 1
+    if state:
+        state_path.write_text(json.dumps(state, indent=1))
     return copied, removed
 
 
@@ -1124,7 +1172,8 @@ def cmd_pull(args):
                 print(f"   Waitlist {i:02d} {src or why}  →  {dest_dir / 'Waitlist'}")
             for i, ref in enumerate(post.get('phone') or [], 1):
                 src, why = resolve_phone(ref)
-                print(f"   Phone {i:02d} {src or why}  →  {dest_dir / 'Phone'}")
+                print(f"   Phone {i:02d} {src or why}  →  "
+                      f"{phone_dest(dest_dir / 'Phone', i, ref, src) if src else dest_dir / 'Phone'}")
             print()
             continue
 
@@ -1232,7 +1281,7 @@ def cmd_pull(args):
                     print(f"   ⚠️  Phone {i:02d} {ref['trip']}/{label}: {why}")
                     unresolved += 1
                     continue
-                phone_plan.append((i, ref, src, dest_dir / 'Phone' / f'{i:02d}_{src.name}'))
+                phone_plan.append((i, ref, src, phone_dest(dest_dir / 'Phone', i, ref, src)))
             pcopied, premoved = sync_phone_dir(dest_dir / 'Phone', phone_plan)
             manifest['phone'] = [
                 {'order': i, 'trip': ref['trip'],

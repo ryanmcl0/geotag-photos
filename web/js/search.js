@@ -86,11 +86,16 @@
   }
 
   function prepare(data) {
+    // Chinese mode (js/i18n.js): blog text searches and shows in Chinese, and names
+    // match their Chinese too.
+    const zh = window.I18N && window.I18N.lang === 'zh';
+    const both = s => (zh && s ? s + ' ' + window.I18N.t(s) : s);
     data.items.forEach(it => {
+      if (zh && it.bz) it.b = it.bz;
       it.placeNames = [...(it.p || []), ...(it.cc || []).map(countryName)];
-      it._t = fold(it.t);
-      it._s = fold([it.s, it.x].join(' '));
-      it._p = fold(it.placeNames.join(' | '));
+      it._t = fold(both(it.t));
+      it._s = fold([both(it.s), it.x].join(' '));
+      it._p = fold(it.placeNames.map(both).join(' | '));
       it._b = (it.b || []).map(fold);
       it._words = (it._t + ' ' + it._p + ' ' + it._s).split(' ').filter(Boolean);
     });

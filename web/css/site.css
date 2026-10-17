@@ -65,7 +65,10 @@ img { display: block; }
   background: var(--panel); border: 1px solid var(--line); z-index: 50;
 }
 .nav-more.open .nav-more-menu { display: flex; }
-.nav-more-menu a { padding: 9px 18px; }
+/* .nav-more scoping: the phone rule `.nav-links a { padding: 9px 0 }` comes later
+   and would otherwise strip the side padding, leaving the items flush against the
+   menu's left edge (2026-10-17, seen on an iPhone) */
+.nav-more .nav-more-menu a { padding: 10px 18px; white-space: nowrap; }
 @media (hover: hover) {
   .nav-more:hover .nav-more-menu { display: flex; }
 }
@@ -588,6 +591,9 @@ a.bridge-row--pending .bridge-count { margin-top: 5px; font-size: 12px; }
   .nav-links:has(#seeall-link) a { padding: 7px 6px; }
   #seeall-link { margin-left: auto; }
   .nav-more { padding-bottom: 0; margin-bottom: 0; }
+  /* More sits near the right edge on a phone: open its menu leftwards from the
+     toggle's right edge rather than centred on it, so it never runs off-screen */
+  .nav-more-menu { left: auto; right: 0; transform: none; }
   /* things that stick under the bar follow it up when it slides away */
   #galleries-app .gallery-year .section-head { transition: top .25s ease; }
   html.nav-away #galleries-app .gallery-year .section-head { top: 0; }

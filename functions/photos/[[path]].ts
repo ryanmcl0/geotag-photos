@@ -138,7 +138,9 @@ export const onRequest: PagesFunction<Env> = async (context) => {
 
     const headers = new Headers();
     object.writeHttpMetadata(headers);
-    headers.set('Cache-Control', restricted ? 'private, max-age=3600' : 'public, max-age=31536000, immutable');
+    // Never "public": the zone's edge cache would serve that copy to anyone (see the
+    // onRequest wrapper in _middleware.ts). Browsers may still keep it.
+    headers.set('Cache-Control', restricted ? 'private, max-age=3600' : 'private, max-age=31536000, immutable');
 
     return new Response(object.body as ReadableStream, { headers });
 };

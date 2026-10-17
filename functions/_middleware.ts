@@ -185,7 +185,7 @@ function authRetryAfter(ip: string): number {
 const CANONICAL_HOST = 'ryanmcl.com';
 const REDIRECT_HOSTS = ['photo-map-travel.pages.dev', 'www.ryanmcl.com'];
 
-export const onRequest: PagesFunction<Env> = async (context) => {
+const handle: PagesFunction<Env> = async (context) => {
     const url = new URL(context.request.url);
     const path = url.pathname;
 
@@ -404,4 +404,21 @@ export const onRequest: PagesFunction<Env> = async (context) => {
         return fresh;
     }
     return response;
+};
+
+// The ryanmcl.com zone's edge cache sits in front of this middleware: a stored
+// copy is served without running it, to anyone, cookie or not. A photo cached
+// as public (immutable, for a year) bypassed the site password, and kept being
+// served after it was made private; a 404 cached for a locked visitor hid a
+// photo from See All. So nothing leaves here shared-cacheable: every response
+// is marked private (browsers still cache it), "public" is dropped, and the
+// edge never stores a copy.
+export const onRequest: PagesFunction<Env> = async (context) => {
+    const res = await handle(context);
+    const cc = res.headers.get('Cache-Control') || '';
+    if (/\b(private|no-store)\b/.test(cc)) return res;
+    const out = new Response(res.body, res);
+    const rest = cc.replace(/\bpublic\b\s*,?\s*/, '').trim();
+    out.headers.set('Cache-Control', rest ? 'private, ' + rest : 'private');
+    return out;
 };

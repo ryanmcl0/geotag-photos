@@ -89,12 +89,12 @@ config/bridge_visits.json
 config/backfill/
 
 # ── Blogs (personal content, never public in git) ────────────────────────────
-# Source files (source of truth per post) + registry + tile covers + one-off
-# migration scripts (drive paths, export locations) + generated pages/assets
+# Source files (source of truth per post) + registry + tile covers + generated
+# pages/assets. (tools/blog_migration/ is public: its drive paths and export
+# locations come from config/blogs.json, which stays ignored.)
 content/
 config/blogs.json
 config/tile_covers.json
-tools/blog_migration/
 web/blogs/
 web/blogs.html
 web/videos.html

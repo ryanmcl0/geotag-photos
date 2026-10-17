@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build web/videos.html from config/videos.json.
 
-The eskilite source page grouped videos by location; this re-sorts them by YEAR.
+The original video list grouped videos by location; this re-sorts them by YEAR.
 The year is never hand-entered: it is derived from data already in the project.
 
   - A video tied to a `building` takes the most recent of that building's climb

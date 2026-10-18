@@ -1,7 +1,7 @@
 --[[ "Import Photos of Me": one click, no file picker. Imports the list file
      saved in the plugin's preferences. The first run (or when the saved file
      is gone, e.g. the drive is not mounted) asks for the file once and
-     remembers it. "Choose Photos of Me list…" changes it. ]]
+     remembers it. To switch files, move or rename the old one and run it. ]]
 
 local LrDialogs = import 'LrDialogs'
 local LrFileUtils = import 'LrFileUtils'

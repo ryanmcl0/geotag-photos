@@ -86,16 +86,4 @@ function M.importList(listPath)
             #added - already, already, missing, failed, collectionName))
 end
 
--- File picker for a list file; returns the chosen path or nil.
-function M.chooseList(title)
-    local files = LrDialogs.runOpenPanel {
-        title = title or 'Choose a list file (one absolute photo path per line)',
-        canChooseFiles = true,
-        canChooseDirectories = false,
-        allowsMultipleSelection = false,
-        fileTypes = { 'txt' },
-    }
-    return files and files[1]
-end
-
 return M

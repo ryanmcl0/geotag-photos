@@ -16,7 +16,10 @@ needed to make those decisions: open it, click tiles, copy the paths into the
 keep or reject file and re-run. Skip --page if you do not review by eye.
 
 The import list feeds tools/lr_import_list.lrplugin, which adds the photos to
-the Lightroom catalog in place and skips any already there.
+the Lightroom catalog in place, skips any already there and puts them all in
+one collection named after the list file. With --append the list only ever
+grows, so re-importing the same list after each new dump tops up that same
+collection.
 """
 import argparse
 import html
@@ -53,7 +56,11 @@ def main():
     ap.add_argument("--date-cache", type=Path,
                     help="capture-date cache for the smart collection "
                          "(default: <db folder>/.face_scan_dates.json)")
-    ap.add_argument("--confident", type=float, default=0.5)
+    ap.add_argument("--append", action="store_true",
+                    help="never drop a path already in --list unless it is rejected, "
+                         "so one Lightroom collection keeps growing across dumps")
+    ap.add_argument("--confident", type=float, default=0.5,
+                    help="similarity that goes into the list automatically (default 0.5)")
     ap.add_argument("--floor", type=float, default=0.35)
     args = ap.parse_args()
 
@@ -68,11 +75,14 @@ def main():
         by_bucket["confident" if sim >= args.confident else "borderline"].append((path, prev, sim))
 
     keeps, rejects = read_list(args.keep), set(read_list(args.reject))
-    previous = set(read_list(args.list))
+    previous_order = read_list(args.list)
+    previous = set(previous_order)
 
-    # confident + hand-picked keeps, minus hand-marked false positives
+    # confident + hand-picked keeps, minus hand-marked false positives. With
+    # --append the existing list comes first and only a reject removes from it.
     selected, seen = [], set()
-    for p in [p for p, _, _ in by_bucket["confident"]] + keeps:
+    carried = previous_order if args.append else []
+    for p in carried + [p for p, _, _ in by_bucket["confident"]] + keeps:
         if p in rejects or p in seen:
             continue
         seen.add(p)

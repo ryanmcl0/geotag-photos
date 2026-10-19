@@ -79,6 +79,10 @@ elif [ "${POSTS_MIRROR:-1}" != "0" ]; then
     echo "⚠️  posts not synced: CF_POSTS_PASSWORD / CF_PAGES_PROJECT missing from .env.deploy"
 fi
 
+# Same runtime version as production (deploy.py COMPATIBILITY_DATE).
+COMPAT_DATE=$(sed -nE "s/^COMPATIBILITY_DATE = '(.+)'$/\\1/p" deploy.py)
+[ -n "$COMPAT_DATE" ] || { echo "serve.sh: COMPATIBILITY_DATE not found in deploy.py"; exit 1; }
+
 # Run wrangler with bindings for site and private trip passwords
 # --ip 0.0.0.0 allows mobile access on the local network
 # --live-reload reloads the browser on file changes; the middleware also sends
@@ -90,7 +94,7 @@ fi
 # a `wait` immediately, so the trap above can shut both halves down. In the
 # foreground the shell would sit on wrangler until it exited on its own.
 npx wrangler pages dev web --ip 0.0.0.0 --port "$PORT" \
-    --compatibility-date=2026-06-10 \
+    --compatibility-date="$COMPAT_DATE" \
     --live-reload \
     --binding CF_SITE_PASSWORD="$CF_SITE_PASSWORD" \
     --binding CF_QR_ACCESS_TOKEN="$CF_QR_ACCESS_TOKEN" \

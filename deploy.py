@@ -6,7 +6,7 @@ Images are served privately via a Pages Function that proxies R2 —
 the R2 bucket stays private (no public r2.dev URL needed).
 
 Usage:
-  ./deploy.py [--skip-images] [--skip-pages] [--dry-run] [--trip SLUG]
+  ./deploy.py [--skip-images] [--skip-pages] [--dry-run] [--trip SLUG]...   (repeatable)
 
 Environment variables (set in .env.deploy):
   CF_ACCOUNT_ID      Cloudflare account ID (32-char hex)
@@ -970,7 +970,7 @@ def main():
     parser.add_argument('--prune-force', action='store_true', help='Allow pruning even when many trips would be removed (overrides the safety guard)')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument('--skip-security-tests', action='store_true', help='Do not run tests/security_local.sh before deploying (the secret guard still runs)')
-    parser.add_argument('--trip', help='Upload only a specific trip slug')
+    parser.add_argument('--trip', action='append', help='Upload only this trip slug (repeatable)')
     args = parser.parse_args()
 
     config = DeployConfig()
@@ -1142,7 +1142,8 @@ def main():
         print("📤 Syncing images to R2...")
         uploader = R2Uploader(config)
         if args.trip:
-            uploader.upload_trip(args.trip, dry_run=args.dry_run)
+            for slug in args.trip:
+                uploader.upload_trip(slug, dry_run=args.dry_run)
         else:
             total_bytes = 0
             for trip_dir in sorted(Path('hosted-photos').iterdir()):

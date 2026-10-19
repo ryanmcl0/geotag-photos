@@ -508,21 +508,19 @@ def _read_image(src):
         return cv2.imread(str(out), cv2.IMREAD_COLOR) if out.exists() else None
 
 
-def blur_faces_file(src, dst, manual=(), detect=True):
-    """Write a copy of src to dst with every detected face pixelated, plus the
-    hand-marked `manual` boxes (fractions of the frame, see cmd_blur) the
-    detector can't see: hooded or turned-away heads. Returns the face count
-    (0 = wrote a plain copy; caller may warn)."""
+def blur_faces_file(src, dst):
+    """Write a copy of src to dst with every detected face pixelated. Returns
+    the face count (0 = wrote a plain copy, -1 = could not decode; the caller
+    flags the file name with NEEDS_BLUR either way)."""
     import cv2
+    import numpy as np
     img = _read_image(src)
     if img is None:
         if Path(src) != Path(dst):   # in-place re-blur: leave the file alone
             shutil.copy2(src, dst)
         return -1
     H, W = img.shape[:2]
-    boxes = _all_face_boxes(img) if detect else []
-    boxes += [(int(fx * W), int(fy * H), int(fw * W), int(fh * H))
-              for fx, fy, fw, fh in manual]
+    boxes = _all_face_boxes(img)
     for (x, y, w, h) in boxes:
         # Generous pad so the ellipse inscribed below swallows chin, forehead
         # and the top of the neck (identifying tattoos live there); the
@@ -752,6 +750,33 @@ def write_back(rec):
     print(f'   ✎ {src.name}: written back to {src.parent}')
 
 
+# A blur-flagged photo the detector found no face in (hooded, turned away,
+# too small) is left unblurred under NN_<stem>_NEEDS-BLUR.<ext>, to blur by
+# hand. Once that file's content changes (the hand-blurred version saved over
+# it), the next pull takes it as done and drops the flag from the name.
+NEEDS_BLUR = '_NEEDS-BLUR'
+
+
+def flagged(path):
+    return path.with_name(path.stem + NEEDS_BLUR + path.suffix)
+
+
+def unflagged_name(name):
+    stem, dot, ext = name.rpartition('.')
+    return stem[:-len(NEEDS_BLUR)] + dot + ext if stem.endswith(NEEDS_BLUR) else name
+
+
+def on_disk(dst):
+    """dst, or its NEEDS_BLUR name when that is how it sits in the folder."""
+    return dst if dst.exists() or not flagged(dst).exists() else flagged(dst)
+
+
+def blur_note(n):
+    return (f'{n} face(s) pixelated' if n > 0 else
+            f'no face found, left unblurred as *{NEEDS_BLUR}, blur it by hand' if n == 0 else
+            f'could not decode, left unblurred as *{NEEDS_BLUR}, blur it by hand')
+
+
 def sync_post_dir(dest_dir, plan, reblur=False, found=None):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
@@ -768,7 +793,11 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
 
     Both kinds of re-edit (an adopted renamed export, or an NN_ file replaced
     in place) are also queued in `found` for writing back over the original
-    in Edits, see note_reedit."""
+    in Edits, see note_reedit.
+
+    Blur-flagged copies with no detectable face end up named *NEEDS_BLUR (see
+    flagged); they are moved to their plain name while this runs and back at
+    the end."""
     found = [] if found is None else found
     planned = {dst.name for _, _, _, dst in plan}
 
@@ -777,8 +806,8 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
     # order numbers can't collide mid-rename.
     parked, parked_n = {}, 0
     for f in sorted(dest_dir.iterdir()):
-        m = re.match(r'^\d{2,3}_(.+)$', f.name)
-        if not m or not f.is_file() or f.name in planned:
+        m = re.match(r'^\d{2,3}_(.+)$', unflagged_name(f.name))
+        if not m or not f.is_file() or unflagged_name(f.name) in planned:
             continue
         tmp = dest_dir / f'.reorder_{parked_n}_{m.group(1)}'
         parked_n += 1
@@ -795,10 +824,20 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
         state = {}
     blurred = state.setdefault('blurred', {})
     hashes = state.setdefault('hashes', {})   # md5 of each copy as we wrote it, by source name
-    manual = state.setdefault('manual_faces', {})   # hand-marked boxes (post.py blur), by source name
+    needs = state.setdefault('needs_blur', {})   # source name -> True: no face found, flagged
+    state.pop('manual_faces', None)   # retired hand-marking tool
 
-    def no_face_hint(dst):
-        return f'no faces found, mark them by hand: ./post.py blur "{dst}"'
+    # Flagged files go to their plain name for the run (reflagged at the end).
+    # One whose content changed since we flagged it was blurred by hand: done.
+    for _, _, src, dst in plan:
+        fl = flagged(dst)
+        if not fl.exists() or dst.exists():
+            continue
+        if needs.get(src.name) and hashes.get(src.name) not in (None, _file_md5(fl)):
+            needs.pop(src.name)
+            hashes[src.name] = _file_md5(fl)
+            print(f'   ✓ {dst.name}: blurred by hand, flag dropped from the name')
+        fl.rename(dst)
 
     # Re-edits exported under a Lightroom-renamed filename (X-Enhanced-NR, X-2, ...)
     adopted = _adopt_renamed_exports(dest_dir, plan, planned)
@@ -813,12 +852,12 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             dst.unlink(missing_ok=True)
             new.rename(dst)
             print(f'   ⇢ {dst.name}: adopted re-edited export {new.name}')
+            needs.pop(src.name, None)
             if want_blur:
-                n = blur_faces_file(dst, dst, manual.get(src.name, ()))
-                print(f'   🙂🚫 {dst.name}: ' + (
-                    f'{n} face(s) pixelated' if n > 0 else (
-                        no_face_hint(dst) if n == 0
-                        else 'decode failed, check manually')))
+                n = blur_faces_file(dst, dst)
+                print(f'   🙂🚫 {dst.name}: {blur_note(n)}')
+                if n <= 0:
+                    needs[src.name] = True
             blurred[src.name] = want_blur
             hashes[src.name] = _file_md5(dst)
             adopted_n += 1
@@ -835,6 +874,13 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             cur = _file_md5(dst)
             if cur == rec:
                 continue   # right place, right content
+            if want_blur and needs.get(src.name):
+                # a flagged copy blurred by hand (flag already dropped from the
+                # name): post-only, never a re-edit for Edits
+                needs.pop(src.name)
+                hashes[src.name] = cur
+                print(f'   ✓ {dst.name}: blurred by hand')
+                continue
             note_reedit(found, ref, src, dst, dest_dir, dst, want_blur)
             if not want_blur:
                 hashes[src.name] = cur   # local re-edit kept, just remember it
@@ -842,11 +888,12 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             # blur-flagged copy was replaced (re-edit re-exported over it):
             # re-blur the NEW content in place so the re-edit survives.
             print(f'   ⟳ {dst.name}: replaced locally since last pull, re-blurring in place...')
-            n = blur_faces_file(dst, dst, manual.get(src.name, ()))
-            print(f'   🙂🚫 {dst.name}: ' + (
-                f'{n} face(s) pixelated' if n > 0 else (
-                    no_face_hint(dst) if n == 0
-                    else 'decode failed, left as is, check manually')))
+            n = blur_faces_file(dst, dst)
+            print(f'   🙂🚫 {dst.name}: {blur_note(n)}')
+            if n <= 0:
+                needs[src.name] = True
+            else:
+                needs.pop(src.name, None)
             hashes[src.name] = _file_md5(dst)
             copied += 1
             continue
@@ -859,24 +906,29 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 continue
             tmp.unlink()   # blur state changed: regenerate below
         dst.unlink(missing_ok=True)
+        needs.pop(src.name, None)
         try:
             mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
         except OSError:
             mb = ''
         if want_blur:
-            print(f'   ⇣ {dst.name}: copying + blurring faces{mb} — '
-                  'the first blur loads the face model, give it ~30s...')
-            n = blur_faces_file(src, dst, manual.get(src.name, ()))
-            label = f'{n} face(s) pixelated' if n > 0 else (
-                'copied unblurred, ' + no_face_hint(dst) if n == 0
-                else 'decode failed — copied unblurred')
-            print(f'   🙂🚫 {dst.name}: {label}')
+            print(f'   ⇣ {dst.name}: copying + blurring faces{mb} (the first blur '
+                  'loads the face model, give it ~30s)...')
+            n = blur_faces_file(src, dst)
+            print(f'   🙂🚫 {dst.name}: {blur_note(n)}')
+            if n <= 0:
+                needs[src.name] = True
         else:
             print(f'   ⇣ {dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
         blurred[src.name] = want_blur
         hashes[src.name] = _file_md5(dst)
         copied += 1
+    for _, ref, src, dst in plan:
+        if not ref.get('blur'):
+            needs.pop(src.name, None)
+        elif needs.get(src.name) and dst.exists():
+            dst.rename(flagged(dst))
     state_path.write_text(json.dumps(state, indent=1))
 
     # Whatever is still parked was removed from the post on the site.
@@ -886,59 +938,6 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             tmp.rename(dest_dir / f'removed_{orig}')
             print(f'   ⚠️  {orig} is no longer in this post, kept as removed_{orig}')
     return copied, renamed, adopted_n
-
-
-def cmd_blur(args):
-    """Pixelate faces the detector missed (hooded, turned away) by hand. The
-    boxes go into the post folder's .pull_state.json as fractions of the frame
-    and every later pull re-applies them alongside the detector, so a
-    re-export of the photo comes back blurred too (re-mark it if the re-edit
-    changes the crop). Only blur-flagged photos get them re-applied."""
-    import cv2
-    import numpy as np
-    f = Path(args.file)
-    m = re.match(r'^\d{2,3}_(.+)$', f.name)
-    if not m or not f.is_file():
-        sys.exit(f'❌ {f} is not a pulled post photo (NN_<name> in a post folder).')
-    key = m.group(1)
-    state_path = f.parent / '.pull_state.json'
-    try:
-        state = json.loads(state_path.read_text())
-    except (OSError, ValueError):
-        state = {}
-    img = cv2.imdecode(np.fromfile(str(f), dtype=np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        sys.exit(f'❌ Could not decode {f}')
-    H, W = img.shape[:2]
-    if args.box:
-        try:
-            boxes = [tuple(int(v) for v in b.split(',')) for b in args.box]
-        except ValueError:
-            sys.exit('❌ --box takes x,y,w,h in pixels of the full-size photo.')
-    else:
-        scale = min(1.0, 1400 / max(H, W))
-        view = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        print('Drag a box over each face, Enter after each one, Esc when done.')
-        rois = cv2.selectROIs('Mark faces to blur', view, showCrosshair=False)
-        cv2.destroyAllWindows()
-        cv2.waitKey(1)
-        boxes = [tuple(int(v / scale) for v in r) for r in rois]
-    boxes = [b for b in boxes if len(b) == 4 and b[2] > 0 and b[3] > 0]
-    if not boxes:
-        sys.exit('Nothing marked, file left as is.')
-    frac = [[round(x / W, 4), round(y / H, 4), round(w / W, 4), round(h / H, 4)]
-            for x, y, w, h in boxes]
-    manual = state.setdefault('manual_faces', {})
-    manual[key] = frac if args.replace else manual.get(key, []) + frac
-    blur_faces_file(f, f, frac, detect=False)
-    # The pixelated file is now the expected content, not a local replacement
-    state.setdefault('hashes', {})[key] = _file_md5(f)
-    state_path.write_text(json.dumps(state, indent=1))
-    print(f'🙂🚫 {f.name}: {len(boxes)} face(s) pixelated by hand, '
-          f'{len(manual[key])} saved for future pulls')
-    if not state.get('blurred', {}).get(key):
-        print('   ⚠️  This photo is not blur-flagged on the site: flag it there, or '
-              'later pulls will not re-apply the saved boxes.')
 
 
 # ---------------------------------------------------------------- map cards
@@ -1131,27 +1130,25 @@ def sync_phone_dir(phone_dir, plan):
     """Mirror the plan into <post>/Phone/: copy new, drop unselected copies,
     write a blurred JPEG for each blur-flagged photo."""
     phone_dir.mkdir(parents=True, exist_ok=True)
-    wanted = {dst.name for _, _, _, dst in plan}
+    wanted = {n for _, _, _, dst in plan for n in (dst.name, flagged(dst).name)}
     removed = 0
     for f in sorted(phone_dir.iterdir()):
         if f.is_file() and re.match(r'\d+_', f.name) and f.name not in wanted:
             f.unlink()
             removed += 1
-    # Same state file as a post folder, so ./post.py blur works on these too:
-    # its hand-marked boxes are re-applied whenever the copy is regenerated.
     state_path = phone_dir / '.pull_state.json'
     try:
         state = json.loads(state_path.read_text())
     except (OSError, ValueError):
         state = {}
-    manual = state.get('manual_faces', {})
+    state.pop('manual_faces', None)   # retired hand-marking tool
     copied = 0
     for _, ref, src, dst in plan:
         blur = dst.name.endswith('_blurred.jpg')
         if blur:
             state.setdefault('blurred', {})[dst.name.split('_', 1)[1]] = True
-            if dst.exists():
-                continue
+            if dst.exists() or flagged(dst).exists():
+                continue   # a flagged one is kept for blurring by hand
         elif dst.exists() and dst.stat().st_size == src.stat().st_size:
             continue
         try:
@@ -1160,11 +1157,10 @@ def sync_phone_dir(phone_dir, plan):
             mb = ''
         if blur:
             print(f'   ⇣ Phone/{dst.name}: copying + blurring faces{mb}...')
-            n = blur_faces_file(src, dst, manual.get(dst.name.split('_', 1)[1], ()))
-            if n == 0:
-                print(f'      no faces found, mark them by hand: ./post.py blur "{dst}"')
-            elif n < 0:
-                print(f'      ⚠️  could not decode {src.name}, copied unblurred')
+            n = blur_faces_file(src, dst)
+            if n <= 0:
+                dst.rename(flagged(dst))
+                print(f'      ⚠️  {blur_note(n)}')
         else:
             print(f'   ⇣ Phone/{dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
@@ -1286,7 +1282,7 @@ def cmd_pull(args):
             'name': post['name'],
             'version': doc.get('version'),
             'photos': [{'order': i, 'trip': ref['trip'], 'id': ref['id'],
-                        'source': str(src), 'copied_to': str(dst)}
+                        'source': str(src), 'copied_to': str(on_disk(dst))}
                        for i, ref, src, dst in plan],
         }
         (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -1366,7 +1362,7 @@ def cmd_pull(args):
                     found=found)
                 manifest['waitlist'] = [
                     {'order': i, 'trip': ref['trip'], 'id': ref['id'],
-                     'source': str(src), 'copied_to': str(dst)}
+                     'source': str(src), 'copied_to': str(on_disk(dst))}
                     for i, ref, src, dst in wait_plan]
                 (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
                 wparts = [f'{wcopied} copied']
@@ -1394,7 +1390,7 @@ def cmd_pull(args):
             manifest['phone'] = [
                 {'order': i, 'trip': ref['trip'],
                  'id': ref.get('id'), 'file': ref.get('file'),
-                 'source': str(src), 'copied_to': str(dst)}
+                 'source': str(src), 'copied_to': str(on_disk(dst))}
                 for i, ref, src, dst in phone_plan]
             (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
             pparts = [f'{pcopied} copied']
@@ -2107,14 +2103,6 @@ def main():
     p.add_argument('--skip-waitlist', action='store_true',
                    help='Leave the Waitlist photos alone (also: a bare "skipwl" word)')
     p.set_defaults(func=cmd_pull)
-
-    b = sub.add_parser('blur', help='pixelate faces the detector missed, by hand')
-    b.add_argument('file', help='The pulled photo, e.g. ".../Posts/<post>/05_RM107359.jpg"')
-    b.add_argument('--box', action='append',
-                   help='x,y,w,h in full-size pixels instead of drawing (repeatable)')
-    b.add_argument('--replace', action='store_true',
-                   help='Replace the saved boxes for this photo instead of adding to them')
-    b.set_defaults(func=cmd_blur)
 
     f = sub.add_parser('backfill', help='write re-edits from earlier pulls back to Edits')
     f.add_argument('--dest', default='/Volumes/RYAN/Edits/Posts',

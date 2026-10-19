@@ -1624,10 +1624,17 @@ def confirm_reedits(found, posts_root):
 
 
 def run_deploy():
-    """deploy.py reprocesses the trips with pending re-edits first (reedits.py)."""
+    """deploy.py reprocesses the trips with pending re-edits first (reedits.py).
+    Only the trips with pending re-edits get their images synced to R2, and
+    the config backup and Expedition Tours rebuild are skipped: a re-edit
+    changes neither. The privacy, security and manifest steps always run."""
     py = ROOT / 'venv' / 'bin' / 'python'
-    rc = subprocess.run([str(py if py.exists() else sys.executable), 'deploy.py'],
-                        cwd=str(ROOT), env=load_env()).returncode
+    cmd = [str(py if py.exists() else sys.executable), 'deploy.py']
+    slugs = list(reedits.load_pending())
+    if slugs:
+        cmd += [a for slug in slugs for a in ('--trip', slug)]
+        cmd += ['--skip-config-backup', '--skip-expeditions']
+    rc = subprocess.run(cmd, cwd=str(ROOT), env=load_env()).returncode
     if rc:
         print(f'⚠️  deploy.py exited with {rc}; the re-edits stay pending.')
 

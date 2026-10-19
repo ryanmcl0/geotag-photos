@@ -445,13 +445,44 @@ def _face_boxes_tiled(img, tile=1536, overlap=256):
     return out
 
 
+ROTATED_MIN_SCORE = 0.7   # rotated passes only: a real upside-down face scored
+                          # 0.89, sideways city lights 0.59
+
+
+def _rotated_face_boxes(img):
+    """Faces that are sideways or upside down in the frame (a selfie
+    shot looking down at someone under the camera), which the detector only
+    finds the right way up: detect on the frame turned 90/180/270 degrees and
+    map the boxes back. Held to ROTATED_MIN_SCORE, since three extra passes
+    give the city three extra chances to look like a face."""
+    import cv2
+    H, W = img.shape[:2]
+    out = []
+    for rot in (cv2.ROTATE_180, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE):
+        for x, y, w, h, score in _face_boxes_scored(cv2.rotate(img, rot)):
+            if score < ROTATED_MIN_SCORE:
+                continue
+            if rot == cv2.ROTATE_180:
+                out.append((W - x - w, H - y - h, w, h))
+            elif rot == cv2.ROTATE_90_CLOCKWISE:
+                out.append((y, H - x - w, h, w))
+            else:
+                out.append((W - y - h, x, h, w))
+    return out
+
+
 def _all_face_boxes(img):
     """Whole-frame pass PLUS the tiled sweep, merged. The whole-frame pass has
     the last word on big faces; tiled-only additions (tiny distant figures the
     downscaled pass misses) must survive _confirm_face, which kills the
     sweep's texture false-positives while keeping real faces (verified: a real
-    34px face confirms at 0.7, night-foliage hits at 0.0)."""
+    34px face confirms at 0.7, night-foliage hits at 0.0). Rotated passes add
+    the faces that are not the right way up."""
     boxes = _face_boxes(img)
+    for cand in _rotated_face_boxes(img):
+        if not any(abs(cand[0] - b[0]) < max(30, b[2]) and abs(cand[1] - b[1]) < max(30, b[3])
+                   for b in boxes):
+            boxes.append(cand)
     for cand in _face_boxes_tiled(img):
         if any(abs(cand[0] - b[0]) < max(30, b[2]) and abs(cand[1] - b[1]) < max(30, b[3])
                for b in boxes):

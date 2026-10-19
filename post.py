@@ -130,9 +130,8 @@ def api_call(url, env, method='GET', body=None, timeout=30):
         return json.loads(r.read())
 
 
-def fetch_posts(url, site_password, posts_password):
-    """Back-compat wrapper used by the pull path."""
-    env = {'CF_POSTS_PASSWORD': posts_password, 'CF_SITE_PASSWORD': site_password}
+def fetch_posts(url, env):
+    """api_call with friendly errors, for the pull path."""
     try:
         return api_call(url, env)
     except urllib.error.HTTPError as e:
@@ -1178,7 +1177,7 @@ def cmd_pull(args):
             pass
 
     print(f'⇣ Fetching drafts from {url} ...')
-    doc = fetch_posts(url, env.get('CF_SITE_PASSWORD'), posts_password)
+    doc = fetch_posts(url, env)
     posts = doc.get('posts', [])
     if args.num is not None:
         posts = [p for p in posts if p.get('num') == args.num]
@@ -1206,6 +1205,8 @@ def cmd_pull(args):
         acct = f" @{post['account']}" if post.get('account') else ''
         n_wait = len(post.get('waitlist') or [])
         wait_txt = f", {n_wait} waitlisted" if n_wait else ''
+        if n_wait and args.skip_waitlist:
+            wait_txt += ' (skipped)'
         print(f"── {tag}{post['name']}{acct} ({len(post['photos'])} photos{wait_txt}) → {dest_dir}")
         prev = previous_sources(dest_dir)
         plan = []
@@ -1232,7 +1233,7 @@ def cmd_pull(args):
                 if ref.get('map'):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
                           f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
-            for i, ref in enumerate(post.get('waitlist') or [], 1):
+            for i, ref in enumerate([] if args.skip_waitlist else post.get('waitlist') or [], 1):
                 src, why = resolve_wait(ref, prev.get((ref['trip'], ref.get('id'))))
                 print(f"   Waitlist {i:02d} {src or why}  →  {dest_dir / 'Waitlist'}")
             for i, ref in enumerate(post.get('phone') or [], 1):
@@ -1243,6 +1244,10 @@ def cmd_pull(args):
             continue
 
         dest_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            old_manifest = json.loads((dest_dir / 'manifest.json').read_text())
+        except (OSError, ValueError):
+            old_manifest = {}
         copied, renamed, adopted = sync_post_dir(dest_dir, plan,
                                                  reblur=getattr(args, 'reblur', False),
                                                  found=found)
@@ -1305,7 +1310,14 @@ def cmd_pull(args):
         # Demoted photos -> <post>/Waitlist/. Still attached to the post but
         # out of the carousel, so they are pulled (blur marks honoured, same
         # re-edit/adoption rules) into their own subfolder rather than dropped.
+        # skipwl leaves Waitlist/ exactly as the last pull left it, and keeps
+        # its manifest rows so sync_post_edits and the next pull still see it.
         wait_refs = post.get('waitlist') or []
+        if args.skip_waitlist:
+            if old_manifest.get('waitlist'):
+                manifest['waitlist'] = old_manifest['waitlist']
+                (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+            wait_refs = []
         if wait_refs:
             wait_dir = dest_dir / 'Waitlist'
             wait_plan = []
@@ -2054,6 +2066,8 @@ def main():
     p.add_argument('--reblur', action='store_true',
                    help='Regenerate every blur-flagged copy from its source (after blur changes)')
     p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
+    p.add_argument('--skip-waitlist', action='store_true',
+                   help='Leave the Waitlist photos alone (also: a bare "skipwl" word)')
     p.set_defaults(func=cmd_pull)
 
     b = sub.add_parser('blur', help='pixelate faces the detector missed, by hand')
@@ -2089,7 +2103,11 @@ def main():
     t = sub.add_parser('status', help='show both sides')
     t.set_defaults(func=cmd_status)
 
-    args = ap.parse_args()
+    argv = sys.argv[1:]
+    # `post.py pull 24 skipwl`: a bare word is quicker to type than the flag.
+    if argv[:1] == ['pull']:
+        argv = ['--skip-waitlist' if a == 'skipwl' else a for a in argv]
+    args = ap.parse_args(argv)
     args.func(args)
 
 

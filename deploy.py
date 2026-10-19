@@ -59,6 +59,14 @@ LOCAL_ONLY_TRIP_FILES = ['exif_cache.json', 'source_state.json', 'route.geojson.
 # [{"lat": .., "lon": .., "radius_km": ..}, ...]. Absent file = no zones.
 PRIVACY_ZONES_FILE = Path('config/privacy_zones.json')
 
+# Workers runtime version the Functions run on, written into both wrangler.toml
+# files below. serve.sh and tests/security_local.sh read it from this line, so
+# local runs use the same runtime as production; cloudflare-infra's policy.json
+# declares it too and the nightly audit fails if the live project differs.
+# Moving it changes how the live Functions behave: run serve.sh and the security
+# suite on the new date first, then update policy.json in the same go.
+COMPATIBILITY_DATE = '2026-05-29'
+
 
 def apply_privacy_zones(trips_dir: Path):
     """Cut every route point inside a privacy zone out of the deployed
@@ -485,6 +493,7 @@ def write_wrangler_toml(config: DeployConfig):
     """Generate wrangler.toml with R2 binding so Pages Functions can access the bucket."""
     content = f"""name = "{config.pages_project}"
 pages_build_output_dir = "web"
+compatibility_date = "{COMPATIBILITY_DATE}"
 
 [[r2_buckets]]
 binding = "PHOTOS_BUCKET"
@@ -930,6 +939,7 @@ class GitSyncer:
         else:
             wrangler_content = f"""name = "{self.config.pages_project}"
 pages_build_output_dir = "."
+compatibility_date = "{COMPATIBILITY_DATE}"
 
 [[r2_buckets]]
 binding = "PHOTOS_BUCKET"

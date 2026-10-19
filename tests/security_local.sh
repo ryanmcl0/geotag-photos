@@ -17,6 +17,9 @@ set -u
 cd "${0:A:h}/.."
 [ -f .env.deploy ] || { echo "security_local: .env.deploy missing"; exit 1; }
 source .env.deploy
+# The runtime version production uses (deploy.py writes it into wrangler.toml).
+COMPAT_DATE=$(sed -nE "s/^COMPATIBILITY_DATE = '(.+)'$/\\1/p" deploy.py)
+[ -n "$COMPAT_DATE" ] || { echo "security_local: COMPATIBILITY_DATE not found in deploy.py"; exit 1; }
 PORT=${SECURITY_TEST_PORT:-8799}
 B="http://127.0.0.1:$PORT"
 TMP=$(mktemp -d)
@@ -61,7 +64,7 @@ done
 start(){   # start(with_secret)
     local extra=()
     [ "$1" = yes ] && extra=(--binding CF_COOKIE_SECRET="$CF_COOKIE_SECRET")
-    (npx wrangler pages dev web --compatibility-date=2026-05-29 --ip 127.0.0.1 --port "$PORT" \
+    (npx wrangler pages dev web --compatibility-date="$COMPAT_DATE" --ip 127.0.0.1 --port "$PORT" \
         --persist-to "$TMP/state" \
         --binding CF_SITE_PASSWORD="$CF_SITE_PASSWORD" --binding CF_QR_ACCESS_TOKEN="$CF_QR_ACCESS_TOKEN" \
         --binding CF_ALL_PASSWORD="$CF_ALL_PASSWORD" --binding CF_POSTS_PASSWORD="$CF_POSTS_PASSWORD" \

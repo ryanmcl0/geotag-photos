@@ -349,7 +349,7 @@ def dist_km(lat1, lon1, lat2, lon2):
 
 def _blogs_for_trip(trip_slug):
     """Live blogs whose 'trips' include this trip slug → [{slug,title,public}], so a
-    road-trip tile can link its write-up(s). Skips pending blogs (no page built)."""
+    road-trip tile can link its write-up(s). Skips pending and draft blogs (no page built)."""
     path = ROOT / 'config' / 'blogs.json'
     if not path.exists():
         return []
@@ -359,7 +359,8 @@ def _blogs_for_trip(trip_slug):
         return []
     return [{'slug': b['slug'], 'title': b['title'], 'public': bool(b.get('public'))}
             for b in blogs
-            if b.get('status') != 'pending' and trip_slug in (b.get('trips') or [])]
+            if b.get('status') not in ('pending', 'draft')
+            and trip_slug in (b.get('trips') or [])]
 
 
 def facet_stories(facet, records, echo):
@@ -386,6 +387,8 @@ def facet_stories(facet, records, echo):
 
     subtiles = []
     for b in blogs:
+        if b.get('status') == 'draft':
+            continue  # never listed, not even as "Coming soon"
         if not any(in_collection(t) for t in (b.get('trips') or [])):
             continue
         sub = {'id': b['slug'], 'title': b['title'], 'year': b.get('year'),

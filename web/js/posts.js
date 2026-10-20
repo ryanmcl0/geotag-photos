@@ -1542,6 +1542,7 @@ window.Posts = (function () {
                         id: newId(), name: post.name, created: new Date().toISOString(),
                         photos: post.photos.map(cleanRef)
                     };
+                    if (post.caption) dup.caption = post.caption;
                     let phone = (post.phone || []).map(cleanPhoneRef);
                     if (plat === 'xhs') {
                         dup.platform = 'xhs';
@@ -1745,7 +1746,12 @@ window.Posts = (function () {
         // library (or the script) is absent.
         if (window.PhoneCompanion) PhoneCompanion.decorateCard(bar, post);
         card.appendChild(bar);
-        if (set === 'auto' && post.note) {
+        if (set === 'auto' && post.caption) {
+            const cap = document.createElement('p');
+            cap.className = 'posts-note posts-auto-caption';
+            cap.textContent = post.caption;
+            card.appendChild(cap);
+        } else if (set === 'auto' && post.note) {
             const note = document.createElement('p');
             note.className = 'posts-note';
             note.textContent = post.note;

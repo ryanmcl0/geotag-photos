@@ -340,6 +340,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   background: #1d1d1d; border: 1px solid #333; border-radius: 999px; padding: 1px 8px;
 }
 .posts-note { font-size: 12px; color: #888; margin: 6px 2px 2px; }
+.posts-auto-caption { white-space: pre-wrap; color: #bbb; font-size: 13px; line-height: 1.45; }
 .posts-copy-btn {
   background: #1d4ed8; border: none; border-radius: 6px; color: #fff;
   font-size: 12px; font-weight: 600; padding: 6px 12px; cursor: pointer; white-space: nowrap;

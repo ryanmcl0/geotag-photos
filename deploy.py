@@ -327,9 +327,14 @@ def sync_config_backup(dry_run: bool = False):
         except subprocess.CalledProcessError as e:
             print(f"    ✗ local_browse sync failed: {e.stderr.decode()}")
 
-    # Skills kept out of the public repo (they name friends' folders and the
-    # face-recognition workflow), but still worth private tracking.
-    private_skills = [p for p in (Path('.claude/skills/photos-of-me'),) if p.is_dir()]
+    # Skills not tracked in this repo
+    skills_dir = Path('.claude/skills')
+    tracked = subprocess.run(['git', 'ls-files', '--', str(skills_dir)],
+                             capture_output=True, text=True).stdout.splitlines()
+    tracked_skills = {Path(f).parts[2] for f in tracked if len(Path(f).parts) > 3}
+    private_skills = sorted(p for p in skills_dir.iterdir()
+                            if p.is_dir() and p.name not in tracked_skills) \
+        if skills_dir.is_dir() else []
     if private_skills:
         try:
             dest = target_path / 'claude_skills'
@@ -337,6 +342,7 @@ def sync_config_backup(dry_run: bool = False):
             for skill in private_skills:
                 subprocess.run([
                     'rsync', '-av', '--delete', '--exclude', '.DS_Store',
+                    '--exclude', '__pycache__', '--exclude', '/work/sheets',
                     str(skill) + '/', str(dest / skill.name) + '/'
                 ], check=True, capture_output=True)
             print(f"    ✓ Synced private skills ({', '.join(p.name for p in private_skills)}) "

@@ -24,6 +24,8 @@ Source format (Google-Docs-flavoured markdown):
 
 Usage:
   ./build_blogs.py                # build all 'live' blogs + the index
+                                  # (status 'draft' blogs are skipped entirely:
+                                  # no page, no tile, no search entry, no assets)
   ./build_blogs.py --blog SLUG    # rebuild one blog (+ the index)
   ./build_blogs.py --dry-run      # parse + resolve, report, write nothing
   ./build_blogs.py --force-assets # re-compress blog assets even if outputs exist
@@ -62,6 +64,21 @@ ASSET_QUALITY = 85
 def load_blogs():
     cfg = json.loads(BLOGS_CONFIG.read_text())
     return cfg.get('blogs', [])
+
+
+def is_draft(blog):
+    """A work in progress: registered so its details are ready, but never built,
+    listed or linked anywhere (unlike 'pending', which shows a "Coming soon" tile)."""
+    return blog.get('status') == 'draft'
+
+
+def remove_draft_outputs(blog, echo=print):
+    """Delete anything an earlier build left for a blog that is now a draft, so a
+    stale page, tile or search entry can't ship with the next deploy."""
+    for path in (OUT_DIR / f"{blog['slug']}.html", OUT_DIR / f"{blog['slug']}.json"):
+        if path.exists():
+            path.unlink()
+            echo(f"  ✓ removed {path.relative_to(ROOT)} (draft)")
 
 
 def emit_trip_blogs(echo=print):
@@ -729,11 +746,18 @@ def main(only_slug, force_assets, dry_run):
     blogs = load_blogs()
     if only_slug and not any(b['slug'] == only_slug for b in blogs):
         raise click.ClickException(f'unknown blog slug: {only_slug}')
+    if only_slug and any(b['slug'] == only_slug and is_draft(b) for b in blogs):
+        raise click.ClickException(f'{only_slug} is a draft; set its status to live to build it')
     resolver = PhotoResolver()
     click.echo(f"Resolving against {len(resolver.records):,} processed photos")
 
-    built, pending = [], []
+    built, pending, drafts = [], [], []
     for blog in blogs:
+        if is_draft(blog):
+            drafts.append(blog)
+            if not dry_run:
+                remove_draft_outputs(blog, click.echo)
+            continue
         if blog.get('status') == 'pending':
             pending.append(blog)
             continue
@@ -758,7 +782,8 @@ def main(only_slug, force_assets, dry_run):
         (WEB / 'blogs.html').write_text(render_index(built, pending))
         bc.save_dims_cache()
         click.echo(f"  ✓ web/blogs.html + {len(built)} post page(s)"
-                   + (f" + {len(pending)} pending tile(s)" if pending else ''))
+                   + (f" + {len(pending)} pending tile(s)" if pending else '')
+                   + (f" ({len(drafts)} draft(s) skipped)" if drafts else ''))
         emit_trip_blogs(click.echo)
 
 

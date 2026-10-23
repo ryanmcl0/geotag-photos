@@ -17,6 +17,8 @@ Environment variables (set in .env.deploy):
   CF_SITE_PASSWORD   Password to protect the site (optional). Set to "" and
                      redeploy to remove the gate entirely (leave unset to
                      skip touching this secret).
+  CF_SITE_PASSWORD_SAVED  The site password kept while the gate is off (never
+                     deployed; the secret guard still checks it).
   CF_QR_ACCESS_TOKEN Separate token embedded in the site-access QR code
                      (optional). Set to "" and redeploy to revoke QR access.
   CF_ALL_PASSWORD    Password to unlock all (non-public) trips (optional).
@@ -1022,7 +1024,7 @@ def main():
     # suite (tests/security_local.sh), which runs the Functions under wrangler and
     # tries to reach every class of private file the way an outsider would.
     leaks = leaked_secrets({n: os.getenv(n) for n in (
-        'CF_SITE_PASSWORD', 'CF_ALL_PASSWORD', 'CF_POSTS_PASSWORD', 'CF_QR_ACCESS_TOKEN',
+        'CF_SITE_PASSWORD', 'CF_SITE_PASSWORD_SAVED', 'CF_ALL_PASSWORD', 'CF_POSTS_PASSWORD', 'CF_QR_ACCESS_TOKEN',
         'CF_COOKIE_SECRET', 'CF_API_TOKEN', 'CF_R2_SECRET_KEY')})
     if leaks:
         for name, where in leaks:

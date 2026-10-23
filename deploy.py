@@ -298,6 +298,7 @@ def sync_config_backup(dry_run: bool = False):
             '--exclude', '/expeditions',
             '--exclude', '/content_blogs',
             '--exclude', 'PHONE_PHOTOS_PLAN.md',
+            '--exclude', '/local_tools',
             str(src) + '/', str(target_path) + '/'
         ], check=True, capture_output=True)
         print(f"    ✓ Synced config/ → {target_path}")
@@ -328,6 +329,18 @@ def sync_config_backup(dry_run: bool = False):
             print(f"    ✓ Synced local_browse/ (phone + face tooling) → {target_path}/local_browse")
         except subprocess.CalledProcessError as e:
             print(f"    ✗ local_browse sync failed: {e.stderr.decode()}")
+
+    # Git-ignored scripts at the repo root.
+    local_tools = [p for p in (Path('password.py'),) if p.exists()]
+    if local_tools:
+        dest = target_path / 'local_tools'
+        dest.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(['rsync', '-a', *map(str, local_tools), str(dest) + '/'],
+                           check=True, capture_output=True)
+            print(f"    ✓ Synced {', '.join(p.name for p in local_tools)} → {dest}")
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ local tools sync failed: {e.stderr.decode()}")
 
     # Skills not tracked in this repo
     skills_dir = Path('.claude/skills')

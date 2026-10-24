@@ -294,6 +294,10 @@ def resolve_cover(spec, id_index, fallback_records):
     """A raw edit filepath → {trip,id}; 'auto'/None → first of fallback_records.
     The filepath's trip (via its edits dir) is tried first, then the bare stem."""
     if spec and spec != 'auto':
+        # "trip-slug/photo-id" pins the exact photo: camera counters roll over, so a
+        # bare id can exist in several trips.
+        if re.fullmatch(r'[a-z0-9-]+/[^/]+', spec) and spec in id_index:
+            return _photo_ref(id_index[spec])
         stem = Path(spec).stem
         norm = re.split(r'-Enhanced|-NR|-SAI', stem)[0]
         keys = []

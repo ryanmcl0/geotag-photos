@@ -635,6 +635,10 @@ def cover_serve_map(sections=None) -> dict:
 
     out = {}
     for spec in specs:
+        if re.fullmatch(r'[a-z0-9-]+/[^/]+', spec) and spec in stem_index:
+            slug, pid = stem_index[spec]       # exact "trip-slug/photo-id" pin
+            out.setdefault(slug, set()).add(pid)
+            continue
         stem = Path(spec).stem
         norm = re.split(r'-Enhanced|-NR|-SAI', stem)[0]
         trip_slugs = []

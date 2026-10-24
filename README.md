@@ -18,6 +18,7 @@ The whole thing runs on **Cloudflare Pages + R2 for free**: a static site plus c
   - **Bridges**: the world's highest bridges, ranked, with construction status for the ones still being built.
   - **Energy & Infrastructure**: dams, solar and wind farms and other big engineering.
   - **Stories**: the China blogs.
+- **Mountains.** Every summit, volcano and pass, ranked by height with a year filter and search, like the Urbex page. Named folders match by name; the rest match by geofence against the photos' positions, so a long through-hike with no per-peak folders is broken out peak by peak from its GPS track (`tools/mountain_scan.py` finds the candidates, `config/mountains.json` is the roster).
 - **Blogs.** Long-form trip write-ups with inline photo grids, a route map and a day-by-day rail. Any paragraph can be linked to directly.
 - **Search.** One box over everything: trips, places on the map, the China pages and blog text. Typing a country or a Chinese province opens a place card showing everywhere it appears on the site. It tolerates typos, and `/` opens it from any page.
 
@@ -44,7 +45,7 @@ Then the site-level builders run over every processed trip:
 
 | Builder | What it makes |
 |---|---|
-| `build_collections.py` | The China hub (provinces, roads, bridges, energy) from rosters in `config/`, plus landing-page stats, gallery covers and descriptions |
+| `build_collections.py` | The China hub (provinces, roads, bridges, energy), the Urbex and Mountains pages from rosters in `config/`, plus landing-page stats, gallery covers and descriptions |
 | `build_blogs.py` | Blog pages from Markdown drafts, with photos resolved against the trip manifests |
 | `build_search.py` | The search indexes behind `search.html` |
 | `placeholder_trips.py` | "Photos pending" pins for trips that are planned or not yet edited |

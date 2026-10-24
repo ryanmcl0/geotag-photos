@@ -294,6 +294,10 @@ def resolve_cover(spec, id_index, fallback_records):
     """A raw edit filepath → {trip,id}; 'auto'/None → first of fallback_records.
     The filepath's trip (via its edits dir) is tried first, then the bare stem."""
     if spec and spec != 'auto':
+        # "trip-slug/photo-id" pins the exact photo: camera counters roll over, so a
+        # bare id can exist in several trips.
+        if re.fullmatch(r'[a-z0-9-]+/[^/]+', spec) and spec in id_index:
+            return _photo_ref(id_index[spec])
         stem = Path(spec).stem
         norm = re.split(r'-Enhanced|-NR|-SAI', stem)[0]
         keys = []
@@ -904,6 +908,180 @@ def facet_energy(facet, records, echo):
             'sections': sections, 'unit': 'site'}, all_photos
 
 
+def facet_mountains(facet, records, echo):
+    """One tile per mountain, grouped into elevation bands (roster `tiers`), passes
+    in their own section after the summits. Roster: config/mountains.json.
+
+    A photo joins a mountain when its `building` (raw folder name) matches one of
+    the entry's `match` tokens, OR it sits inside the entry's geofence (lat/lon +
+    radius_km). Through-hikes photograph a dozen peaks from one valley, so a fence
+    can be narrowed with `dates` (YYYY-MM-DD list: only photos from those days) and
+    `trips` (slugs). `photos` lists {trip,id} directly (drifted geotags); `exclude`
+    drops ids. Entries with no processed photos still count in the headline stat.
+
+    Entry extras: `ele_m` (summit height, ranks and bands the tile), `range`,
+    `country`, `category: "pass"` (own section, no band), `reached: false` for a
+    mountain hiked on / photographed up close but not summited (tile says so),
+    `name_zh`, `note`, `trips`."""
+    roster = json.loads((ROOT / facet['roster']).read_text())
+    entries = roster.get('mountains', [])
+    tiers = roster.get('tiers', [4000, 3000, 2000, 1000])
+    tokens = []
+    for i, m in enumerate(entries):
+        for t in m.get('match') or []:
+            tokens.append((t.lower(), i))
+
+    rec_by_key = {(r['trip'], r['id']): r for r in records}
+    by_mtn = {i: [] for i in range(len(entries))}
+    for r in records:
+        bl = r['building'].lower()
+        if not bl:
+            continue
+        # A day-itinerary folder names towns driven through, not climbs, so it only
+        # matches an entry that uses the day folder itself as its token (as roofs do).
+        itinerary = bool(DAY_ITINERARY.match(bl))
+        best = None
+        for t, i in tokens:
+            if itinerary and not DAY_ITINERARY.match(t):
+                continue
+            if t in bl and (best is None or len(t) > len(best[0])):
+                best = (t, i)
+        if best is not None:
+            only = entries[best[1]].get('trips')
+            if not only or r['trip'] in only:
+                by_mtn[best[1]].append(r)
+    for i, m in enumerate(entries):
+        have = {(p['trip'], p['id']) for p in by_mtn[i]}
+        only = set(m.get('trips') or [])
+        days = set(m.get('dates') or [])
+        if m.get('lat') is not None and m.get('lon') is not None and m.get('radius_km'):
+            for r in records:
+                if (r['trip'], r['id']) in have:
+                    continue
+                if only and r['trip'] not in only:
+                    continue
+                if days and r['ts'][:10] not in days:
+                    continue
+                if dist_km(m['lat'], m['lon'], r['lat'], r['lon']) <= m['radius_km']:
+                    by_mtn[i].append(r)
+                    have.add((r['trip'], r['id']))
+        for ref in m.get('photos') or []:
+            key = (ref.get('trip'), ref.get('id')) if isinstance(ref, dict) else None
+            if key and key not in have and key in rec_by_key:
+                by_mtn[i].append(rec_by_key[key])
+                have.add(key)
+        drop = set(m.get('exclude') or [])
+        if drop:
+            by_mtn[i] = [p for p in by_mtn[i] if p['id'] not in drop]
+
+    def is_pass(m):
+        return m.get('category') == 'pass'
+
+    def tier_of(h):
+        if h is None:
+            return None
+        for t in tiers:
+            if h >= t:
+                return t
+        return 0
+
+    def tier_title(t):
+        if t is None:
+            return 'Height TBC'
+        if t == tiers[0]:
+            return f'{t:,} m +'
+        if t == 0:
+            return f'Under {tiers[-1]:,} m'
+        return f'{t:,}–{tiers[tiers.index(t) - 1]:,} m'
+
+    by_tier = {}
+    for i, m in enumerate(entries):
+        key = 'pass' if is_pass(m) else tier_of(m.get('ele_m'))
+        by_tier.setdefault(key, []).append(i)
+
+    order = ([t for t in tiers if t in by_tier] + ([0] if 0 in by_tier else [])
+             + ([None] if None in by_tier else []) + (['pass'] if 'pass' in by_tier else []))
+    sections, all_photos, with_photos = [], [], 0
+    for t in order:
+        subs = []
+        for i in sorted(by_tier[t], key=lambda i: (-(entries[i].get('ele_m') or 0), entries[i]['name'])):
+            m = entries[i]
+            photos = by_mtn[i]
+            if photos:
+                with_photos += 1
+                all_photos.extend(photos)
+            elif m.get('pending'):
+                # edits not processed yet: _mark_pending turns this into a muted
+                # "Photos pending" tile
+                echo(f"    · {m['name']}: no photos yet (pending tile)")
+            else:
+                continue   # a pass or summit with no frames: counted, no tile
+            height = f"{m['ele_m']:,} m" if m.get('ele_m') else None
+            extra = {'height_m': m.get('ele_m'), 'height_label': height,
+                     'range': m.get('range'), 'country': m.get('country'),
+                     'city': m.get('range'),    # caption / search fall through to the range
+                     'pass': True if is_pass(m) else None,
+                     'reached': m.get('reached', True), 'reached_m': m.get('reached_m')}
+            if m.get('note'):
+                extra['note'] = m['note']
+            sub = _subtile_for({**m, 'subtitle': None, 'province': None}, photos, extra)
+            if not photos and m.get('pending_label'):
+                sub['pending_label'] = m['pending_label']
+            if not photos and m.get('phone_cover'):
+                # a stand-in image until the edits are processed, copied downsized
+                # into web/previews/mountains/ (like the bridge thumbs)
+                cover = _mountain_phone_cover(sub['id'], m['phone_cover'], echo)
+                if cover:
+                    sub['cover'] = cover
+            bits = [height, m.get('range'), m.get('country')]
+            if m.get('reached') is False:
+                # the height reached (`reached_m`), else just the fact
+                bits.append(f"reached {m['reached_m']:,} m" if m.get('reached_m') else 'not summited')
+            sub['subtitle'] = ' · '.join(x for x in bits if x)
+            sub['subtitle_desc'] = True   # one body-face line on every tile, short or long
+            subs.append(sub)
+        if subs:
+            sections.append({'id': 'passes' if t == 'pass' else f'band-{t if t is not None else "tbc"}',
+                             'title': 'Passes' if t == 'pass' else tier_title(t), 'subtiles': subs,
+                             **({'unit': 'pass'} if t == 'pass' else {})})
+
+    summits = [m for m in entries if not is_pass(m)]
+    info = facet['infographic']['format'].format(value=len(summits), total=len(entries))
+    years = sorted({y for sec in sections for s in sec['subtiles'] for y in s['years']}, reverse=True)
+    echo(f"  mountains: {len(summits)} mountains + {len(entries) - len(summits)} passes in roster, "
+         f"{with_photos} with photos ({len(all_photos)} photos, {len(sections)} sections)")
+    return {'kind': 'tiered_tilegroup', 'infographic': info, 'years': years,
+            'sections': sections, 'unit': 'mountain',
+            'search_placeholder': 'Search mountains, ranges, countries'}, all_photos
+
+
+MOUNTAIN_THUMBS = ROOT / 'web' / 'previews' / 'mountains'   # gitignored, deployed, public
+
+
+def _mountain_phone_cover(sub_id, src_path, echo):
+    """A phone photo (any local image file) as a pending mountain's tile cover →
+    {src, ar}. Copied once, downsized, into web/previews/mountains/; an earlier
+    pick for the same tile is replaced."""
+    from PIL import Image, ImageOps
+    src = Path(src_path)
+    dest = MOUNTAIN_THUMBS / f"{sub_id}--{src.stem}.webp"
+    if not dest.exists():
+        if not src.exists():
+            echo(f"  ⚠ {sub_id}: phone cover {src} not found (drive mounted?)")
+            return None
+        MOUNTAIN_THUMBS.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((1600, 1600))
+            im.save(dest, 'WEBP', quality=85)
+    for stale in MOUNTAIN_THUMBS.glob(f'{sub_id}--*.webp'):
+        if stale != dest:
+            stale.unlink()
+    with Image.open(dest) as im:
+        w, h = im.size
+    return {'src': f'previews/mountains/{dest.name}', 'ar': round(w / h, 3)}
+
+
 def facet_highways(facet, records, echo):
     """One tile per numbered/named road, grouped into class sections.
 
@@ -1066,7 +1244,7 @@ FACET_BUILDERS = {
     'road_trips': facet_roads, 'bridges': facet_bridges,
     'province': facet_provinces, 'rooftopping': facet_roofs,
     'energy': facet_energy, 'highways': facet_highways,
-    'stories': facet_stories,
+    'stories': facet_stories, 'mountains': facet_mountains,
 }
 
 
@@ -1101,6 +1279,24 @@ def build_stats(coll):
                 stats['cities'] = len(cities)
             if countries:
                 stats['countries'] = len(countries)
+    mt = roster_for('mountains').get('mountains', [])
+    if mt:
+        summits = [m for m in mt if m.get('category') != 'pass']
+        stats['mountains'] = len(summits)
+        with_ele = [m for m in summits if m.get('ele_m') and m.get('reached', True)]
+        if with_ele:
+            top = max(with_ele, key=lambda m: m['ele_m'])
+            stats['highest'] = {'name': top['name'], 'ele_m': top['ele_m']}
+        # highest pass actually crossed (entries marked reached:false don't count)
+        def crossed(m):
+            return m.get('category') == 'pass' and m.get('ele_m') and m.get('reached', True)
+        passes = [m for m in mt if crossed(m)]
+        if passes:
+            top = max(passes, key=lambda m: m['ele_m'])
+            stats['highest_pass'] = {'name': top['name'], 'ele_m': top['ele_m']}
+        countries = {m.get('country') for m in summits if m.get('country')}
+        if countries and 'countries' not in stats:
+            stats['countries'] = len(countries)
     regions_path = coll.get('regions')
     if regions_path and (ROOT / regions_path).exists():
         rg = json.loads((ROOT / regions_path).read_text())
@@ -1159,7 +1355,7 @@ def _locked_subtile(s, full_s, cover=None):
 # province or a driven road leg whose trip is still a pending placeholder. Their
 # rosters are the source of truth (the km / visited count already reflect them), so
 # the tile stays on the page, muted, instead of rendering empty or vanishing.
-_PENDING_RULES = {'province', 'road_trips'}
+_PENDING_RULES = {'province', 'road_trips', 'mountains'}
 PENDING_LABEL = 'Photos pending'
 
 
@@ -1172,7 +1368,8 @@ def _mark_pending(tile, rule):
     for s in _all_subtiles(tile):
         if s.get('done') and not s.get('photos'):
             s['done'] = False
-            s['pending'] = PENDING_LABEL
+            # a facet can supply its own label via pending_label
+            s['pending'] = s.pop('pending_label', None) or PENDING_LABEL
             # A road leg back from the trip already has its merged route on the map
             # even with no photos processed — let the tile open it.
             if s.get('trip') and (WEB_TRIPS / s['trip'] / 'route.geojson').exists():
@@ -1209,6 +1406,45 @@ def _mark_not_public(pub_tile, full_tile, id_index):
     walk(pub_tile.get('subtiles') or [])
     for sec in pub_tile.get('sections') or []:
         walk(sec.get('subtiles') or [])
+    # Facets that skip entries without photos (mountains): restore sub-tiles that
+    # exist only in the full build as locked tiles, in the full build's order.
+    pub_secs = {sec['id']: sec for sec in pub_tile.get('sections') or []}
+    for fsec in full_tile.get('sections') or []:
+        psec = pub_secs.get(fsec['id'])
+        have = {s['id'] for s in (psec['subtiles'] if psec else [])}
+        missing = [s for s in fsec.get('subtiles') or [] if s['id'] not in have and s.get('photos')]
+        if not missing:
+            continue
+        if psec is None:
+            psec = {k: v for k, v in fsec.items() if k != 'subtiles'}
+            psec['subtiles'] = []
+            pub_tile.setdefault('sections', []).append(psec)
+            pub_secs[fsec['id']] = psec
+        by_id = {s['id']: s for s in psec['subtiles']}
+        rebuilt = []
+        for f in fsec['subtiles']:
+            if f['id'] in by_id:
+                rebuilt.append(by_id[f['id']])
+            elif f.get('photos'):
+                spec = covers.get(f.get('title'))
+                rebuilt.append(_locked_subtile(f, f, resolve_cover(spec, id_index, []) if spec else None))
+        psec['subtiles'] = rebuilt
+    if pub_tile.get('sections'):
+        order = {sec['id']: i for i, sec in enumerate(full_tile.get('sections') or [])}
+        pub_tile['sections'].sort(key=lambda sec: order.get(sec['id'], 99))
+
+
+def _public_covers_only(tile, pub_ref_set):
+    """Public variant: keep each sub-tile cover inside the public photo set,
+    falling back to the tile's first landscape (or no cover on a locked tile)."""
+    for s in _all_subtiles(tile):
+        c = s.get('cover')
+        if not c or (c['trip'], c['id']) in pub_ref_set:
+            continue
+        if s.get('locked') or not s.get('photos'):
+            s.pop('cover', None)
+        else:
+            s['cover'] = next((p for p in s['photos'] if p.get('ar', 1) > 1), s['photos'][0])
 
 
 def _filter_tile_refs(tile, pub_ref_set):
@@ -1466,6 +1702,8 @@ def build_collection(coll, do_category, force, private_map):
         result['cover'] = resolve_cover(spec, id_index, pool)
         apply_subtile_covers(result, id_index)
         _mark_not_public(result, full_tile, id_index)
+        if facet['id'] not in photo_privacy.PRIVATE_COVER_SECTIONS:
+            _public_covers_only(result, pub_ref_set)
         pub_tiles.append(result)
 
     pub_path = OUT_DIR / f"{coll['id']}.json"

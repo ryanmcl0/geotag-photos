@@ -208,6 +208,12 @@ img { display: block; }
 /* Pending road legs still carry car/dates + km, so the drive reads on the tile. */
 .tile--pending .tile-sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
 /* A pending leg whose route is already on the map is clickable. */
+/* Pending tile with a stand-in (phone) cover: dimmed photo behind the text. */
+.tile--pending-cover { position: relative; }
+.tile--pending-cover .tile-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .45; }
+.tile--pending-cover .tile-inner { position: relative; }
+.tile--pending-cover .tile-title, .tile--pending-cover .tile-sub { color: var(--text); }
+.tile--pending-cover .pending-tag { color: #bdbdbd; }
 .tile--pending-link { cursor: pointer; text-decoration: none; transition: background .2s; }
 .tile--pending-link:hover { background: #1d1d1d; }
 .pending-route-link {

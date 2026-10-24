@@ -286,6 +286,23 @@ class Builder:
                              p=sorted(set(place + self.provinces_of(photos))), n=s.get('count') or len(photos),
                              y=s.get('years'))
 
+    # ------------------------------------------------------------ mountains
+
+    def mountains(self):
+        data = _load(OUT_DIR / ('mountains.json' if self.public else 'mountains.all.json'), {}) or {}
+        for tile in data.get('tiles', []):
+            for sec in tile.get('sections') or []:
+                for s in sec.get('subtiles') or []:
+                    if s.get('locked') or not s.get('done'):
+                        continue
+                    photos = s.get('photos') or []
+                    place = [x for x in (s.get('range'), s.get('country')) if x]
+                    self.add(k='mountain', t=s['title'],
+                             s=' · '.join(x for x in (s.get('height_label'), s.get('range'), s.get('country')) if x),
+                             u=f"mountains.html#{tile['id']}/{s['id']}", c=_cover(s.get('cover')),
+                             p=sorted(set(place + self.provinces_of(photos))), n=s.get('count') or len(photos),
+                             y=s.get('years'))
+
     # ------------------------------------------------------------ blogs + videos
 
     def blogs(self):
@@ -342,6 +359,7 @@ class Builder:
     def build(self):
         n_places = self.trips()
         visited = self.china()
+        self.mountains()
         if not self.public:
             self.urbex()
             self.videos()

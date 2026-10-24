@@ -471,14 +471,74 @@ def _rotated_face_boxes(img):
     return out
 
 
+PERSON_MIN_SCORE = 0.9   # real people scored >= 0.94; a tower, a CCTV camera
+                         # and a block of flats 0.82-0.85
+HEAD_KP_MIN = 2.0        # keypoint logit; tiny background figures sit below 0
+
+
+def _person_head_boxes(img):
+    """Heads of people whose face the face detector cannot see: turned away,
+    backlit, hooded or masked (a backlit 3/4 rear view scored 0.23 against
+    the 0.4 cut, while texture noise scored higher). A keypoint model finds
+    nose/eyes/ears from any side, so the head box comes from those. Needs
+    torchvision (laptop venv; the weights download to the torch cache on
+    first use), else it adds nothing."""
+    try:
+        import torch
+        from torchvision.models.detection import (keypointrcnn_resnet50_fpn,
+                                                  KeypointRCNN_ResNet50_FPN_Weights)
+    except ImportError:
+        return []
+    import cv2
+    import numpy as np
+    if not hasattr(_person_head_boxes, '_model'):
+        _person_head_boxes._model = keypointrcnn_resnet50_fpn(
+            weights=KeypointRCNN_ResNet50_FPN_Weights.DEFAULT).eval()
+    H, W = img.shape[:2]
+    scale = min(1.0, 1333 / max(H, W))
+    small = cv2.resize(img, (int(W * scale), int(H * scale)),
+                       interpolation=cv2.INTER_AREA) if scale < 1 else img
+    t = torch.from_numpy(cv2.cvtColor(small, cv2.COLOR_BGR2RGB)).permute(2, 0, 1).float() / 255
+    with torch.no_grad():
+        det = _person_head_boxes._model([t])[0]
+    out = []
+    for box, score, kps, kscores in zip(det['boxes'], det['scores'],
+                                        det['keypoints'], det['keypoints_scores']):
+        if score < PERSON_MIN_SCORE:
+            continue
+        head = kps[:5, :2].numpy() / scale   # nose, eyes, ears
+        seen = head[kscores[:5].numpy() > HEAD_KP_MIN]
+        # Both shoulders too: a rooftop that passed as a person had none.
+        if len(seen) < 2 or not (kscores[5:7] > HEAD_KP_MIN).all():
+            continue
+        spread = max(np.ptp(seen[:, 0]), np.ptp(seen[:, 1]))
+        if spread > 0.4 * float(box[2] - box[0]) / scale:
+            continue   # a "person" stitched from two people in a group shot
+        cx, cy = np.median(seen, axis=0)
+        # Keypoints only span part of a head (one ear + glasses from behind),
+        # so size it from the shoulders and body height too.
+        shoulders = kps[5:7, :2].numpy() / scale
+        side = max(2.0 * spread, 0.6 * float(np.linalg.norm(shoulders[0] - shoulders[1])),
+                   0.12 * float(box[3] - box[1]) / scale)
+        side = int(side)
+        out.append((int(cx - side / 2), int(cy - side / 2), side, side))
+    return out
+
+
 def _all_face_boxes(img):
     """Whole-frame pass PLUS the tiled sweep, merged. The whole-frame pass has
     the last word on big faces; tiled-only additions (tiny distant figures the
     downscaled pass misses) must survive _confirm_face, which kills the
     sweep's texture false-positives while keeping real faces (verified: a real
     34px face confirms at 0.7, night-foliage hits at 0.0). Rotated passes add
-    the faces that are not the right way up."""
+    the faces that are not the right way up, and the person pass the heads
+    whose face is not visible at all."""
     boxes = _face_boxes(img)
+    for cand in _person_head_boxes(img):
+        cx, cy = cand[0] + cand[2] // 2, cand[1] + cand[3] // 2
+        if not any(b[0] - b[2] // 2 <= cx <= b[0] + 3 * b[2] // 2 and
+                   b[1] - b[3] // 2 <= cy <= b[1] + 3 * b[3] // 2 for b in boxes):
+            boxes.append(cand)
     for cand in _rotated_face_boxes(img):
         if not any(abs(cand[0] - b[0]) < max(30, b[2]) and abs(cand[1] - b[1]) < max(30, b[3])
                    for b in boxes):
@@ -1337,7 +1397,7 @@ def cmd_pull(args):
         # Demoted photos -> <post>/Waitlist/. Still attached to the post but
         # out of the carousel, so they are pulled (blur marks honoured, same
         # re-edit/adoption rules) into their own subfolder rather than dropped.
-        # skipwl leaves Waitlist/ exactly as the last pull left it, and keeps
+        # Without wl, Waitlist/ stays exactly as the last pull left it, keeping
         # its manifest rows so sync_post_edits and the next pull still see it.
         wait_refs = post.get('waitlist') or []
         if args.skip_waitlist:
@@ -2100,8 +2160,9 @@ def main():
     p.add_argument('--reblur', action='store_true',
                    help='Regenerate every blur-flagged copy from its source (after blur changes)')
     p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
-    p.add_argument('--skip-waitlist', action='store_true',
-                   help='Leave the Waitlist photos alone (also: a bare "skipwl" word)')
+    p.add_argument('--waitlist', action='store_true',
+                   help='Also pull the Waitlist photos (also: a bare "wl" word); '
+                        'skipped by default')
     p.set_defaults(func=cmd_pull)
 
     f = sub.add_parser('backfill', help='write re-edits from earlier pulls back to Edits')
@@ -2130,10 +2191,13 @@ def main():
     t.set_defaults(func=cmd_status)
 
     argv = sys.argv[1:]
-    # `post.py pull 24 skipwl`: a bare word is quicker to type than the flag.
+    # `post.py pull 24 wl`: a bare word is quicker to type than the flag.
+    # `skipwl` is the old opt-out, now the default, so it is just dropped.
     if argv[:1] == ['pull']:
-        argv = ['--skip-waitlist' if a == 'skipwl' else a for a in argv]
+        argv = ['--waitlist' if a == 'wl' else a for a in argv if a != 'skipwl']
     args = ap.parse_args(argv)
+    if argv[:1] == ['pull']:
+        args.skip_waitlist = not args.waitlist
     args.func(args)
 
 

@@ -1337,7 +1337,7 @@ def cmd_pull(args):
         # Demoted photos -> <post>/Waitlist/. Still attached to the post but
         # out of the carousel, so they are pulled (blur marks honoured, same
         # re-edit/adoption rules) into their own subfolder rather than dropped.
-        # skipwl leaves Waitlist/ exactly as the last pull left it, and keeps
+        # Without wl, Waitlist/ stays exactly as the last pull left it, keeping
         # its manifest rows so sync_post_edits and the next pull still see it.
         wait_refs = post.get('waitlist') or []
         if args.skip_waitlist:
@@ -2100,8 +2100,9 @@ def main():
     p.add_argument('--reblur', action='store_true',
                    help='Regenerate every blur-flagged copy from its source (after blur changes)')
     p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
-    p.add_argument('--skip-waitlist', action='store_true',
-                   help='Leave the Waitlist photos alone (also: a bare "skipwl" word)')
+    p.add_argument('--waitlist', action='store_true',
+                   help='Also pull the Waitlist photos (also: a bare "wl" word); '
+                        'skipped by default')
     p.set_defaults(func=cmd_pull)
 
     f = sub.add_parser('backfill', help='write re-edits from earlier pulls back to Edits')
@@ -2130,10 +2131,13 @@ def main():
     t.set_defaults(func=cmd_status)
 
     argv = sys.argv[1:]
-    # `post.py pull 24 skipwl`: a bare word is quicker to type than the flag.
+    # `post.py pull 24 wl`: a bare word is quicker to type than the flag.
+    # `skipwl` is the old opt-out, now the default, so it is just dropped.
     if argv[:1] == ['pull']:
-        argv = ['--skip-waitlist' if a == 'skipwl' else a for a in argv]
+        argv = ['--waitlist' if a == 'wl' else a for a in argv if a != 'skipwl']
     args = ap.parse_args(argv)
+    if argv[:1] == ['pull']:
+        args.skip_waitlist = not args.waitlist
     args.func(args)
 
 

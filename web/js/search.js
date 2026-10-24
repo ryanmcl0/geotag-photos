@@ -37,6 +37,7 @@
     { k: 'bridge', title: 'China · Bridges', unit: ['bridge', 'bridges'], grid: true },
     { k: 'road', title: 'China · On the Roads', unit: ['road trip', 'road trips'], grid: true },
     { k: 'energy', title: 'China · Energy & Infrastructure', unit: ['site', 'sites'], grid: true },
+    { k: 'mountain', title: 'Mountains', unit: ['mountain', 'mountains'], grid: true },
     { k: 'blog', title: 'Blogs', unit: ['blog', 'blogs'] },
     { k: 'place', title: 'On the Map', unit: ['place', 'places'], chip: ['place on the map', 'places on the map'] },
   ];

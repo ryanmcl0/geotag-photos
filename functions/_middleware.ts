@@ -123,7 +123,7 @@ async function bridgesPreviewEnabled(context: EventContext<Env, string, unknown>
 // text (private trips' regions sit in gallery_regions.all.json, gated like the rest).
 // search.json is the public search index (build_search.py builds it from public
 // sources only); its full twin search.all.json stays gated like every other file.
-const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/site_stats.json',
+const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/mountains.json', '/collections/site_stats.json',
     '/collections/gallery_covers.json', '/collections/gallery_highlights.json',
     '/collections/trip_blogs.json', '/collections/gallery_descriptions.json',
     '/collections/gallery_regions.json', '/collections/search.json'];

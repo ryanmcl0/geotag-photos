@@ -567,7 +567,7 @@ def _private_blogs():
 
 # tile_covers.json sections whose hand-pinned covers are served even when the
 # photo sits in a private trip (see write_private_index).
-PRIVATE_COVER_SECTIONS = ('provinces',)
+PRIVATE_COVER_SECTIONS = ('provinces', 'peaks')
 
 
 def cover_serve_map(sections=None) -> dict:

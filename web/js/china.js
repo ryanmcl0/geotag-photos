@@ -81,6 +81,9 @@
     if (st.km) parts.push(stat(`${st.km.toLocaleString()}<span class="stat-frac"> km</span>`, 'on the road'));
     if (st.bridges) parts.push(stat(String(st.bridges.visited), `bridges · ${st.bridges.ranked_done}/${st.bridges.ranked_total} highest`));
     if (st.buildings) parts.push(stat(String(st.buildings), 'buildings'));
+    if (st.mountains) parts.push(stat(String(st.mountains), 'mountains'));
+    if (st.highest) parts.push(stat(`${st.highest.ele_m.toLocaleString()}<span class="stat-frac"> m</span>`, `highest · ${st.highest.name}`));
+    if (st.highest_pass) parts.push(stat(`${st.highest_pass.ele_m.toLocaleString()}<span class="stat-frac"> m</span>`, `highest pass · ${st.highest_pass.name}`));
     if (st.cities) parts.push(stat(String(st.cities), 'cities'));
     if (st.countries) parts.push(stat(String(st.countries), 'countries'));
     if (st.places) parts.push(stat(String(st.places), 'cities & regions'));
@@ -300,7 +303,9 @@
       const linked = s.has_route && s.trip;
       const t = el(linked ? 'a' : 'div', 'tile tile--pending' + (linked ? ' tile--pending-link' : ''));
       if (linked) t.href = `map.html?mode=trip&trip=${encodeURIComponent(s.trip)}`;
-      t.innerHTML = `<div class="tile-inner"><div class="tile-title">${esc(s.title)}</div>
+      // a pending sub-tile can carry a stand-in cover image
+      if (s.cover) t.classList.add('tile--pending-cover');
+      t.innerHTML = `${s.cover ? imgTag(s.cover) : ''}<div class="tile-inner"><div class="tile-title">${esc(s.title)}</div>
         ${bits ? `<div class="tile-sub">${bits}</div>` : ''}
         <div class="pending-tag">${esc(s.pending || 'Pending')}</div>
         ${linked ? '<div class="pending-route-link">View route</div>' : ''}</div>`;
@@ -335,7 +340,7 @@
     // photo count share one line. Any tile with text under its name gets the
     // deeper overlay, so it stays readable over a bright sky.
     const zh = s.name_zh ? `<div class="tile-zh">${esc(s.name_zh)}</div>` : '';
-    const isDesc = (s.subtitle || '').length > 28;
+    const isDesc = s.subtitle_desc || (s.subtitle || '').length > 28;   // facets can force the body face
     const sub = s.subtitle
       ? `<div class="tile-sub${isDesc ? ' tile-sub--desc' : ''}">${esc(s.subtitle)}</div>` : '';
     const meta = [s.infographic && esc(s.infographic), total && `${total} photos`].filter(Boolean).join(' · ');
@@ -851,9 +856,11 @@
     const host = document.getElementById('tier-host');
     host.innerHTML = '';
     // `unit` names what a sub-tile is (building / site / road); roofs predate it.
-    const unit = tile.unit || 'building';
-    const units = n => `${n} ${esc(unit)}${n !== 1 ? 's' : ''}`;
+    const tileUnit = tile.unit || 'building';
     (tile.sections || []).forEach(sec => {
+      // a section can name its own unit (the Passes section of the Mountains page)
+      const unit = sec.unit || tileUnit;
+      const units = n => `${n} ${esc(n === 1 ? unit : unit.endsWith('s') ? unit + 'es' : unit + 's')}`;
       const subs = sec.subtiles.filter(s =>
         !selected || (s.years || []).some(y => selected.has(y)));
       if (!subs.length) return;
@@ -888,8 +895,9 @@
     .toLowerCase().replace(/[^a-z0-9一-鿿]+/g, ' ').trim();
 
   function searchText(s) {
-    return fold([s.title, s.name_zh, s.city, s.country, s.province, s.height_label || s.subtitle,
-      s.crane_m ? 'crane' : '', s.underground ? 'underground tunnel' : ''].join(' '));
+    return fold([s.title, s.name_zh, s.city, s.range, s.country, s.province, s.height_label || s.subtitle,
+      s.crane_m ? 'crane' : '', s.underground ? 'underground tunnel' : '',
+      s.pass ? 'pass col' : '', s.reached === false ? 'not summited' : ''].join(' '));
   }
 
   // Optimal string alignment distance, capped: true when a and b are within `max` edits
@@ -940,7 +948,7 @@
   function buildTierSearch(tile, initial) {
     const bar = el('div', 'tier-search');
     bar.innerHTML = `<input type="search" class="tier-search__input" autocomplete="off"
-        spellcheck="false" placeholder="Search ${esc((tile.unit || 'building') + 's')}, cities, countries"
+        spellcheck="false" placeholder="${esc(tile.search_placeholder || `Search ${(tile.unit || 'building')}s, cities, countries`)}"
         aria-label="Search">
       <span class="tier-search__count" aria-live="polite"></span>`;
     const input = bar.querySelector('input');
@@ -1011,7 +1019,7 @@
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}${sub}
       <span class="count" id="gallery-count">${(s.photos || []).length} photos</span>`));
     // lightbox caption: name · height · province/city (bridges + buildings carry these)
-    const caption = [s.title, s.height_label || (s.height_m ? `${s.height_m} m` : null), s.province || s.city || null]
+    const caption = [s.title, s.height_label || (s.height_m ? `${s.height_m} m` : null), s.province || s.range || s.city || null]
       .filter(Boolean).join(' · ');
     const photos = (s.photos || []).map(p => ({ ...p, title: caption }));
 

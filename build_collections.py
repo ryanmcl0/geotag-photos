@@ -935,10 +935,15 @@ def facet_mountains(facet, records, echo):
     by_mtn = {i: [] for i in range(len(entries))}
     for r in records:
         bl = r['building'].lower()
-        if not bl or DAY_ITINERARY.match(bl):
-            continue        # day itineraries name towns driven through, not climbs
+        if not bl:
+            continue
+        # A day-itinerary folder names towns driven through, not climbs, so it only
+        # matches an entry that uses the day folder itself as its token (as roofs do).
+        itinerary = bool(DAY_ITINERARY.match(bl))
         best = None
         for t, i in tokens:
+            if itinerary and not DAY_ITINERARY.match(t):
+                continue
             if t in bl and (best is None or len(t) > len(best[0])):
                 best = (t, i)
         if best is not None:

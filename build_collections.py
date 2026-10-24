@@ -1213,6 +1213,45 @@ def _mark_not_public(pub_tile, full_tile, id_index):
     walk(pub_tile.get('subtiles') or [])
     for sec in pub_tile.get('sections') or []:
         walk(sec.get('subtiles') or [])
+    # Facets that skip entries without photos (mountains): restore sub-tiles that
+    # exist only in the full build as locked tiles, in the full build's order.
+    pub_secs = {sec['id']: sec for sec in pub_tile.get('sections') or []}
+    for fsec in full_tile.get('sections') or []:
+        psec = pub_secs.get(fsec['id'])
+        have = {s['id'] for s in (psec['subtiles'] if psec else [])}
+        missing = [s for s in fsec.get('subtiles') or [] if s['id'] not in have and s.get('photos')]
+        if not missing:
+            continue
+        if psec is None:
+            psec = {k: v for k, v in fsec.items() if k != 'subtiles'}
+            psec['subtiles'] = []
+            pub_tile.setdefault('sections', []).append(psec)
+            pub_secs[fsec['id']] = psec
+        by_id = {s['id']: s for s in psec['subtiles']}
+        rebuilt = []
+        for f in fsec['subtiles']:
+            if f['id'] in by_id:
+                rebuilt.append(by_id[f['id']])
+            elif f.get('photos'):
+                spec = covers.get(f.get('title'))
+                rebuilt.append(_locked_subtile(f, f, resolve_cover(spec, id_index, []) if spec else None))
+        psec['subtiles'] = rebuilt
+    if pub_tile.get('sections'):
+        order = {sec['id']: i for i, sec in enumerate(full_tile.get('sections') or [])}
+        pub_tile['sections'].sort(key=lambda sec: order.get(sec['id'], 99))
+
+
+def _public_covers_only(tile, pub_ref_set):
+    """Public variant: keep each sub-tile cover inside the public photo set,
+    falling back to the tile's first landscape (or no cover on a locked tile)."""
+    for s in _all_subtiles(tile):
+        c = s.get('cover')
+        if not c or (c['trip'], c['id']) in pub_ref_set:
+            continue
+        if s.get('locked') or not s.get('photos'):
+            s.pop('cover', None)
+        else:
+            s['cover'] = next((p for p in s['photos'] if p.get('ar', 1) > 1), s['photos'][0])
 
 
 def _filter_tile_refs(tile, pub_ref_set):
@@ -1470,6 +1509,8 @@ def build_collection(coll, do_category, force, private_map):
         result['cover'] = resolve_cover(spec, id_index, pool)
         apply_subtile_covers(result, id_index)
         _mark_not_public(result, full_tile, id_index)
+        if facet['id'] not in photo_privacy.PRIVATE_COVER_SECTIONS:
+            _public_covers_only(result, pub_ref_set)
         pub_tiles.append(result)
 
     pub_path = OUT_DIR / f"{coll['id']}.json"

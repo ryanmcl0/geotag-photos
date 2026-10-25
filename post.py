@@ -514,13 +514,13 @@ def _person_head_boxes(img):
         spread = max(np.ptp(seen[:, 0]), np.ptp(seen[:, 1]))
         if spread > 0.4 * float(box[2] - box[0]) / scale:
             continue   # a "person" stitched from two people in a group shot
-        cx, cy = np.median(seen, axis=0)
-        # Keypoints only span part of a head (one ear + glasses from behind),
-        # so size it from the shoulders and body height too.
+        # A face-sized box like the detector's (blur_faces_file pads it out
+        # to the whole face), centred on nose/eyes when seen, so the pixels
+        # land on the face and not the back of the head.
+        face = head[:3][kscores[:3].numpy() > HEAD_KP_MIN]
+        cx, cy = np.mean(face if len(face) else seen, axis=0)
         shoulders = kps[5:7, :2].numpy() / scale
-        side = max(2.0 * spread, 0.6 * float(np.linalg.norm(shoulders[0] - shoulders[1])),
-                   0.12 * float(box[3] - box[1]) / scale)
-        side = int(side)
+        side = int(max(spread, 0.45 * float(np.linalg.norm(shoulders[0] - shoulders[1]))))
         out.append((int(cx - side / 2), int(cy - side / 2), side, side))
     return out
 

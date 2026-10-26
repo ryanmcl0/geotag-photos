@@ -141,9 +141,11 @@ async function needsAllAccess(path: string, context: EventContext<Env, string, u
     if (path.startsWith('/collections/')) return !PUBLIC_COLLECTIONS.includes(path);
     const m = path.match(/^\/trips\/([^/]+)\/(.*)$/);
     if (m) {
-        if (path.endsWith('/manifest.all.json')) return true;
+        // Only manifest.json (and its .zh twin) is public; every variant
+        // (manifest.all.json, a manifest.full stash's sidecar) holds hidden entries.
+        if (/\/manifest\.[^/]+\.json$/.test(path)) return true;
         const slug = m[1];
-        const stem = decodeURIComponent(m[2].split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '');
+        const stem = (m[2].split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '');
         const fp = ACCESS.force_public[slug] || [];
         if (fp.includes('*') || fp.includes(stem)) return false;
         if ((ACCESS.private_photos[slug] || []).includes(stem)) return true;
@@ -185,9 +187,21 @@ function authRetryAfter(ip: string): number {
 const CANONICAL_HOST = 'ryanmcl.com';
 const REDIRECT_HOSTS = ['photo-map-travel.pages.dev', 'www.ryanmcl.com'];
 
+// The asset server looks a file up by its decoded path, with repeated slashes
+// merged, so every rule below has to see that same form: the raw pathname keeps
+// percent-escapes ("%70lans" is /plans) and doubled slashes. Null for a path the
+// rules can't reason about (bad escape, backslash, dot segment): it 404s.
+function canonicalPath(raw: string): string | null {
+    let p: string;
+    try { p = decodeURIComponent(raw); } catch { return null; }
+    p = p.replace(/\/{2,}/g, '/');
+    if (p.includes('\\') || /(^|\/)\.{1,2}(\/|$)/.test(p)) return null;
+    return p;
+}
+
 const handle: PagesFunction<Env> = async (context) => {
     const url = new URL(context.request.url);
-    const path = url.pathname;
+    const canonical = canonicalPath(url.pathname);
 
     if (REDIRECT_HOSTS.includes(url.hostname)) {
         url.hostname = CANONICAL_HOST;
@@ -200,6 +214,8 @@ const handle: PagesFunction<Env> = async (context) => {
     if (url.hostname !== CANONICAL_HOST && !isLocalHost(url.hostname)) {
         return new Response('Not found', { status: 404 });
     }
+    if (canonical === null) return new Response('Not found', { status: 404 });
+    const path = canonical;
     const cookieSecret = context.env.CF_COOKIE_SECRET;
     const cookies = context.request.headers.get('Cookie') || '';
     const cookieVal = (name: string) => {

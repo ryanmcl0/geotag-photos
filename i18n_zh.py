@@ -148,7 +148,9 @@ def data_files():
     seen = []
     for g in SIDECAR_GLOBS:
         for p in sorted(WEB.glob(g)):
-            if p.name.endswith('.zh.json') or not p.is_file():
+            # manifest.full.json is a local-only stash (never deployed), so it
+            # gets no sidecar either.
+            if p.name.endswith('.zh.json') or p.name == 'manifest.full.json' or not p.is_file():
                 continue
             seen.append(p)
     return seen

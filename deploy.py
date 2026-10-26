@@ -55,7 +55,8 @@ except ImportError:
 # exif_cache.json and source_state.json cover every source file, hidden and
 # blocked photos included (name, time, often GPS); route.geojson.orig is the real
 # track kept when photo_privacy blanks a publish-from-private trip's route.
-LOCAL_ONLY_TRIP_FILES = ['exif_cache.json', 'source_state.json', 'route.geojson.orig']
+LOCAL_ONLY_TRIP_FILES = ['exif_cache.json', 'source_state.json', 'route.geojson.orig',
+                         'manifest.full.zh.json']
 
 # Places routes must never show (home etc.), in the git-ignored config/:
 # [{"lat": .., "lon": .., "radius_km": ..}, ...]. Absent file = no zones.

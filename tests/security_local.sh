@@ -153,6 +153,27 @@ suite(){   # suite on|off
     expect "$V: private trip manifest" '404' -b "$J" "$B$(key private_trip_manifest)"
     expect "$V: manifest.all.json" '404' -b "$J" "$B$(key public_manifest_all)"
     expect "$V: gated collection" '404' -b "$J" "$B/collections/search.all.json"
+    expect "$V: manifest.full sidecar" '404' -b "$J" "$B/trips/$(key public_manifest_all | cut -d/ -f3)/manifest.full.zh.json"
+    # The asset server decodes escapes and merges slashes before its lookup, so
+    # every spelling of a gated file must hit the same gate.
+    for p in "$(key private_trip_manifest)" "$(key public_manifest_all)" /collections/search.all.json \
+             /plans/ /videos /rooftopping /expeditions/ "$(python3 -c "import json;print(json.load(open('functions/photos/private_index.json'))['private_pages'][0]+'.json')")"; do
+        for v in $(python3 - "$p" <<'PY'
+import sys
+p = sys.argv[1]; segs = p.split('/')
+first = segs[1]
+print('/' + p)                                                  # //x/y
+print(p.replace('/', '//', 2).replace('//', '/', 1))            # /x//y
+print('/%' + format(ord(first[0]), '02X') + p[2:])              # first letter escaped
+if p.count('/') > 1 and not p.endswith('/'):
+    i = p.rindex('/'); print(p[:i] + '%2F' + p[i+1:])           # last slash escaped
+if '.' in segs[-1]:
+    i = p.rindex('.'); print(p[:i] + '%2E' + p[i+1:])           # extension dot escaped
+PY
+); do
+            expect "$V: spelled $v" '302|404' -b "$J" "$B$v"
+        done
+    done
     for p in /rooftopping /plans/ /videos; do expect "$V: $p" '302' -b "$J" "$B$p"; done
     expect "$V: /expeditions/" '404' -b "$J" "$B/expeditions/"
     for p in /api/posts /api/people /api/source-index; do expect "$V: $p" '404' -b "$J" "$B$p"; done

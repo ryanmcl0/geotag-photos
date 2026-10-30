@@ -242,6 +242,37 @@ window.Posts = (function () {
     const waitOf = post => post.waitlist || [];
     const WAITLIST_MAX = 40;
 
+    /** Fit a cross-platform copy onto Xiaohongshu: carousel photos first, phone
+     *  items fill what remains of the 18, and everything over the cap goes on
+     *  the copy's waitlist (after any it inherited) rather than being dropped,
+     *  so the trimmed photos stay visible on the card. Phone videos have no
+     *  thumbnail and cannot be waitlisted, so they are the only thing lost.
+     *  Returns the phone items that fit plus the counts for the toast. */
+    function fitToXhs(dup, phone) {
+        dup.platform = 'xhs';
+        const over = dup.photos.slice(CAPS.xhs);
+        dup.photos = dup.photos.slice(0, CAPS.xhs);
+        const room = Math.max(0, CAPS.xhs - dup.photos.length);
+        const wait = waitOf(dup).slice();
+        const have = new Set(wait.map(keyOf));
+        let waitlisted = 0, dropped = 0;
+        for (const ref of over.concat(phone.slice(room))) {
+            if (!ref.id || have.has(keyOf(ref)) || wait.length >= WAITLIST_MAX) { dropped++; continue; }
+            wait.push(ref);
+            have.add(keyOf(ref));
+            waitlisted++;
+        }
+        if (wait.length) dup.waitlist = wait;
+        return { phone: phone.slice(0, room), waitlisted, dropped };
+    }
+    const fitNote = fit => {
+        if (!fit) return '';
+        const parts = [];
+        if (fit.waitlisted) parts.push(`${fit.waitlisted} over the ${CAPS.xhs} cap moved to its waitlist`);
+        if (fit.dropped) parts.push(`${fit.dropped} video${fit.dropped === 1 ? '' : 's'} dropped (videos cannot be waitlisted)`);
+        return parts.length ? ` (${parts.join('; ')})` : '';
+    };
+
     // Orientation lock: a carousel must not mix portrait and landscape; the
     // first photo with a known aspect ratio sets the post's orientation.
     const orientOf = ar => (typeof ar === 'number' ? (ar >= 1 ? 'landscape' : 'portrait') : null);
@@ -1531,7 +1562,8 @@ window.Posts = (function () {
             // Promote a suggestion into the hand-made drafts (which is what
             // ./post.py pull pulls); the suggestion itself stays until
             // dismissed. XHS copies obey the combined 18 cap: carousel photos
-            // first, phone items fill any remaining slots.
+            // first, phone items fill any remaining slots, the rest go on the
+            // copy's waitlist (see fitToXhs).
             [['ig', 'Copy → IG'], ['xhs', 'Copy → XHS']].forEach(([plat, label]) => {
                 const copy = document.createElement('button');
                 copy.type = 'button';
@@ -1544,14 +1576,9 @@ window.Posts = (function () {
                     };
                     if (post.caption) dup.caption = post.caption;
                     let phone = (post.phone || []).map(cleanPhoneRef);
-                    if (plat === 'xhs') {
-                        dup.platform = 'xhs';
-                        dup.photos = dup.photos.slice(0, CAPS.xhs);
-                        phone = phone.slice(0, Math.max(0, CAPS.xhs - dup.photos.length));
-                    }
+                    const fit = plat === 'xhs' ? fitToXhs(dup, phone) : null;
+                    if (fit) phone = fit.phone;
                     if (phone.length) dup.phone = phone;
-                    const trimmed = post.photos.length + (post.phone || []).length
-                        - dup.photos.length - (dup.phone || []).length;
                     mutate(posts => {
                         if (!posts.some(p => p.name === dup.name && platformOf(p) === plat)) {
                             dup.num = nextNum(posts);
@@ -1560,7 +1587,7 @@ window.Posts = (function () {
                     }).then(okSave => {
                         if (okSave) {
                             toast(`Copied "${post.name}" to ${plat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
-                                + (trimmed > 0 ? ` (${trimmed} trimmed for the 18 cap)` : ''));
+                                + fitNote(fit));
                         }
                         renderManager(root);
                     });
@@ -1648,7 +1675,8 @@ window.Posts = (function () {
 
             // Duplicate this draft onto the other platform, keeping order,
             // blur/map marks, caption and song. XHS copies obey the combined
-            // 18 cap: carousel photos first, phone items fill what remains.
+            // 18 cap: carousel photos first, phone items fill what remains and
+            // the rest go on the copy's waitlist (see fitToXhs).
             const otherPlat = platformOf(post) === 'xhs' ? 'ig' : 'xhs';
             const dupBtn = document.createElement('button');
             dupBtn.type = 'button';
@@ -1666,14 +1694,9 @@ window.Posts = (function () {
                 if (post.song) dup.song = post.song;
                 if (waitOf(post).length) dup.waitlist = waitOf(post).map(ph => ({ ...ph }));
                 let phone = (post.phone || []).map(ph => ({ ...ph }));
-                if (otherPlat === 'xhs') {
-                    dup.platform = 'xhs';
-                    dup.photos = dup.photos.slice(0, CAPS.xhs);
-                    phone = phone.slice(0, Math.max(0, CAPS.xhs - dup.photos.length));
-                }
+                const fit = otherPlat === 'xhs' ? fitToXhs(dup, phone) : null;
+                if (fit) phone = fit.phone;
                 if (phone.length) dup.phone = phone;
-                const trimmed = post.photos.length + (post.phone || []).length
-                    - dup.photos.length - (dup.phone || []).length;
                 mutate(posts => {
                     if (!posts.some(p => p.id === dup.id)) {
                         dup.num = nextNum(posts);
@@ -1682,7 +1705,7 @@ window.Posts = (function () {
                 }).then(okSave => {
                     if (okSave) {
                         toast(`Copied "${post.name}" to ${otherPlat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
-                            + (trimmed > 0 ? ` (${trimmed} trimmed for the 18 cap)` : ''));
+                            + fitNote(fit));
                     }
                     renderManager(root);
                 });

@@ -242,6 +242,37 @@ window.Posts = (function () {
     const waitOf = post => post.waitlist || [];
     const WAITLIST_MAX = 40;
 
+    /** Fit a cross-platform copy onto Xiaohongshu: carousel photos first, phone
+     *  items fill what remains of the 18, and everything over the cap goes on
+     *  the copy's waitlist (after any it inherited) rather than being dropped,
+     *  so the trimmed photos stay visible on the card. Phone videos have no
+     *  thumbnail and cannot be waitlisted, so they are the only thing lost.
+     *  Returns the phone items that fit plus the counts for the toast. */
+    function fitToXhs(dup, phone) {
+        dup.platform = 'xhs';
+        const over = dup.photos.slice(CAPS.xhs);
+        dup.photos = dup.photos.slice(0, CAPS.xhs);
+        const room = Math.max(0, CAPS.xhs - dup.photos.length);
+        const wait = waitOf(dup).slice();
+        const have = new Set(wait.map(keyOf));
+        let waitlisted = 0, dropped = 0;
+        for (const ref of over.concat(phone.slice(room))) {
+            if (!ref.id || have.has(keyOf(ref)) || wait.length >= WAITLIST_MAX) { dropped++; continue; }
+            wait.push(ref);
+            have.add(keyOf(ref));
+            waitlisted++;
+        }
+        if (wait.length) dup.waitlist = wait;
+        return { phone: phone.slice(0, room), waitlisted, dropped };
+    }
+    const fitNote = fit => {
+        if (!fit) return '';
+        const parts = [];
+        if (fit.waitlisted) parts.push(`${fit.waitlisted} over the ${CAPS.xhs} cap moved to its waitlist`);
+        if (fit.dropped) parts.push(`${fit.dropped} video${fit.dropped === 1 ? '' : 's'} dropped (videos cannot be waitlisted)`);
+        return parts.length ? ` (${parts.join('; ')})` : '';
+    };
+
     // Orientation lock: a carousel must not mix portrait and landscape; the
     // first photo with a known aspect ratio sets the post's orientation.
     const orientOf = ar => (typeof ar === 'number' ? (ar >= 1 ? 'landscape' : 'portrait') : null);
@@ -1531,7 +1562,8 @@ window.Posts = (function () {
             // Promote a suggestion into the hand-made drafts (which is what
             // ./post.py pull pulls); the suggestion itself stays until
             // dismissed. XHS copies obey the combined 18 cap: carousel photos
-            // first, phone items fill any remaining slots.
+            // first, phone items fill any remaining slots, the rest go on the
+            // copy's waitlist (see fitToXhs).
             [['ig', 'Copy → IG'], ['xhs', 'Copy → XHS']].forEach(([plat, label]) => {
                 const copy = document.createElement('button');
                 copy.type = 'button';
@@ -1544,14 +1576,9 @@ window.Posts = (function () {
                     };
                     if (post.caption) dup.caption = post.caption;
                     let phone = (post.phone || []).map(cleanPhoneRef);
-                    if (plat === 'xhs') {
-                        dup.platform = 'xhs';
-                        dup.photos = dup.photos.slice(0, CAPS.xhs);
-                        phone = phone.slice(0, Math.max(0, CAPS.xhs - dup.photos.length));
-                    }
+                    const fit = plat === 'xhs' ? fitToXhs(dup, phone) : null;
+                    if (fit) phone = fit.phone;
                     if (phone.length) dup.phone = phone;
-                    const trimmed = post.photos.length + (post.phone || []).length
-                        - dup.photos.length - (dup.phone || []).length;
                     mutate(posts => {
                         if (!posts.some(p => p.name === dup.name && platformOf(p) === plat)) {
                             dup.num = nextNum(posts);
@@ -1560,7 +1587,7 @@ window.Posts = (function () {
                     }).then(okSave => {
                         if (okSave) {
                             toast(`Copied "${post.name}" to ${plat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
-                                + (trimmed > 0 ? ` (${trimmed} trimmed for the 18 cap)` : ''));
+                                + fitNote(fit));
                         }
                         renderManager(root);
                     });
@@ -1602,7 +1629,7 @@ window.Posts = (function () {
                 if (draggedFromOtherDraft(post)) {
                     const dragged = draggedPhoto;
                     draggedPhoto = null;
-                    movePhotoToPost(root, dragged.postId, dragged.ref, post.id);
+                    movePhotoToPost(root, dragged.postId, dragged.ref, post.id, undefined, dragged.section);
                     return;
                 }
                 movePostTo(root, e.dataTransfer.getData('text/posts-card'), post);
@@ -1648,7 +1675,8 @@ window.Posts = (function () {
 
             // Duplicate this draft onto the other platform, keeping order,
             // blur/map marks, caption and song. XHS copies obey the combined
-            // 18 cap: carousel photos first, phone items fill what remains.
+            // 18 cap: carousel photos first, phone items fill what remains and
+            // the rest go on the copy's waitlist (see fitToXhs).
             const otherPlat = platformOf(post) === 'xhs' ? 'ig' : 'xhs';
             const dupBtn = document.createElement('button');
             dupBtn.type = 'button';
@@ -1666,14 +1694,9 @@ window.Posts = (function () {
                 if (post.song) dup.song = post.song;
                 if (waitOf(post).length) dup.waitlist = waitOf(post).map(ph => ({ ...ph }));
                 let phone = (post.phone || []).map(ph => ({ ...ph }));
-                if (otherPlat === 'xhs') {
-                    dup.platform = 'xhs';
-                    dup.photos = dup.photos.slice(0, CAPS.xhs);
-                    phone = phone.slice(0, Math.max(0, CAPS.xhs - dup.photos.length));
-                }
+                const fit = otherPlat === 'xhs' ? fitToXhs(dup, phone) : null;
+                if (fit) phone = fit.phone;
                 if (phone.length) dup.phone = phone;
-                const trimmed = post.photos.length + (post.phone || []).length
-                    - dup.photos.length - (dup.phone || []).length;
                 mutate(posts => {
                     if (!posts.some(p => p.id === dup.id)) {
                         dup.num = nextNum(posts);
@@ -1682,7 +1705,7 @@ window.Posts = (function () {
                 }).then(okSave => {
                     if (okSave) {
                         toast(`Copied "${post.name}" to ${otherPlat === 'xhs' ? 'Xiaohongshu' : 'Instagram'}`
-                            + (trimmed > 0 ? ` (${trimmed} trimmed for the 18 cap)` : ''));
+                            + fitNote(fit));
                     }
                     renderManager(root);
                 });
@@ -1771,7 +1794,7 @@ window.Posts = (function () {
         if (!post.photos.length) {
             const hint = document.createElement('p');
             hint.className = 'posts-empty';
-            hint.textContent = 'Empty. Add photos from anywhere on the site.';
+            hint.textContent = 'Empty. Add photos from anywhere on the site, or drag one here from another post.';
             strip.appendChild(hint);
         }
         card.appendChild(strip);
@@ -1897,9 +1920,11 @@ window.Posts = (function () {
             // count in the summary but swap the strip for a note.
             const phoneLocal = !!(window.Gallery && Gallery.isLocal);
             const photoRefs = post.phone.filter(r => r.id);
-            (phoneLocal ? post.phone : []).forEach(ref => {
+            (phoneLocal ? post.phone : []).forEach((ref, idx) => {
                 const cell = document.createElement('div');
+                cell.className = 'posts-phone-cell';
                 cell.style.cssText = 'position:relative;flex:0 0 auto';
+                wireSectionDrag(root, post, ref, idx, 'phone', cell, set);
                 if (ref.id) {
                     const img = document.createElement('img');
                     img.src = window.Gallery ? Gallery.photoUrl(ref, 'thumbnails') : '';
@@ -1991,7 +2016,7 @@ window.Posts = (function () {
             sum.title = 'Demoted photos: kept on this post but not in the carousel, and not counted against the cap';
             const wstrip = document.createElement('div');
             wstrip.className = 'posts-strip posts-waitlist-strip';
-            waitOf(post).forEach(ref => wstrip.appendChild(renderWaitCell(root, post, ref)));
+            waitOf(post).forEach((ref, idx) => wstrip.appendChild(renderWaitCell(root, post, ref, idx)));
             det.append(sum, wstrip);
             card.appendChild(det);
         }
@@ -2015,9 +2040,10 @@ window.Posts = (function () {
     /** One waitlist entry: thumb + promote ("⇧", back into the carousel at the
      *  end) and remove ("✕", confirm + History like the main strip). Keeps the
      *  blur/map marks visible so a demoted photo does not silently lose them. */
-    function renderWaitCell(root, post, ref) {
+    function renderWaitCell(root, post, ref, idx) {
         const cell = document.createElement('div');
         cell.className = 'posts-wait-cell';
+        wireSectionDrag(root, post, ref, idx, 'waitlist', cell, 'main');
         const isPhone = !!(ref.trip && ref.trip.startsWith('phone-'));
         if (isPhone && !(window.Gallery && Gallery.isLocal)) {
             // Phone thumbnails only exist on the local site; a 📱 tile beats
@@ -2258,27 +2284,38 @@ window.Posts = (function () {
         return null;
     }
 
-    /** Whether a photo can go back into section of p (Undo). The carousel has a
-     *  cap; the Phone section only counts against it on Xiaohongshu. */
+    /** Where ref sits on p counting the waitlist too ('photos' / 'phone' /
+     *  'waitlist'), or null when it is not on the post at all. */
+    const anySectionOf = (p, ref) => sectionOf(p, ref)
+        || (waitOf(p).some(ph => keyOf(ph) === keyOf(ref)) ? 'waitlist' : null);
+    const listOf = (p, section) => section === 'phone' ? (p.phone || [])
+        : section === 'waitlist' ? waitOf(p) : p.photos;
+
+    /** Whether a photo can go (back) into section of p. The carousel has a
+     *  cap; the Phone section only counts against it on Xiaohongshu; the
+     *  waitlist has its own limit. */
     function roomIn(p, section) {
+        if (section === 'waitlist') return waitOf(p).length < WAITLIST_MAX;
         if (section === 'phone' && platformOf(p) !== 'xhs') return true;
         return countOf(p) < capOf(p);
     }
 
     /** Take ref out of p's section, returning [it, its index] (or [null, -1]).
-     *  An emptied Phone section is dropped, like the strip always did. */
+     *  An emptied Phone section or waitlist is dropped, like the strip always did. */
     function takeOut(p, section, ref) {
-        const list = section === 'phone' ? (p.phone || []) : p.photos;
+        const list = listOf(p, section);
         const i = list.findIndex(ph => keyOf(ph) === keyOf(ref));
         if (i === -1) return [null, -1];
         const it = list.splice(i, 1)[0];
         if (section === 'phone' && !p.phone.length) delete p.phone;
+        if (section === 'waitlist' && !p.waitlist.length) delete p.waitlist;
         return [it, i];
     }
 
     function putBack(p, section, it, at) {
         if (section === 'phone' && !p.phone) p.phone = [];
-        const list = section === 'phone' ? p.phone : p.photos;
+        if (section === 'waitlist' && !p.waitlist) p.waitlist = [];
+        const list = listOf(p, section);
         list.splice(Math.min(Math.max(at, 0), list.length), 0, it);
     }
 
@@ -2365,49 +2402,111 @@ window.Posts = (function () {
     const draggedFromOtherDraft = post => !!draggedPhoto && draggedPhoto.set === 'main'
         && draggedPhoto.postId !== post.id;
 
-    /** Move a carousel photo out of one draft into another, marks and all, at
-     *  index `at` of the target's carousel (the end when omitted). Refused with
-     *  a toast when the target is full or already has the photo; Undo puts it
-     *  back where it was. */
-    function movePhotoToPost(root, fromId, ref, toId, at) {
+    /** Move a photo out of one draft into another, marks and all, keeping its
+     *  section: carousel to carousel (at index `at`, the end when omitted),
+     *  Phone to Phone, waitlist to waitlist, creating the section on the
+     *  target when it has none yet. Refused with a toast when the target is
+     *  full or already has the photo; Undo puts it back where it was. */
+    function movePhotoToPost(root, fromId, ref, toId, at, section) {
+        section = section || 'photos';
         const to = doc.posts.find(p => p.id === toId);
         if (!to) return;
         const k = keyOf(ref);
-        if (to.photos.some(ph => keyOf(ph) === k)) { toast(`Already in ${postLabel(to)}`); return; }
-        if (waitOf(to).some(ph => keyOf(ph) === k)) {
-            toast(`Already on the waitlist of ${postLabel(to)}`);
+        const where = anySectionOf(to, ref);
+        if (where) {
+            toast(where === 'waitlist' ? `Already on the waitlist of ${postLabel(to)}`
+                : where === 'phone' ? `Already in the Phone section of ${postLabel(to)}`
+                : `Already in ${postLabel(to)}`);
             return;
         }
-        if (countOf(to) >= capOf(to)) { toast(`${postLabel(to)} is full (${countOf(to)}/${capOf(to)})`); return; }
-        if (!orientationOk(toId, [ref])) return;
+        if (!roomIn(to, section)) { toast(fullMsg(to, section)); return; }
+        if (section !== 'waitlist' && !orientationOk(toId, [ref])) return;
         const result = {};
         mutate(posts => {
             const src = posts.find(p => p.id === fromId);
             const dst = posts.find(p => p.id === toId);
             if (!src || !dst) return;
-            if (dst.photos.some(ph => keyOf(ph) === k) || waitOf(dst).some(ph => keyOf(ph) === k)) return;
-            if (countOf(dst) >= capOf(dst)) { result.full = true; return; }
-            const [it, i] = takeOut(src, 'photos', ref);
+            if (anySectionOf(dst, ref)) return;
+            if (!roomIn(dst, section)) { result.full = true; return; }
+            const [it, i] = takeOut(src, section, ref);
             if (!it) return;
-            putBack(dst, 'photos', it, at === undefined ? dst.photos.length : at);
+            putBack(dst, section, it, at === undefined ? listOf(dst, section).length : at);
             unhistory(dst, k);
             Object.assign(result, { ok: true, from: i, src: src.name,
-                                    label: postLabel(dst), count: countOf(dst), cap: capOf(dst) });
+                                    label: postLabel(dst), tally: tallyOf(dst, section) });
         }).then(okSave => {
             renderManager(root);
-            if (result.full) { toast(`${postLabel(to)} is full`); return; }
+            if (result.full) { toast(fullMsg(to, section)); return; }
             if (!okSave || !result.ok) return;
-            toast(`Moved from "${result.src}" to ${result.label} (${result.count}/${result.cap})`,
+            const dest = section === 'phone' ? `the Phone section of ${result.label}`
+                : section === 'waitlist' ? `the waitlist of ${result.label}` : result.label;
+            toast(`Moved from "${result.src}" to ${dest}${result.tally}`,
                 { label: 'Undo', fn: () => {
                 mutate(posts => {
                     const src = posts.find(p => p.id === fromId);
                     const dst = posts.find(p => p.id === toId);
-                    if (!src || !dst || sectionOf(src, ref)) return;
-                    if (!roomIn(src, 'photos')) return;   // filled up meanwhile
-                    const [it] = takeOut(dst, 'photos', ref);
-                    if (it) putBack(src, 'photos', it, result.from);
+                    if (!src || !dst || anySectionOf(src, ref)) return;
+                    if (!roomIn(src, section)) return;   // filled up meanwhile
+                    const [it] = takeOut(dst, section, ref);
+                    if (it) putBack(src, section, it, result.from);
                 }).then(() => renderManager(root));
             } });
+        });
+    }
+    // " (n/cap)" where the section counts against the cap, the waitlist's own
+    // size for the waitlist, nothing for an uncapped Phone section.
+    const tallyOf = (p, section) => section === 'waitlist'
+        ? ` (waitlist ${waitOf(p).length}/${WAITLIST_MAX})`
+        : (section === 'phone' && platformOf(p) !== 'xhs') ? '' : ` (${countOf(p)}/${capOf(p)})`;
+    const fullMsg = (p, section) => section === 'waitlist'
+        ? `The waitlist of ${postLabel(p)} is full (${WAITLIST_MAX})`
+        : `${postLabel(p)} is full (${countOf(p)}/${capOf(p)})`;
+
+    /** Desktop drag for a Phone or waitlist cell: reorder within its own
+     *  section of the same draft, or move it to another draft's matching
+     *  section (at this spot when dropped on a cell of that section; dropping
+     *  on the card itself appends). Carousel thumbs have their own version. */
+    function wireSectionDrag(root, post, ref, idx, section, cell, set) {
+        if (set && set !== 'main') return;
+        cell.draggable = true;
+        const accepts = () => !!draggedPhoto && (draggedPhoto.postId === post.id
+            ? draggedPhoto.section === section : draggedFromOtherDraft(post));
+        cell.addEventListener('dragstart', e => {
+            e.dataTransfer.setData('text/plain', keyOf(ref));
+            e.dataTransfer.effectAllowed = 'move';
+            draggedPhoto = { postId: post.id, ref, set: 'main', section };
+        });
+        cell.addEventListener('dragend', () => { draggedPhoto = null; });
+        cell.addEventListener('dragover', e => {
+            if (!accepts()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            cell.classList.add('drag-over');
+        });
+        cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'));
+        cell.addEventListener('drop', e => {
+            if (!accepts()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            cell.classList.remove('drag-over');
+            const dragged = draggedPhoto;
+            draggedPhoto = null;
+            if (dragged.postId !== post.id) {
+                movePhotoToPost(root, dragged.postId, dragged.ref, post.id,
+                    dragged.section === section ? idx : undefined, dragged.section);
+                return;
+            }
+            const fromKey = keyOf(dragged.ref);
+            if (fromKey === keyOf(ref)) return;
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                const list = listOf(p, section);
+                const from = list.findIndex(ph => keyOf(ph) === fromKey);
+                const to = list.findIndex(ph => keyOf(ph) === keyOf(ref));
+                if (from === -1 || to === -1) return;
+                list.splice(to, 0, list.splice(from, 1)[0]);
+            }).then(() => renderManager(root));
         });
     }
 
@@ -2484,14 +2583,15 @@ window.Posts = (function () {
         controls.append(left, rm, right);
 
         // Desktop drag to reorder, or onto another draft's photo to move it
-        // there at that spot (dropping anywhere else on that card appends it).
+        // there at that spot (dropping anywhere else on that card appends it;
+        // a Phone or waitlist photo lands in that section of the card).
         // Phones use the arrow buttons. Card drags pass through to the card.
-        const accepts = () => !!draggedPhoto
-            && (draggedPhoto.postId === post.id || (draggedFromOtherDraft(post) && set === 'main'));
+        const accepts = () => !!draggedPhoto && (draggedPhoto.postId === post.id
+            ? draggedPhoto.section === 'photos' : (draggedFromOtherDraft(post) && set === 'main'));
         cell.addEventListener('dragstart', e => {
             e.dataTransfer.setData('text/plain', keyOf(ref));
             e.dataTransfer.effectAllowed = 'move';
-            draggedPhoto = { postId: post.id, ref, set: set || 'main' };
+            draggedPhoto = { postId: post.id, ref, set: set || 'main', section: 'photos' };
         });
         cell.addEventListener('dragend', () => { draggedPhoto = null; });
         cell.addEventListener('dragover', e => {
@@ -2509,7 +2609,8 @@ window.Posts = (function () {
             const dragged = draggedPhoto;
             draggedPhoto = null;
             if (dragged.postId !== post.id) {
-                movePhotoToPost(root, dragged.postId, dragged.ref, post.id, idx);
+                movePhotoToPost(root, dragged.postId, dragged.ref, post.id,
+                    dragged.section === 'photos' ? idx : undefined, dragged.section);
                 return;
             }
             const fromKey = keyOf(dragged.ref);

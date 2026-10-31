@@ -6,6 +6,10 @@ Everything for working with post drafts. Always takes a subcommand:
   ./post.py pull      pull the drafts from the remote and copy their files
                       (plus a location card in <post>/maps/ for every photo
                       marked with the map button — see tools/map_card.py)
+                      A photo over 32 MB (Xiaohongshu's upload limit) is
+                      shrunk to fit as it is copied: a lossless repack if
+                      that is enough, else the best re-encode that fits.
+                      The original in Edits is never touched.
                       Re-edits found in a post folder are listed (post file,
                       where it goes in Edits, an open command) and, once you
                       confirm, written back over their original in Edits
@@ -46,6 +50,7 @@ import argparse
 import contextlib
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -648,6 +653,108 @@ def _file_md5(path):
     return h.hexdigest()
 
 
+# Xiaohongshu refuses any photo over 32 MB (Instagram takes the same files
+# fine), so every photo a pull writes is brought under this, whatever the account.
+UPLOAD_CAP = 32_000_000
+FIT_MIN_QUALITY = 85   # lowest JPEG quality kept at full size; below it, scale down instead
+
+
+def _too_big(path):
+    """A JPEG over UPLOAD_CAP, i.e. one fit_upload_cap would shrink."""
+    try:
+        return Path(path).stat().st_size > UPLOAD_CAP and _magic(path) == 'jpg'
+    except OSError:
+        return False
+
+
+def _repack(data):
+    """data losslessly repacked by jpegtran (optimized Huffman tables,
+    progressive, every marker kept), or None if that failed."""
+    try:
+        r = subprocess.run(['jpegtran', '-copy', 'all', '-optimize', '-progressive'],
+                           input=data, capture_output=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout[:2] == b'\xff\xd8' else None
+
+
+def _reencode_to_fit(data):
+    """(jpeg bytes, how) for the best re-encode of data under UPLOAD_CAP: the
+    highest quality that fits at full size, else scaled down just enough to
+    fit at high quality. EXIF, XMP, ICC profile and chroma sampling are kept.
+    (None, None) if nothing fits."""
+    from PIL import Image, JpegImagePlugin
+    Image.MAX_IMAGE_PIXELS = None   # panoramas
+    img = Image.open(io.BytesIO(data))
+    img.load()
+    sampling = JpegImagePlugin.get_sampling(img)
+    keep = {k: img.info[k] for k in ('exif', 'icc_profile', 'xmp') if img.info.get(k)}
+
+    def enc(im, q):
+        buf = io.BytesIO()
+        # baseline here, then jpegtran's lossless optimize: Pillow's own
+        # optimize/progressive fails ("Suspension not allowed") on busy frames
+        im.save(buf, 'JPEG', quality=q, subsampling=sampling if sampling >= 0 else 0, **keep)
+        return _repack(buf.getvalue()) or buf.getvalue()
+
+    def best(im):
+        lo, hi, hit = FIT_MIN_QUALITY, 100, None
+        while lo <= hi:
+            q = (lo + hi) // 2
+            out = enc(im, q)
+            if len(out) <= UPLOAD_CAP:
+                hit, lo = (q, out), q + 1
+            else:
+                hi = q - 1
+        return hit
+
+    hit = best(img)
+    if hit:
+        return hit[1], f're-encoded at quality {hit[0]}, full size'
+    im, w, h = img, *img.size
+    for _ in range(4):
+        scale = (UPLOAD_CAP / len(enc(im, 95))) ** 0.5 * 0.97
+        w, h = max(1, round(w * scale)), max(1, round(h * scale))
+        im = img.resize((w, h), Image.LANCZOS)
+        hit = best(im)
+        if hit:
+            return hit[1], f'scaled to {w}x{h}, quality {hit[0]}'
+    return None, None
+
+
+def fit_upload_cap(path):
+    """Shrink a photo over UPLOAD_CAP in place, losing as little as possible:
+    first a lossless repack (_repack), and only if that is not enough a re-encode
+    (_reencode_to_fit). The file keeps its dates. Returns (shrunk, note):
+    note is a line for the log, None when the file was already small enough."""
+    path = Path(path)
+    size = path.stat().st_size
+    if size <= UPLOAD_CAP or path.suffix.lower() not in SOURCE_EXTS:
+        return False, None
+    head = f'{size / 1e6:.1f} MB, over the {UPLOAD_CAP // 10**6} MB upload limit'
+    if _magic(path) != 'jpg':
+        return False, f'{head}, not a JPEG so left as is: export it as a JPEG'
+    with _read(path) as f:
+        data = f.read()
+    out = how = None
+    packed = _repack(data)
+    if packed and len(packed) <= UPLOAD_CAP:
+        out, how = packed, 'repacked losslessly'
+    if out is None:
+        try:
+            out, how = _reencode_to_fit(data)
+        except Exception as e:
+            return False, f'{head}, could not shrink it ({e}), left as is'
+    if out is None:
+        return False, f'{head}, could not shrink it, left as is'
+    st = path.stat()
+    tmp = path.with_name(f'.{path.name}.fit_tmp')
+    tmp.write_bytes(out)
+    os.utime(tmp, (st.st_atime, st.st_mtime))
+    os.replace(tmp, path)
+    return True, f'{head}: {how}, now {len(out) / 1e6:.1f} MB'
+
+
 # Lightroom rename suffixes (AI denoise, edits, virtual copies). Same shape as
 # tools/sync_post_edits.py: stripping them yields the "core id" both names share.
 _LR_SUFFIX_RE = re.compile(
@@ -769,13 +876,14 @@ def _reedit_ok(ref, src, edited):
 
 def note_reedit(found, ref, src, edited, dest_dir, post_file, blur):
     """Queue a re-edit for write-back (confirm_reedits asks first). Called
-    BEFORE any face blur: a blur-flagged one keeps a clean copy in
-    <post>/.reedits_staged/, since the post copy is about to be pixelated and
-    Edits must get the clean photo."""
+    BEFORE any face blur or shrink: a blur-flagged one, or one over
+    UPLOAD_CAP, keeps a clean copy in <post>/.reedits_staged/, since the post
+    copy is about to be pixelated or recompressed and Edits must get the
+    clean photo."""
     if not _reedit_ok(ref, src, edited):
         return
     new = post_file
-    if blur:
+    if blur or _too_big(edited):
         new = dest_dir / STAGED / f'reedit_{src.name}'
         new.parent.mkdir(exist_ok=True)
         shutil.copyfile(edited, new)
@@ -885,7 +993,19 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
     blurred = state.setdefault('blurred', {})
     hashes = state.setdefault('hashes', {})   # md5 of each copy as we wrote it, by source name
     needs = state.setdefault('needs_blur', {})   # source name -> True: no face found, flagged
+    shrunk = state.setdefault('compressed', {})   # md5 of copies shrunk to UPLOAD_CAP, by source name
     state.pop('manual_faces', None)   # retired hand-marking tool
+
+    def fit(src, dst):
+        """Bring a finished copy under UPLOAD_CAP and fingerprint it."""
+        done, note = fit_upload_cap(dst)
+        if note:
+            print(f'   🗜  {dst.name}: {note}')
+        hashes[src.name] = _file_md5(dst)
+        if done:
+            shrunk[src.name] = hashes[src.name]
+        elif hashes[src.name] != shrunk.get(src.name):
+            shrunk.pop(src.name, None)
 
     # Flagged files go to their plain name for the run (reflagged at the end).
     # One whose content changed since we flagged it was blurred by hand: done.
@@ -919,7 +1039,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 if n <= 0:
                     needs[src.name] = True
             blurred[src.name] = want_blur
-            hashes[src.name] = _file_md5(dst)
+            fit(src, dst)
             adopted_n += 1
             continue
         if reblur and want_blur and dst.exists():
@@ -927,13 +1047,20 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             have_blur = False
         if dst.exists() and have_blur == want_blur:
             rec = hashes.get(src.name)
-            if rec is None:
-                # pulled before fingerprinting existed: adopt what's there
-                hashes[src.name] = _file_md5(dst)
-                continue
             cur = _file_md5(dst)
-            if cur == rec:
-                continue   # right place, right content
+            if rec is None or cur == rec:
+                # right place, right content (no fingerprint: pulled before
+                # fingerprinting existed, adopt what's there). An over-limit
+                # copy from before UPLOAD_CAP is shrunk now; a kept re-edit
+                # first leaves its clean file in .reedits_staged/ for backfill.
+                hashes[src.name] = cur
+                if _too_big(dst):
+                    if not want_blur and dst.stat().st_size != src.stat().st_size:
+                        keep = dest_dir / STAGED / f'reedit_{src.name}'
+                        keep.parent.mkdir(exist_ok=True)
+                        shutil.copy2(dst, keep)   # its own date: backfill checks it is newer
+                    fit(src, dst)
+                continue
             if want_blur and needs.get(src.name):
                 # a flagged copy blurred by hand (flag already dropped from the
                 # name): post-only, never a re-edit for Edits
@@ -943,7 +1070,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 continue
             note_reedit(found, ref, src, dst, dest_dir, dst, want_blur)
             if not want_blur:
-                hashes[src.name] = cur   # local re-edit kept, just remember it
+                fit(src, dst)   # local re-edit kept (shrunk if over the limit), just remember it
                 continue
             # blur-flagged copy was replaced (re-edit re-exported over it):
             # re-blur the NEW content in place so the re-edit survives.
@@ -954,7 +1081,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 needs[src.name] = True
             else:
                 needs.pop(src.name, None)
-            hashes[src.name] = _file_md5(dst)
+            fit(src, dst)
             copied += 1
             continue
         if parked.get(src.name):
@@ -982,7 +1109,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             print(f'   ⇣ {dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
         blurred[src.name] = want_blur
-        hashes[src.name] = _file_md5(dst)
+        fit(src, dst)
         copied += 1
     for _, ref, src, dst in plan:
         if not ref.get('blur'):
@@ -1202,14 +1329,30 @@ def sync_phone_dir(phone_dir, plan):
     except (OSError, ValueError):
         state = {}
     state.pop('manual_faces', None)   # retired hand-marking tool
+
+    def fit(src, dst):
+        """Bring a copy under UPLOAD_CAP; a shrunk one is remembered by its
+        source's size, which its own size no longer matches."""
+        done, note = fit_upload_cap(dst)
+        if note:
+            print(f'   🗜  Phone/{dst.name}: {note}')
+        if done:
+            state.setdefault('compressed', {})[dst.name] = src.stat().st_size
+
     copied = 0
     for _, ref, src, dst in plan:
         blur = dst.name.endswith('_blurred.jpg')
         if blur:
             state.setdefault('blurred', {})[dst.name.split('_', 1)[1]] = True
             if dst.exists() or flagged(dst).exists():
+                if _too_big(dst):
+                    fit(src, dst)   # blurred before UPLOAD_CAP existed
                 continue   # a flagged one is kept for blurring by hand
+        elif dst.exists() and state.get('compressed', {}).get(dst.name) == src.stat().st_size:
+            continue
         elif dst.exists() and dst.stat().st_size == src.stat().st_size:
+            if _too_big(dst):
+                fit(src, dst)   # copied before UPLOAD_CAP existed
             continue
         try:
             mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
@@ -1218,12 +1361,14 @@ def sync_phone_dir(phone_dir, plan):
         if blur:
             print(f'   ⇣ Phone/{dst.name}: copying + blurring faces{mb}...')
             n = blur_faces_file(src, dst)
+            fit(src, dst)
             if n <= 0:
                 dst.rename(flagged(dst))
                 print(f'      ⚠️  {blur_note(n)}')
         else:
             print(f'   ⇣ Phone/{dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
+            fit(src, dst)
         copied += 1
     if state:
         state_path.write_text(json.dumps(state, indent=1))
@@ -1316,7 +1461,8 @@ def cmd_pull(args):
             if cap_what:
                 print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
             for i, ref, src, dst in plan:
-                print(f"   {i:02d} {src}  →  {dst}")
+                big = '  (over 32 MB, shrunk to fit)' if _too_big(src) else ''
+                print(f"   {i:02d} {src}  →  {dst}{big}")
                 if ref.get('map'):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
                           f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
@@ -1567,6 +1713,15 @@ def cmd_backfill(args):
                     if diff > BLURRED_REEDIT_DIFF:
                         blurred_reedits.append((dst, diff))
                     continue
+                staged = d / STAGED / f'reedit_{src.name}'
+                if staged.exists():
+                    # a re-edit set aside clean before its post copy was shrunk
+                    if _sample_differs(src, staged):
+                        cands.setdefault(src, []).append((staged.stat().st_mtime, staged, r, d))
+                    continue
+                fit_md5 = state.get('compressed', {}).get(src.name)
+                if fit_md5 and fit_md5 == _file_md5(dst):
+                    continue   # shrunk to UPLOAD_CAP by a pull: not a re-edit
                 if _sample_differs(src, dst):
                     cands.setdefault(src, []).append((dst.stat().st_mtime, dst, r, d))
             if dirty:

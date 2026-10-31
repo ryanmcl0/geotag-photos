@@ -4,6 +4,9 @@ Everything for working with post drafts. Always takes a subcommand:
 
   ./post.py serve     local site + phone photos, kept in sync with the remote
   ./post.py pull      pull the drafts from the remote and copy their files
+                      into "IG <name>" or "XHS <name>" by platform, with
+                      "Posted " in front once marked posted (every pull
+                      renames all folders to match, even a one-post pull)
                       (plus a location card in <post>/maps/ for every photo
                       marked with the map button — see tools/map_card.py)
                       A photo over 32 MB (Xiaohongshu's upload limit) is
@@ -620,6 +623,42 @@ def blur_faces_file(src, dst):
 
 def sanitize(name):
     return re.sub(r'[\\/:*?"<>|]', '_', name).strip() or 'untitled'
+
+
+
+def post_dir(root, post, all_posts, move=True, quiet=False):
+    """<root>/IG <name> or <root>/XHS <name>, with "Posted " in front once the
+    draft is marked posted on the site. The platform prefix keeps an
+    Instagram draft and its Xiaohongshu copy (same name) out of each other's
+    folder. An existing folder under another of the draft's names is renamed
+    to fit, so its re-edits and pull state carry over: the same draft
+    before/after being marked posted, or one pulled before prefixes (plain
+    <name>), which goes to the IG draft of that name, or the XHS one when
+    there is no IG draft; any other draft starts fresh."""
+    name = sanitize(post['name'])
+    plat = f"{'XHS' if post.get('platform') == 'xhs' else 'IG'} {name}"
+    new = root / (f'Posted {plat}' if post.get('posted') else plat)
+    if new.exists():
+        return new
+    olds = [root / plat, root / f'Posted {plat}']
+    same = [q for q in all_posts if sanitize(q['name']) == name]
+    heir = next((q for q in same if q.get('platform') != 'xhs'), same[0] if same else None)
+    if heir is post:
+        olds.append(root / name)
+    for old in olds:
+        if old == new or not (old / 'manifest.json').exists():
+            continue
+        if quiet:
+            break
+        if move:
+            old.rename(new)
+            if old.name == name:
+                (new / f'{name}.lrsmcol').unlink(missing_ok=True)   # rewritten under the new name
+            print(f'   ↷ {old.name}/ renamed to {new.name}/')
+        else:
+            print(f'   ↷ {old.name}/ will be renamed to {new.name}/')
+        break
+    return new
 
 
 @contextlib.contextmanager
@@ -1428,11 +1467,16 @@ def cmd_pull(args):
         return
 
     print(f"📥 {len(posts)} post draft(s) (state v{doc.get('version')})\n")
+    # Every draft's folder follows its name, platform and posted mark, even on
+    # a pull of one post: renames only, the photos sync below as usual.
+    for post in doc.get('posts', []):
+        post_dir(Path(args.dest), post, doc.get('posts', []),
+                 move=not (args.list or args.dry_run))
     unresolved = 0
     found = []   # re-edits to confirm for write-back to Edits
     for post in posts:
-        name = sanitize(post['name'])
-        dest_dir = Path(args.dest) / name
+        dest_dir = post_dir(Path(args.dest), post, doc.get('posts', []), move=False, quiet=True)
+        name = dest_dir.name
         tag = f"#{post['num']} " if post.get('num') else ''
         acct = f" @{post['account']}" if post.get('account') else ''
         n_wait = len(post.get('waitlist') or [])
@@ -1612,7 +1656,7 @@ def cmd_pull(args):
             from lr_smart_collection import write_lrsmcol
             lr_out = dest_dir / f'{name}.lrsmcol'
             notes = []
-            n_rules, undated = write_lrsmcol([dst for _, _, _, dst in plan], post['name'],
+            n_rules, undated = write_lrsmcol([dst for _, _, _, dst in plan], name,
                                              lr_out, cached_capture_dates(plan), notes)
             print(f"   ✓ Lightroom smart collection → {lr_out}")
             for f, why in notes:

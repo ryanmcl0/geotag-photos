@@ -185,5 +185,60 @@ class PullShrinks(unittest.TestCase):
         self.assertLessEqual(self.dst.stat().st_size, P.UPLOAD_CAP)
 
 
+class PostDir(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.ig = {'name': 'Trip', 'photos': []}
+        self.xhs = {'name': 'Trip', 'photos': [], 'platform': 'xhs'}
+
+    def test_prefix_by_platform(self):
+        self.assertEqual(P.post_dir(self.root, self.ig, [self.ig]).name, 'IG Trip')
+        self.assertEqual(P.post_dir(self.root, self.xhs, [self.xhs]).name, 'XHS Trip')
+
+    def test_old_folder_goes_to_the_ig_draft_even_when_xhs_pulls_first(self):
+        (self.root / 'Trip').mkdir()
+        (self.root / 'Trip' / 'manifest.json').write_text('{}')
+        both = [self.xhs, self.ig]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(P.post_dir(self.root, self.xhs, both).name, 'XHS Trip')
+            self.assertTrue((self.root / 'Trip').exists())
+            P.post_dir(self.root, self.ig, both)
+        self.assertTrue((self.root / 'IG Trip' / 'manifest.json').exists())
+        self.assertFalse((self.root / 'Trip').exists())
+
+    def test_old_folder_goes_to_xhs_when_there_is_no_ig_draft(self):
+        (self.root / 'Trip').mkdir()
+        (self.root / 'Trip' / 'manifest.json').write_text('{}')
+        with contextlib.redirect_stdout(io.StringIO()):
+            P.post_dir(self.root, self.xhs, [self.xhs])
+        self.assertTrue((self.root / 'XHS Trip' / 'manifest.json').exists())
+
+    def test_dry_run_moves_nothing(self):
+        (self.root / 'Trip').mkdir()
+        (self.root / 'Trip' / 'manifest.json').write_text('{}')
+        with contextlib.redirect_stdout(io.StringIO()):
+            P.post_dir(self.root, self.ig, [self.ig], move=False)
+        self.assertTrue((self.root / 'Trip').exists())
+
+    def test_posted_prefix_follows_the_mark_both_ways(self):
+        (self.root / 'IG Trip').mkdir()
+        (self.root / 'IG Trip' / 'manifest.json').write_text('{}')
+        self.ig['posted'] = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(P.post_dir(self.root, self.ig, [self.ig]).name, 'Posted IG Trip')
+            self.assertTrue((self.root / 'Posted IG Trip' / 'manifest.json').exists())
+            self.ig['posted'] = False
+            P.post_dir(self.root, self.ig, [self.ig])
+        self.assertTrue((self.root / 'IG Trip' / 'manifest.json').exists())
+        self.assertFalse((self.root / 'Posted IG Trip').exists())
+
+    def test_old_plain_folder_goes_straight_to_posted(self):
+        (self.root / 'Trip').mkdir()
+        (self.root / 'Trip' / 'manifest.json').write_text('{}')
+        self.ig['posted'] = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            P.post_dir(self.root, self.ig, [self.ig])
+        self.assertTrue((self.root / 'Posted IG Trip' / 'manifest.json').exists())
+
 if __name__ == '__main__':
     unittest.main()

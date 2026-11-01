@@ -35,8 +35,16 @@ sync_posts() {
     ( cd "$REPO" && nohup ./post.py mirror --port "$PORT" >>local_browse/serve_site.log 2>&1 & )
   fi
 }
+# Posts ▸ Reels helper (tools/reels_local.py): start it if a server that was
+# already up predates it.
+reels_helper() {
+  curl -s -o /dev/null --max-time 2 "http://127.0.0.1:8791/reels/state" && return 0
+  ( cd "$REPO" && nohup python3 tools/reels_local.py --port 8791 >>local_browse/serve_site.log 2>&1 & )
+  say "reels helper started"
+}
 if curl -s -o /dev/null --max-time 2 "$URL"; then
   sync_posts
+  reels_helper
   open "$URL" && say "server up — opened new tab" || { say "open failed"; alert "Could not open the browser"; }
   exit 0
 fi

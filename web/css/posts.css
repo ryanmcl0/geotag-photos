@@ -475,69 +475,87 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 /* Nothing under it on this slide — drop back down so it isn't floating. */
 .posts-badge--lightbox.is-low { bottom: 22px; }
 
-/* ---------- Reels tab (posts-reels.js, localhost only) ---------- */
-.reels-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 14px; }
-.reels-chip {
-  background: none; border: 1px solid #333; border-radius: 999px; color: #999;
-  font-size: 12px; font-weight: 600; padding: 5px 12px; cursor: pointer;
+/* ---------- Reels tab (posts-reels.js, localhost only; cards from reels.css) ---------- */
+.reels-how { color: #889; font-size: 13px; line-height: 1.5; margin: 0 0 10px; max-width: 760px; }
+.reels-empty { color: #aaa; font-size: 14px; margin: 18px 0; }
+.reels-layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 28px; align-items: start; }
+.reels-side { position: sticky; top: 14px; }
+.reels-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+.reels-export-btn {
+  background: #fff; color: #111; border: 0; border-radius: 999px; font-weight: 700; font-size: 13px;
+  padding: 7px 16px; cursor: pointer;
 }
-.reels-chip:hover { color: #fff; }
-.reels-chip.active { border-color: #4667a8; color: #fff; background: #1c2537; }
-.reels-how { color: #889; font-size: 13px; line-height: 1.5; margin: 0 0 8px; max-width: 760px; }
-.reels-week {
-  font-size: 13px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  color: #9ab; margin: 20px 0 8px; border-bottom: 1px solid #2a2a2a; padding-bottom: 6px;
+.reels-export-btn:disabled { opacity: .4; cursor: default; }
+.reels-mini {
+  background: none; border: 1px solid #3a3a3a; border-radius: 6px; color: #bbb; font-size: 12px;
+  padding: 4px 9px; cursor: pointer;
 }
-.reels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
-.reels-card {
-  display: flex; gap: 14px; background: #161616; border: 1px solid #262626; border-radius: 10px;
-  padding: 10px; margin: 0 0 8px;
+.reels-mini:hover:not(:disabled) { color: #fff; border-color: #666; }
+.reels-mini:disabled { opacity: .35; cursor: default; }
+.reels-row {
+  display: grid; grid-template-columns: 34px 120px minmax(0, 1fr); gap: 14px;
+  background: #161616; border: 1px solid #262626; border-radius: 10px; padding: 10px; margin: 0 0 10px;
+  transition: box-shadow .3s;
 }
-.reels-grid .reels-card { margin: 0; }
-.reels-card.posted { opacity: .55; }
-.reels-thumb {
-  position: relative; flex: 0 0 auto; width: 90px; height: 160px; padding: 0; border: 0;
-  border-radius: 7px; overflow: hidden; background: #000; cursor: pointer;
+.reels-row.posted { opacity: .6; }
+.reels-row.flash { box-shadow: 0 0 0 2px #8ab4ff; }
+.reels-row-side { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 4px; }
+.reels-row-n { color: #8ab4ff; font-weight: 700; font-size: 13px; }
+.reels-row-screen { border-radius: 10px; }
+.reels-row-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.reels-row-body .reel-title { font-size: 15px; font-weight: 600; }
+.reels-caption {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 84px;
+  background: #0f0f0f; color: #ddd; border: 1px solid #333; border-radius: 6px;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; padding: 8px;
 }
-.reels-thumb video, .reels-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.reels-play {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 22px; text-shadow: 0 1px 6px rgba(0,0,0,.7); opacity: .85;
+.reels-row-acts { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.reels-posted { color: #aaa; font-size: 12.5px; cursor: pointer; margin-right: 6px; }
+.reels-export-badge { font-size: 11.5px; border-radius: 4px; padding: 2px 7px; background: #2a2a2a; color: #ccc; }
+.reels-export-badge.done { background: #1f4a2c; color: #cfe; }
+.reels-export-badge.failed { background: #5a2020; color: #fcc; }
+.reels-export-badge.queued, .reels-export-badge.running { background: #1f3a5c; color: #cde; }
+
+/* the phone: profile preview */
+.reels-phone-switch { display: flex; gap: 6px; margin: 0 0 10px; justify-content: center; }
+.reels-phone {
+  width: 375px; max-width: 100%; margin: 0 auto; border-radius: 44px; padding: 12px;
+  background: #050505; box-shadow: 0 0 0 2px #333, 0 10px 40px rgba(0,0,0,.6); box-sizing: border-box;
 }
-.reels-thumb:hover .reels-play { opacity: 1; }
-.reels-dur {
-  position: absolute; right: 4px; bottom: 4px; background: rgba(0,0,0,.65); color: #ddd;
-  font-size: 10px; border-radius: 4px; padding: 1px 4px;
+.reels-phone-screen {
+  height: 700px; max-height: 78vh; overflow-y: auto; border-radius: 34px; background: #000;
+  padding: 30px 0 10px; box-sizing: border-box; scrollbar-width: none;
 }
-.reels-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
-.reels-date { color: #8ab4ff; font-size: 12px; font-weight: 600; }
-.reels-date.due { color: #ffb066; }
-.reels-title { color: #eee; font-size: 15px; font-weight: 600; }
-.reels-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; color: #888; font-size: 12px; align-items: center; }
-.reels-kind { border-radius: 4px; padding: 1px 6px; font-weight: 600; color: #ddd; background: #2a2a2a; }
-.reels-kind-earth_zoom { background: #1f3a5c; }
-.reels-kind-compilation { background: #4a2f5c; }
-.reels-kind-vlog_cut { background: #2f4a33; }
-.reels-kind-one_shot { background: #4a3f22; }
-.reels-note { font-style: italic; }
-.reels-alts { display: flex; flex-wrap: wrap; gap: 6px; }
-.reels-alt {
-  background: #1d1d1d; border: 1px solid #3a3a3a; border-radius: 6px; color: #bbb;
-  font-size: 11px; padding: 3px 8px; cursor: pointer;
+.reels-phone-screen::-webkit-scrollbar { display: none; }
+.reels-phone-head { display: flex; align-items: center; gap: 18px; padding: 0 16px; }
+.reels-phone-avatar {
+  width: 74px; height: 74px; border-radius: 50%; flex: 0 0 auto; background: #222 center / cover;
+  box-shadow: 0 0 0 2px #000, 0 0 0 4px #444;
 }
-.reels-alt:hover { color: #fff; border-color: #555; }
-.reels-caption summary { color: #9ab; font-size: 12px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
-.reels-caption pre {
-  white-space: pre-wrap; font: 12px/1.45 -apple-system, sans-serif; color: #bbb;
-  background: #111; border-radius: 6px; padding: 8px; margin: 6px 0 0;
+.reels-phone-stats { display: flex; flex: 1; justify-content: space-around; }
+.reels-phone-stat { display: flex; flex-direction: column; align-items: center; color: #fff; font-size: 12px; }
+.reels-phone-stat b { font-size: 16px; }
+.reels-phone-name { color: #fff; font-weight: 600; font-size: 13px; padding: 10px 16px 12px; }
+.reels-phone-tabs { display: flex; border-top: 1px solid #262626; }
+.reels-phone-tabs span { flex: 1; text-align: center; color: #666; padding: 8px 0; font-size: 16px; }
+.reels-phone-tabs span.on { color: #fff; box-shadow: inset 0 -1px 0 #fff; }
+.reels-phone-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+.reels-phone-tile { position: relative; padding: 0; border: 0; background: #111; cursor: pointer; overflow: hidden; }
+.reels-phone-grid.tall916 .reels-phone-tile { aspect-ratio: 9 / 16; }
+.reels-phone-grid.tall34 .reels-phone-tile { aspect-ratio: 3 / 4; }
+.reels-phone-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.reels-phone-tile:not(.posted) img { opacity: .82; }
+.reels-phone-n {
+  position: absolute; top: 4px; left: 4px; font-size: 10px; font-weight: 700; color: #fff;
+  background: rgba(0,0,0,.55); border-radius: 3px; padding: 0 4px;
 }
-.reels-copy {
-  background: none; border: 1px solid #3a3a3a; border-radius: 5px; color: #aaa; font-size: 11px;
-  padding: 1px 7px; cursor: pointer;
+.reels-phone-tile.posted .reels-phone-n { background: #2a7a3f; }
+.reels-phone-dur {
+  position: absolute; bottom: 4px; left: 5px; font-size: 10.5px; color: #fff; text-shadow: 0 1px 3px #000;
 }
-.reels-posted { color: #999; font-size: 12px; margin-top: auto; cursor: pointer; }
-.reels-done > summary { color: #889; font-size: 13px; cursor: pointer; margin: 18px 0 8px; }
-@media (max-width: 640px) {
-  .reels-grid { grid-template-columns: 1fr; }
-  .reels-thumb { width: 72px; height: 128px; }
+.reels-phone-empty { grid-column: 1 / -1; color: #777; text-align: center; font-size: 13px; padding: 30px 0; }
+@media (max-width: 900px) {
+  .reels-layout { grid-template-columns: 1fr; }
+  .reels-side { position: static; order: -1; }
+  .reels-row { grid-template-columns: 26px 96px minmax(0, 1fr); gap: 10px; }
 }

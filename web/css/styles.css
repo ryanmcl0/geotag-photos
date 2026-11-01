@@ -1935,10 +1935,44 @@ details[open] .country-summary::after {
 }
 
 /* Day banner: "Day 3 · Jinchang → Jiayuguan", then its date and regions */
-.gallery-date-banner { flex-wrap: wrap; row-gap: 2px; }
 .gallery-date-banner .gallery-date-when {
     font-size: 0.8rem;
     color: #777;
+}
+
+/* Each day's banner stays pinned directly under the pinned filter bar while
+   that day's photos scroll, then hands over to the next day's. One line: the
+   date/regions shrink first, then the day name; the count never truncates.
+   --kindbar-h is the filter bar's height (set by gallery-page.js; 0 when a
+   trip has no camera/drone split). top is measured from the gallery's
+   content edge, hence the minus its top padding. */
+.gallery-day { margin-top: 18px; }
+.gallery-day:first-child { margin-top: 0; }
+.gallery-day > .gallery-date-banner {
+    position: sticky;
+    top: calc(var(--kindbar-h, 0px) - 18px);
+    z-index: 15;
+    margin: 0 -22px 10px;
+    padding: 10px 22px 8px;
+    background: #fff;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.gallery-day > .gallery-date-banner .gallery-date-label {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.gallery-day > .gallery-date-banner .gallery-date-when {
+    flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.gallery-day > .gallery-date-banner .gallery-date-count { flex: none; }
+.theme-dark .gallery-day > .gallery-date-banner { background: #111; }
+@media (max-width: 768px) {
+    .gallery-day > .gallery-date-banner {
+        top: calc(var(--kindbar-h, 0px) - 14px);
+        margin: 0 -12px 8px;
+        padding: 8px 12px 6px;
+    }
 }
 .theme-dark .gallery-date-banner .gallery-date-when { color: rgba(255, 255, 255, 0.55); }
 

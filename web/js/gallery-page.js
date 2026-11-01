@@ -95,9 +95,14 @@
             banner.firstChild.textContent = g.label;
             if (g.date) banner.querySelector('.gallery-date-when').textContent = g.date;
             if (g.dayN) banner.id = `day-${g.dayN}`;
-            container.appendChild(banner);
+            // banner + its photos in one section: the banner sticks under the
+            // filter bar while its photos scroll, and the next day's takes over
+            const section = document.createElement('section');
+            section.className = 'gallery-day';
+            section.appendChild(banner);
+            container.appendChild(section);
             const sub = document.createElement('div');
-            container.appendChild(sub);
+            section.appendChild(sub);
             Gallery.renderGrid(sub, g.photos, Object.assign({}, opts, { nav }));
         });
     }
@@ -436,7 +441,14 @@
             const top = flow.offsetTop - kindBar.offsetHeight;
             if (view && view.scrollTop > top) view.scrollTop = top;
         });
-        if (kindBar) grid.appendChild(kindBar);
+        if (kindBar) {
+            grid.appendChild(kindBar);
+            // the pinned day headings sit directly under the pinned filter bar
+            const view = document.getElementById('gallery-view');
+            const setH = () => view && view.style.setProperty('--kindbar-h', kindBar.offsetHeight + 'px');
+            setH();
+            if (window.ResizeObserver) new ResizeObserver(setH).observe(kindBar);
+        }
         const flow = document.createElement('div');
         grid.appendChild(flow);
         renderByDate(flow, photos, { emptyText: 'No photos in this trip yet.', dayDates });

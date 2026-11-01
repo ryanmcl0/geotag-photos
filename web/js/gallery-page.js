@@ -64,13 +64,18 @@
         }
 
         // Category photos group by the trip they came from rather than by day.
-        const groups = [];
+        let groups = [];
         for (const p of photos) {
             const key = p.group || p.date;
             const last = groups[groups.length - 1];
             if (last && last.key === key) last.photos.push(p);
             else groups.push({ key, label: p.group || formatDateBanner(p.date), photos: [p] });
         }
+
+        // Trips whose raw footage sits in "Day N [Regions] A - B" folders group
+        // by those days instead: "Day 3 · Jinchang → Jiayuguan", with the date.
+        const dayGroups = dayGrouping(photos, opts);
+        if (dayGroups) groups = dayGroups;
 
         if (groups.length < 2) {
             Gallery.renderGrid(container, photos, opts);
@@ -84,13 +89,41 @@
             const banner = document.createElement('div');
             banner.className = 'gallery-date-banner';
             banner.innerHTML =
-                `<span class="gallery-date-label">${g.label}</span>` +
+                `<span class="gallery-date-label"></span>` +
+                (g.date ? `<span class="gallery-date-when"></span>` : '') +
                 `<span class="gallery-date-count">${g.photos.length} photo${g.photos.length === 1 ? '' : 's'}</span>`;
+            banner.firstChild.textContent = g.label;
+            if (g.date) banner.querySelector('.gallery-date-when').textContent = g.date;
+            if (g.dayN) banner.id = `day-${g.dayN}`;
             container.appendChild(banner);
             const sub = document.createElement('div');
             container.appendChild(sub);
             Gallery.renderGrid(sub, g.photos, Object.assign({}, opts, { nav }));
         });
+    }
+
+    function dayGrouping(photos, opts) {
+        if (!window.TripDays || photos.some(p => p.group)) return null;
+        const { days, rest } = TripDays.group(photos, p => p.folder);
+        if (days.length < 2 && !(days.length && rest.length)) return null;
+        const dates = (opts && opts.dayDates) || {};
+        const out = days.map(g => ({
+            key: 'day' + g.n,
+            dayN: g.n,
+            label: g.info.label,
+            date: [formatDateBanner(dates[g.n] || g.date), g.info.regions.join(', ')].filter(Boolean).join(' · '),
+            first: g.photos[0].timestamp || '',
+            photos: g.photos
+        }));
+        // Photos outside any day folder keep their date banners, in time order.
+        rest.forEach(p => {
+            const key = 'date' + p.date;
+            let g = out.find(x => x.key === key);
+            if (!g) out.push(g = { key, label: formatDateBanner(p.date), first: p.timestamp || '', photos: [] });
+            g.photos.push(p);
+        });
+        if (rest.length) out.sort((a, b) => a.first.localeCompare(b.first));
+        return out;
     }
 
     // Hand-picked highlight photos (web/collections/gallery_highlights.json,
@@ -364,8 +397,10 @@
                 trip: p.trip || trip.id,
                 id: p.id,
                 ar: p.ar,
-                title: p.note || p.building || '',
+                title: p.note || (window.TripDays ? TripDays.pretty(p.building) : p.building) || '',
                 date: (p.timestamp || '').slice(0, 10),
+                timestamp: p.timestamp || '',
+                folder: p.building || '',
                 group: trip.category ? (p.trip_name || ' ') : undefined
             }));
 
@@ -376,6 +411,12 @@
         );
 
         const highlights = await loadHighlights(trip.id, photos);
+        // The reel feeder's per-day dates (localhost only; taken from the footage).
+        const dayDates = {};
+        if (window.TripDays) {
+            const local = (await TripDays.loadLocal())[trip.id];
+            ((local && local.days) || []).forEach(d => { if (d.date) dayDates[d.n] = d.date; });
+        }
 
         await ensureAspectRatios(photos);
         grid.innerHTML = '';
@@ -383,7 +424,7 @@
         const kindBar = Gallery.buildKindBar(photos, k => {
             renderByDate(flow, k === 'all' ? photos
                 : photos.filter(p => Gallery.photoKind(p) === k),
-                { emptyText: 'No photos of this kind in this trip.' });
+                { emptyText: 'No photos of this kind in this trip.', dayDates });
             // Picked from the pinned bar further down: start the new set at its top.
             const view = document.getElementById('gallery-view');
             const top = flow.offsetTop - kindBar.offsetHeight;
@@ -392,7 +433,7 @@
         if (kindBar) grid.appendChild(kindBar);
         const flow = document.createElement('div');
         grid.appendChild(flow);
-        renderByDate(flow, photos, { emptyText: 'No photos in this trip yet.' });
+        renderByDate(flow, photos, { emptyText: 'No photos in this trip yet.', dayDates });
     }
 
     if (document.readyState === 'loading') {

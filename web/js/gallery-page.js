@@ -154,10 +154,15 @@
         banner.innerHTML =
             `<span class="gallery-date-label">✦ Highlights</span>` +
             `<span class="gallery-date-count">${photos.length} photo${photos.length === 1 ? '' : 's'}</span>`;
-        container.appendChild(banner);
+        // own section so the line pins while the highlights scroll (the filter
+        // bar below them isn't pinned yet), then gives way to the bar and days
+        const section = document.createElement('section');
+        section.className = 'gallery-day gallery-highlights-section';
+        section.appendChild(banner);
+        container.appendChild(section);
         const sub = document.createElement('div');
         sub.className = 'gallery-highlights-grid';
-        container.appendChild(sub);
+        section.appendChild(sub);
         Gallery.renderGrid(sub, photos);
     }
 

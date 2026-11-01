@@ -1967,11 +1967,21 @@ details[open] .country-summary::after {
 }
 .gallery-day > .gallery-date-banner .gallery-date-count { flex: none; }
 .theme-dark .gallery-day > .gallery-date-banner { background: #111; }
+/* Highlights come above the filter bar, which isn't pinned yet while they
+   scroll: their line pins at the very top instead. */
+.gallery-highlights-section > .gallery-date-banner { top: -18px; }
+.gallery-highlights-section { margin-bottom: 36px; }
+.gallery-highlights-section .gallery-highlights-grid { margin-bottom: 0; }
 @media (max-width: 768px) {
     .gallery-day > .gallery-date-banner {
         top: calc(var(--kindbar-h, 0px) - 14px);
         margin: 0 -12px 8px;
         padding: 8px 12px 6px;
+    }
+    .gallery-highlights-section > .gallery-date-banner {
+        top: -14px;
+        min-height: 44px; align-items: center;
+        padding-left: 64px;          /* clear the floating menu button */
     }
 }
 .theme-dark .gallery-date-banner .gallery-date-when { color: rgba(255, 255, 255, 0.55); }

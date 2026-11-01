@@ -100,6 +100,7 @@
             const section = document.createElement('section');
             section.className = 'gallery-day';
             section.appendChild(banner);
+            makeJumpable(banner);
             container.appendChild(section);
             const sub = document.createElement('div');
             section.appendChild(sub);
@@ -148,6 +149,129 @@
         }
     }
 
+    // ── Day jump menu ──────────────────────────────────────────────────────
+    // Every section heading (Highlights, each day) is also a button: it opens a
+    // list of all the sections on the page (as currently filtered) and choosing
+    // one scrolls there, its heading landing pinned under the filter bar.
+    let dayMenu = null;
+
+    function makeJumpable(banner) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'gallery-day-btn';
+        btn.setAttribute('aria-haspopup', 'menu');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.title = 'Jump to another day';
+        while (banner.firstChild) btn.appendChild(banner.firstChild);
+        const chev = document.createElement('span');
+        chev.className = 'gallery-day-chev';
+        chev.setAttribute('aria-hidden', 'true');
+        chev.textContent = '▾';
+        btn.appendChild(chev);
+        banner.appendChild(btn);
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            if (dayMenu && dayMenu.owner === btn) closeDayMenu(true);
+            else openDayMenu(btn, banner);
+        });
+        btn.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); openDayMenu(btn, banner); }
+        });
+    }
+
+    function closeDayMenu(refocus) {
+        if (!dayMenu) return;
+        const { el, owner, cleanup } = dayMenu;
+        dayMenu = null;
+        cleanup();
+        el.remove();
+        owner.setAttribute('aria-expanded', 'false');
+        if (refocus) owner.focus();
+    }
+
+    function jumpTo(section) {
+        const view = document.getElementById('gallery-view');
+        if (!view) return;
+        // land with the section's heading in its pinned spot: under the filter
+        // bar for days (the bar is pinned by then), at the very top for the
+        // Highlights, which come before the bar
+        const under = section.classList.contains('gallery-highlights-section') ? 0
+            : (parseFloat(getComputedStyle(view).getPropertyValue('--kindbar-h')) || 0);
+        view.scrollTop = Math.max(0, section.offsetTop - under);
+    }
+
+    function openDayMenu(btn, banner) {
+        closeDayMenu(false);
+        const view = document.getElementById('gallery-view');
+        const sections = [...document.querySelectorAll('#gallery-grid section.gallery-day')];
+        if (!sections.length) return;
+        const current = banner.closest('section.gallery-day');
+        const menu = document.createElement('div');
+        menu.className = 'gallery-day-menu';
+        menu.setAttribute('role', 'menu');
+        const items = sections.map(sec => {
+            const b = sec.querySelector('.gallery-date-banner');
+            const txt = sel => { const n = b && b.querySelector(sel); return n ? n.textContent : ''; };
+            const it = document.createElement('button');
+            it.type = 'button';
+            it.className = 'gallery-day-item' + (sec === current ? ' current' : '');
+            it.setAttribute('role', 'menuitem');
+            if (sec === current) it.setAttribute('aria-current', 'true');
+            const l = document.createElement('span');
+            l.className = 'gallery-day-item-label';
+            l.textContent = txt('.gallery-date-label');
+            const sub = document.createElement('span');
+            sub.className = 'gallery-day-item-sub';
+            sub.textContent = [txt('.gallery-date-when'), txt('.gallery-date-count')].filter(Boolean).join(' · ');
+            it.append(l, sub);
+            it.addEventListener('click', e => {
+                e.stopPropagation();
+                closeDayMenu(false);
+                jumpTo(sec);
+                const nb = sec.querySelector('.gallery-day-btn');
+                if (nb) nb.focus({ preventScroll: true });
+            });
+            menu.appendChild(it);
+            return it;
+        });
+        document.body.appendChild(menu);
+        const r = banner.getBoundingClientRect();
+        const width = Math.min(440, r.width, window.innerWidth - 16);
+        menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - width - 8))}px`;
+        menu.style.top = `${r.bottom + 4}px`;
+        menu.style.width = `${width}px`;
+        menu.style.maxHeight = `${Math.max(160, window.innerHeight - r.bottom - 16)}px`;
+        const cur = items[sections.indexOf(current)] || items[0];
+        cur.scrollIntoView({ block: 'nearest' });
+        cur.focus({ preventScroll: true });
+
+        const onKey = e => {
+            const i = items.indexOf(document.activeElement);
+            if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeDayMenu(true); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); items[Math.min(items.length - 1, i + 1)].focus(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); items[Math.max(0, i - 1)].focus(); }
+            else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+            else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+            else if (e.key === 'Tab') closeDayMenu(false);
+        };
+        const onDown = e => { if (!menu.contains(e.target) && !btn.contains(e.target)) closeDayMenu(false); };
+        const onScroll = () => closeDayMenu(false);
+        const onResize = () => closeDayMenu(false);
+        document.addEventListener('keydown', onKey, true);
+        document.addEventListener('pointerdown', onDown, true);
+        if (view) view.addEventListener('scroll', onScroll, { passive: true });
+        window.addEventListener('resize', onResize);
+        btn.setAttribute('aria-expanded', 'true');
+        dayMenu = {
+            el: menu, owner: btn, cleanup: () => {
+                document.removeEventListener('keydown', onKey, true);
+                document.removeEventListener('pointerdown', onDown, true);
+                if (view) view.removeEventListener('scroll', onScroll);
+                window.removeEventListener('resize', onResize);
+            }
+        };
+    }
+
     function renderHighlights(container, photos) {
         const banner = document.createElement('div');
         banner.className = 'gallery-date-banner gallery-highlights-banner';
@@ -159,6 +283,7 @@
         const section = document.createElement('section');
         section.className = 'gallery-day gallery-highlights-section';
         section.appendChild(banner);
+        makeJumpable(banner);
         container.appendChild(section);
         const sub = document.createElement('div');
         sub.className = 'gallery-highlights-grid';

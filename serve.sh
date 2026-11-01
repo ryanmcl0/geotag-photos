@@ -42,6 +42,7 @@ fi
 # Set POSTS_MIRROR=0 to skip it (./post.py serve does, since it mirrors itself).
 MIRROR_PID=""
 WRANGLER_PID=""
+REELS_PID=""
 
 # Stop the mirror first and give it a moment: its final push needs the dev server
 # it reads from to still be alive. Then stop wrangler. Killing this script has to
@@ -68,6 +69,7 @@ shutdown() {
         done
     fi
     [ -n "$WRANGLER_PID" ] && kill_tree "$WRANGLER_PID"
+    [ -n "$REELS_PID" ] && kill "$REELS_PID" 2>/dev/null
     return 0
 }
 trap shutdown EXIT INT TERM
@@ -78,6 +80,12 @@ if [ "${POSTS_MIRROR:-1}" != "0" ] && [ -n "$CF_POSTS_PASSWORD" ] && [ -n "$CF_P
 elif [ "${POSTS_MIRROR:-1}" != "0" ]; then
     echo "⚠️  posts not synced: CF_POSTS_PASSWORD / CF_PAGES_PROJECT missing from .env.deploy"
 fi
+
+# Posts ▸ Reels (localhost only): the dev server can't write files, so a tiny helper
+# on 127.0.0.1:8791 keeps the reel posting state and the 4K export requests in
+# web/phone/reels/ (tools/reels_local.py). It exits at once if one is already up.
+python3 tools/reels_local.py --port 8791 &
+REELS_PID=$!
 
 # Same runtime version as production (deploy.py COMPATIBILITY_DATE).
 COMPAT_DATE=$(sed -nE "s/^COMPATIBILITY_DATE = '(.+)'$/\\1/p" deploy.py)

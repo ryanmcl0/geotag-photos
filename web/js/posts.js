@@ -1074,8 +1074,8 @@ window.Posts = (function () {
 
     // Which manager tab is showing: 'ig' / 'xhs' (hand-made drafts by
     // platform), 'auto' (suggestions from tools/auto_curate_posts.py) or
-    // 'reels' (the video pipeline's reels and their posting schedule, localhost
-    // only: posts-reels.js).
+    // 'reels' (the video pipeline's reels picked for posting, with a phone
+    // profile preview and the 4K export; localhost only: posts-reels.js).
     let activeTab = 'ig';
     let reelsDoc = null;
     try {
@@ -1130,7 +1130,7 @@ window.Posts = (function () {
         [['ig', `Instagram (${igCount})`],
          ['xhs', `Xiaohongshu (${xhsCount})`],
          ['auto', `Auto curated (${autoCount})`],
-         ...(reelsDoc ? [['reels', `Reels (${reelsDoc.reels.filter(r => r.kind !== 'one_shot').length})`]] : [])
+         ...(reelsDoc ? [['reels', `Reels (${PostsReels.count()})`]] : [])
         ].forEach(([id, label]) => {
             const b = document.createElement('button');
             b.type = 'button';

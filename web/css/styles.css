@@ -1903,6 +1903,136 @@ details[open] .country-summary::after {
     white-space: nowrap;
 }
 
+/* All / Camera / Drone filter: stays pinned to the top of the scrolling
+   page so the choice is in reach anywhere down a long trip. On the trip
+   gallery the negative margins + matching padding stretch its background over
+   the gallery's side padding, so photos never show beside it underneath. */
+.kindbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 8px 0;
+    background: #fff;
+}
+.theme-dark .kindbar {
+    background: #111;
+    box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.9);
+}
+.gallery-view .kindbar {
+    top: -18px;
+    margin-left: -22px !important;
+    margin-right: -22px !important;
+    padding: 12px 22px 10px;
+}
+@media (max-width: 768px) {
+    .gallery-view .kindbar {
+        top: -14px;
+        margin-left: -12px !important;
+        margin-right: -12px !important;
+        /* clear the floating menu button top-left */
+        padding: 10px 12px 8px 64px;
+    }
+}
+
+/* Day banner: "Day 3 · Jinchang → Jiayuguan", then its date and regions */
+.gallery-date-banner .gallery-date-when {
+    font-size: 0.8rem;
+    color: #777;
+}
+
+/* Each day's banner stays pinned directly under the pinned filter bar while
+   that day's photos scroll, then hands over to the next day's. One line: the
+   date/regions shrink first, then the day name; the count never truncates.
+   --kindbar-h is the filter bar's height (set by gallery-page.js; 0 when a
+   trip has no camera/drone split). top is measured from the gallery's
+   content edge, hence the minus its top padding. */
+.gallery-day { margin-top: 18px; }
+.gallery-day:first-child { margin-top: 0; }
+.gallery-day > .gallery-date-banner {
+    position: sticky;
+    top: calc(var(--kindbar-h, 0px) - 18px);
+    z-index: 15;
+    margin: 0 -22px 10px;
+    padding: 10px 22px 8px;
+    background: #fff;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.gallery-day > .gallery-date-banner .gallery-date-label {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.gallery-day > .gallery-date-banner .gallery-date-when {
+    flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.gallery-day > .gallery-date-banner .gallery-date-count { flex: none; }
+.theme-dark .gallery-day > .gallery-date-banner { background: #111; }
+/* Highlights come above the filter bar, which isn't pinned yet while they
+   scroll: their line pins at the very top instead. */
+.gallery-highlights-section > .gallery-date-banner { top: -18px; }
+.gallery-highlights-section { margin-bottom: 36px; }
+.gallery-highlights-section .gallery-highlights-grid { margin-bottom: 0; }
+@media (max-width: 768px) {
+    .gallery-day > .gallery-date-banner {
+        top: calc(var(--kindbar-h, 0px) - 14px);
+        margin: 0 -12px 8px;
+        padding: 8px 12px 6px;
+    }
+    .gallery-highlights-section > .gallery-date-banner {
+        top: -14px;
+        min-height: 44px; align-items: center;
+        padding-left: 64px;          /* clear the floating menu button */
+    }
+}
+.theme-dark .gallery-date-banner .gallery-date-when { color: rgba(255, 255, 255, 0.55); }
+
+/* Map, one trip: numbered day badges + the Days list (trip-days.js) */
+.trip-day-badge span {
+    display: flex; align-items: center; justify-content: center;
+    width: 50px; height: 20px; border-radius: 4px; box-sizing: border-box;
+    background: #111; color: #fff; border: 1.5px solid #fff;
+    font: 600 10.5px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    letter-spacing: 0.02em; white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+}
+.leaflet-top.leaflet-right .trip-days-panel { margin-top: 56px; }
+.trip-days-panel {
+    background: rgba(255, 255, 255, 0.97);
+    border-radius: 10px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+    width: 270px;
+    max-height: 60vh;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.trip-days-head {
+    border: 0; background: none; text-align: left; cursor: pointer;
+    padding: 9px 12px; font-weight: 600; font-size: 13px; color: #111;
+}
+.trip-days-head::after { content: ' ▾'; color: #888; }
+.trip-days-panel.collapsed .trip-days-head::after { content: ' ▸'; }
+.trip-days-panel.collapsed { width: auto; }
+.trip-days-panel.collapsed .trip-days-list { display: none; }
+.trip-days-list { overflow-y: auto; border-top: 1px solid #eee; }
+.trip-days-row {
+    display: flex; gap: 8px; align-items: flex-start; width: 100%;
+    border: 0; background: none; text-align: left; cursor: pointer;
+    padding: 7px 12px; font-family: inherit;
+}
+.trip-days-row:hover, .trip-days-row.active { background: #f2f2f2; }
+.trip-days-n {
+    flex: 0 0 20px; height: 20px; border-radius: 50%; background: #111; color: #fff;
+    font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+}
+.trip-days-text { display: flex; flex-direction: column; min-width: 0; }
+.trip-days-title { font-size: 12.5px; color: #111; line-height: 1.3; }
+.trip-days-sub { font-size: 11px; color: #888; margin-top: 1px; }
+@media (max-width: 768px) {
+    .trip-days-panel { width: 230px; max-height: 45vh; }
+}
+
 /* hand-picked Highlights section above the chronological flow */
 .gallery-highlights-grid {
     margin-bottom: 36px;

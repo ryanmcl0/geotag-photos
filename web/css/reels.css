@@ -1,0 +1,114 @@
+/* Reels on the site (reels-site.js): localhost-only reel drafts as phone-shaped cards in the
+   galleries, on the China place pages and in Posts ▸ Reels. All pages that use it are dark. */
+
+/* ── collapsible master section ── */
+.reels-master {
+    margin: 0 0 28px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    color: #eee;
+}
+.reels-master-head {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.reels-master-head::-webkit-details-marker { display: none; }
+.reels-master-head::before {
+    content: '▸';
+    display: inline-block; width: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    transition: transform 0.15s;
+}
+.reels-master[open] > .reels-master-head::before { transform: rotate(90deg); }
+.reels-master-title { font-weight: 600; font-size: 1rem; color: #fff; }
+.reels-master-count { font-size: 0.8rem; color: rgba(255, 255, 255, 0.55); }
+.reels-master-note { font-size: 0.72rem; color: rgba(255, 255, 255, 0.38); margin-left: auto; }
+.reels-master-body { padding: 0 16px 16px; }
+
+/* ── kind chips ── */
+.reel-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+.reel-chip {
+    border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
+    background: none; color: #ddd; border: 1px solid #555;
+}
+.reel-chip.active { background: #fff; color: #111; border-color: #fff; }
+
+/* ── day headings inside the section ── */
+.reels-day-head {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px;
+    margin: 20px 0 10px; padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.reels-day-label { font-weight: 600; font-size: 0.92rem; color: #fff; }
+.reels-day-sub { font-size: 0.78rem; color: rgba(255, 255, 255, 0.55); }
+.reels-day-count { font-size: 0.75rem; color: rgba(255, 255, 255, 0.45); margin-left: auto; white-space: nowrap; }
+
+/* ── phone-shaped cards ── */
+.reel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 14px;
+}
+.reel-card { position: relative; min-width: 0; color: #eee; }
+.reel-screen {
+    position: relative;
+    aspect-ratio: 9 / 16;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #000;
+    cursor: pointer;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10);
+}
+.reel-screen img, .reel-screen video {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block;
+}
+/* landscape reels sit letterboxed in the phone frame, whole */
+.reel-screen.wide img, .reel-screen video { object-fit: contain; }
+.reel-screen video { background: #000; z-index: 2; }
+.reel-screen:hover img { opacity: 0.88; }
+.reel-play {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 42px; height: 42px; border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; padding-left: 3px; box-sizing: border-box;
+    pointer-events: none;
+}
+.reel-dur, .reel-aspect {
+    position: absolute; bottom: 7px;
+    font-size: 11px; color: #fff; background: rgba(0, 0, 0, 0.55);
+    border-radius: 4px; padding: 1px 5px; pointer-events: none;
+}
+.reel-dur { right: 7px; }
+.reel-aspect { left: 7px; }
+.reel-screen.playing .reel-play, .reel-screen.playing .reel-dur, .reel-screen.playing .reel-aspect { display: none; }
+.reel-body { padding: 6px 2px 0; }
+.reel-title { font-size: 13px; color: #fff; line-height: 1.3; overflow-wrap: anywhere; }
+.reel-meta { font-size: 11.5px; color: rgba(255, 255, 255, 0.5); line-height: 1.35; margin-top: 2px; }
+.reel-post-btn {
+    position: absolute; top: 7px; right: 7px; z-index: 3;
+    border: 1px solid rgba(255, 255, 255, 0.7); border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55); color: #fff;
+    font: 600 11.5px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 5px 9px; cursor: pointer;
+}
+.reel-post-btn.on { background: #fff; color: #111; border-color: #fff; }
+
+@media (max-width: 768px) {
+    .reel-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .reels-master-body { padding: 0 10px 12px; }
+    .reels-master-head { padding: 11px 12px; }
+    .reel-screen { border-radius: 10px; }
+    .reel-play { width: 34px; height: 34px; font-size: 12px; }
+    .reel-title { font-size: 12px; }
+    .reel-meta { font-size: 10.5px; }
+    .reel-post-btn { padding: 4px 7px; font-size: 10.5px; top: 5px; right: 5px; }
+}
+
+/* ── place pages (china.html) ── */
+.reels-place { margin: 0 0 28px; }

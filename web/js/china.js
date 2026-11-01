@@ -1072,8 +1072,100 @@
     return bar;
   }
 
+  /* ---------------- reels (localhost only, reels-site.js) ----------------
+   * The video pipeline's reel drafts on the place pages, matched by reel_site.py
+   * through the photos each page is built from (the reel's drone GPS near this
+   * page's photos; provinces also by the reel's own place names). */
+  let reelsToken = 0;
+  async function placeReels(tile, s) {
+    if (COLL !== 'china' || !window.ReelsSite) return;
+    const token = ++reelsToken;
+    const doc = await ReelsSite.load();
+    if (!doc || token !== reelsToken) return;
+    const reelsFor = key => doc.reels.filter(r => (r.pages || []).includes(key));
+    let section = null;
+    if (!tile) {
+      // the hub: every China reel, by province
+      const prov = tileById('provinces');
+      const groups = (prov ? allSubtiles(prov) : [])
+        .map(p => ({ title: p.title, reels: reelsFor(`provinces/${p.id}`) }))
+        .filter(g => g.reels.length);
+      const all = [...new Set(groups.flatMap(g => g.reels))];
+      if (!all.length) return;
+      section = ReelsSite.master('Reels', all.length, body => fillGroups(body, groups, all),
+        { note: 'by province · drafts, localhost only' });
+    } else if (!s) {
+      if (!['provinces', 'bridges', 'energy'].includes(tile.id)) return;
+      const groups = allSubtiles(tile)
+        .map(x => ({ title: x.title, href: `#${tile.id}/${x.id}`, reels: reelsFor(`${tile.id}/${x.id}`) }))
+        .filter(g => g.reels.length);
+      const all = [...new Set(groups.flatMap(g => g.reels))];
+      section = ReelsSite.master('Reels', all.length, body => {
+        if (!all.length) {
+          body.appendChild(el('p', 'reels-day-sub', 'No reels edited here yet.'));
+          return;
+        }
+        fillGroups(body, groups, all);
+      }, { note: `edited from these ${tile.id === 'provinces' ? 'provinces' : 'places'} · localhost only` });
+    } else {
+      const list = reelsFor(`${tile.id}/${s.id}`);
+      if (!list.length) return;
+      section = ReelsSite.master('Reels', list.length, body => {
+        if (list.length <= 12) {
+          body.appendChild(ReelsSite.grid(ReelsSite.sortReels(list), { showDay: true }));
+          return;
+        }
+        // many reels (a province): by trip day, then the whole-trip ones, like the gallery
+        const days = [...new Set(list.filter(r => r.day).map(r => `${r.trip}|${r.day}`))]
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        const groups = days.map(k => {
+          const rs = list.filter(r => `${r.trip}|${r.day}` === k);
+          return { title: rs[0].day_name || `Day ${rs[0].day}`, reels: rs };
+        });
+        const whole = list.filter(r => !r.day);
+        if (whole.length) groups.push({ title: 'Whole trip', reels: whole });
+        fillGroups(body, groups, list);
+      }, { open: list.length <= 8, note: `edited from ${s.title} · localhost only` });
+    }
+    if (!section || token !== reelsToken) return;
+    section.classList.add('reels-place');
+    const head = app.querySelector('.section-head');
+    if (head) head.after(section); else app.appendChild(section);
+  }
+
+  function fillGroups(body, groups, all) {
+    const flow = el('div');
+    const paint = kind => {
+      ReelsSite.stopPlaying();
+      flow.replaceChildren();
+      groups.forEach(g => {
+        const list = ReelsSite.sortReels(g.reels.filter(r => kind === 'all' || r.kind === kind));
+        if (!list.length) return;
+        const h = ReelsSite.sectionHead(g.title, '', list.length);
+        if (g.href) {
+          const a = el('a', 'reels-day-sub', 'Photos →');
+          a.href = g.href;
+          h.insertBefore(a, h.lastChild);
+        }
+        flow.appendChild(h);
+        flow.appendChild(ReelsSite.grid(list, { showDay: true }));
+      });
+    };
+    body.appendChild(ReelsSite.kindChips(all, paint));
+    body.appendChild(flow);
+    paint('all');
+  }
+
   /* ---------------- router ---------------- */
   function route() {
+    reelsToken++;
+    if (DATA) setTimeout(() => {
+      const h = parseHash().path;
+      const [f, sid] = (h || '').split('/');
+      const t = f ? tileById(f) : null;
+      if (f && (!t || t.locked)) return;
+      placeReels(t, t && sid ? subById(t, sid) : null);
+    }, 0);
     if (!DATA) return;
     // every view starts with app.innerHTML = '' — drop the Leaflet instance with it
     if (bridgeMap) { try { bridgeMap.remove(); } catch (e) { /* already gone */ } bridgeMap = null; }

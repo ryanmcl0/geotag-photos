@@ -1307,6 +1307,11 @@ async function loadSingleTrip(trip, basePath, prefetched) {
     allManifests.push(manifest);
     loadedTripIds.add(trip.id);
 
+    // One trip on the map: its "Day N" raw folders as day badges + a Days list.
+    if (window.TripDays && typeof VIEW_CONFIG !== 'undefined' && VIEW_CONFIG.mode === 'trip' && !inCollectionMode) {
+        TripDays.addToMap(map, manifest, trip, color);
+    }
+
     if (shouldDisplayTrip(trip)) {
         tripLayers[trip.id].route.addTo(map);
         tripLayers[trip.id].markers.addTo(map);
@@ -1585,7 +1590,7 @@ function buildMarkerLayer(manifest, hasGpx) {
             });
         });
         marker.photoData = photos;
-        marker.locationName = cluster.location;
+        marker.locationName = window.TripDays ? TripDays.pretty(cluster.location) : cluster.location;
         marker.country = cluster.country || null;
         marker._clusterGroup = group;
         marker._pendingPage = 0;

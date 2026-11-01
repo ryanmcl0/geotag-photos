@@ -1903,6 +1903,37 @@ details[open] .country-summary::after {
     white-space: nowrap;
 }
 
+/* All / Camera / Drone filter: stays pinned to the top of the scrolling
+   page so the choice is in reach anywhere down a long trip. On the trip
+   gallery the negative margins + matching padding stretch its background over
+   the gallery's side padding, so photos never show beside it underneath. */
+.kindbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 8px 0;
+    background: #fff;
+}
+.theme-dark .kindbar {
+    background: #111;
+    box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.9);
+}
+.gallery-view .kindbar {
+    top: -18px;
+    margin-left: -22px !important;
+    margin-right: -22px !important;
+    padding: 12px 22px 10px;
+}
+@media (max-width: 768px) {
+    .gallery-view .kindbar {
+        top: -14px;
+        margin-left: -12px !important;
+        margin-right: -12px !important;
+        /* clear the floating menu button top-left */
+        padding: 10px 12px 8px 64px;
+    }
+}
+
 /* hand-picked Highlights section above the chronological flow */
 .gallery-highlights-grid {
     margin-bottom: 36px;

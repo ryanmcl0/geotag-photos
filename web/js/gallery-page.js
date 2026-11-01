@@ -384,6 +384,10 @@
             renderByDate(flow, k === 'all' ? photos
                 : photos.filter(p => Gallery.photoKind(p) === k),
                 { emptyText: 'No photos of this kind in this trip.' });
+            // Picked from the pinned bar further down: start the new set at its top.
+            const view = document.getElementById('gallery-view');
+            const top = flow.offsetTop - kindBar.offsetHeight;
+            if (view && view.scrollTop > top) view.scrollTop = top;
         });
         if (kindBar) grid.appendChild(kindBar);
         const flow = document.createElement('div');

@@ -111,5 +111,4 @@
 }
 
 /* ── place pages (china.html) ── */
-.reels-place { margin: 0 var(--margin, 72px) 28px; }
-@media (max-width: 768px) { .reels-place { margin: 0 12px 20px; } }
+.reels-place { margin: 0 0 28px; }

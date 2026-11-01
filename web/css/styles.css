@@ -2139,3 +2139,11 @@ details[open] .country-summary::after {
 .gallery-view .site-copyright { padding: 28px 20px 36px; text-align: center; color: #888; font-size: 13px; line-height: 1.6; }
 .gallery-view .site-copyright a { color: #aaa; text-decoration: underline; text-underline-offset: 2px; }
 .gallery-view .site-copyright a:hover { color: #fff; }
+
+/* Localhost only: the lightbox's "Finder" button (gallery.js addFinderButton). */
+.pswp__button.finder-btn {
+  width: auto; padding: 0 12px; background: none; color: #fff;
+  font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  opacity: .8; float: right;
+}
+.pswp__button.finder-btn:hover { opacity: 1; }

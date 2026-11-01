@@ -15,6 +15,10 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
     PUT  /reels/state            replace it (validated)
     GET  /reels/export           the export queue
     POST /reels/export           {"ids": [...], "captions": {id: text}} → queue the ids not already queued
+    GET  /reveal?trip=&id=       show the photo's EDITED file (the Lightroom export the site was built from) in
+                                 Finder: the lightbox's "Finder" button on localhost. The file is looked up by
+                                 the trip manifest's source folder + the photo's source filename, never from
+                                 a path the browser sends.
 
     tools/reels_local.py [--port 8791]          (serve.sh starts it)
 """
@@ -62,6 +66,42 @@ def known_ids():
     return {r["id"] for r in doc.get("reels", []) if isinstance(r, dict) and "id" in r}
 
 
+WEB = Path(__file__).resolve().parent.parent / "web"
+_edit_index = {}          # photos_path -> {basename: full path}, built on first use per trip
+
+
+def edit_path(trip, photo_id):
+    """The edited file on disk behind one hosted photo, or None (unknown trip/id, folder not mounted)."""
+    if not trip or not photo_id or "/" in trip or "\\" in trip:
+        return None
+    for root in (WEB / "trips" / trip, WEB / "phone" / "trips" / trip):
+        man = read(root / "manifest.json", None)
+        if man:
+            break
+    else:
+        return None
+    photos_path = ((man.get("source") or {}).get("photos_path") or "").strip()
+    name = next((ph.get("source_filename") for ph in man.get("photos", []) if ph.get("id") == photo_id), None)
+    if not photos_path or not name or not os.path.isdir(photos_path):
+        return None
+    if photos_path not in _edit_index:
+        idx = {}
+        for d, _, files in os.walk(photos_path):
+            for f in files:
+                idx.setdefault(f, os.path.join(d, f))
+        _edit_index[photos_path] = idx
+    hit = _edit_index[photos_path].get(name)
+    if hit and not os.path.exists(hit):            # exported again since the index was built
+        _edit_index.pop(photos_path, None)
+        return edit_path(trip, photo_id)
+    return hit
+
+
+def reveal(path):
+    import subprocess
+    subprocess.Popen(["open", "-R", path])
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "reels_local/1"
 
@@ -95,6 +135,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self.path.split("?")[0] == "/reveal":
+            from urllib.parse import parse_qs, urlsplit
+            q = parse_qs(urlsplit(self.path).query)
+            path = edit_path((q.get("trip") or [""])[0], (q.get("id") or [""])[0])
+            if not path:
+                return self._json(404, {"error": "no edited file found for this photo (trip folder mounted?)"})
+            reveal(path)
+            return self._json(200, {"path": path})
         if self.path.split("?")[0] == "/reels/state":
             return self._json(200, read(STATE, {"queue": [], "posted": {}, "captions": {}}))
         if self.path.split("?")[0] == "/reels/export":

@@ -264,6 +264,39 @@ window.Gallery = (function () {
     });
   }
 
+  // Localhost only: a "Finder" button in the viewer's top bar reveals the photo's
+  // edited file (the Lightroom export the site was built from) in Finder, via the
+  // local helper on 127.0.0.1:8791 (tools/reels_local.py, started by serve.sh).
+  // The viewer element is shared by every open, so the button is added once and
+  // reads the current item at click time.
+  const FINDER_URL = 'http://127.0.0.1:8791/reveal';
+  function addFinderButton(gallery, pswpEl) {
+    const bar = pswpEl.querySelector('.pswp__top-bar');
+    if (!bar) return;
+    let btn = bar.querySelector('.finder-btn');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pswp__button finder-btn';
+      btn.title = 'Show the edited file in Finder';
+      btn.textContent = 'Finder';
+      bar.insertBefore(btn, bar.querySelector('.pswp__button--close') || null);
+    }
+    btn.onclick = async e => {
+      e.stopPropagation();
+      const ref = gallery.currItem && gallery.currItem.ref;
+      if (!ref || !ref.trip || !ref.id) return;
+      const say = (t, ms) => { btn.textContent = t; setTimeout(() => { btn.textContent = 'Finder'; }, ms); };
+      try {
+        const r = await fetch(`${FINDER_URL}?trip=${encodeURIComponent(ref.trip)}&id=${encodeURIComponent(ref.id)}`,
+          { cache: 'no-store' });
+        say(r.ok ? 'Shown' : 'Not found', 1500);
+      } catch (err) {
+        say('Helper off', 2500);     // reels_local.py is not running (serve.sh starts it)
+      }
+    };
+  }
+
   function openLightbox(photos, index, opts) {
     const pswpEl = document.querySelector('.pswp');
     if (!pswpEl || typeof PhotoSwipe === 'undefined') return;
@@ -296,6 +329,7 @@ window.Gallery = (function () {
       img.src = item.src;
     });
     addWheelZoom(gallery, pswpEl);
+    if (LOCAL) addFinderButton(gallery, pswpEl);
     gallery.init();
     if (window.SiteAnalytics) SiteAnalytics.attachLightbox(gallery, 'gallery');
     if (window.Posts) Posts.attachLightbox(gallery, pswpEl, opts);

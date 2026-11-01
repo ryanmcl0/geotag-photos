@@ -1967,6 +1967,38 @@ details[open] .country-summary::after {
 }
 .gallery-day > .gallery-date-banner .gallery-date-count { flex: none; }
 .theme-dark .gallery-day > .gallery-date-banner { background: #111; }
+/* The heading is also the day-jump menu's button: looks exactly as before,
+   plus a small chevron. */
+.gallery-day-btn {
+    display: flex; align-items: baseline; gap: 8px;
+    flex: 1 1 auto; min-width: 0;
+    padding: 0; margin: 0; border: 0; background: none;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+    white-space: nowrap; overflow: hidden;
+}
+.gallery-day-btn:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 3px; border-radius: 3px; }
+.gallery-day-chev { flex: none; font-size: 0.85rem; color: #aaa; margin-left: -2px; }
+.gallery-day-btn:hover .gallery-day-chev, .gallery-day-btn[aria-expanded="true"] .gallery-day-chev { color: inherit; }
+.gallery-day-menu {
+    position: fixed; z-index: 3200;   /* over the Posts mode pill */
+    overflow-y: auto; overscroll-behavior: contain;
+    background: #fff; color: #1a1a1a;
+    border: 1px solid rgba(0, 0, 0, 0.12); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    font-family: inherit;
+}
+.theme-dark .gallery-day-menu { background: #1c1c1c; color: #f2f2f2; border-color: rgba(255, 255, 255, 0.14); }
+.gallery-day-item {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+    width: 100%; padding: 7px 10px; border: 0; border-radius: 7px;
+    background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.gallery-day-item:hover, .gallery-day-item:focus-visible { background: rgba(127, 127, 127, 0.18); outline: none; }
+.gallery-day-item.current { box-shadow: inset 3px 0 0 #8ab4ff; background: rgba(138, 180, 255, 0.12); }
+.gallery-day-item-label { font-size: 0.88rem; font-weight: 600; line-height: 1.3; }
+.gallery-day-item-sub { font-size: 0.74rem; opacity: 0.6; }
+
 /* Highlights come above the filter bar, which isn't pinned yet while they
    scroll: their line pins at the very top instead. */
 .gallery-highlights-section > .gallery-date-banner { top: -18px; }
@@ -1978,6 +2010,8 @@ details[open] .country-summary::after {
         margin: 0 -12px 8px;
         padding: 8px 12px 6px;
     }
+    /* too narrow for the date: the day menu shows it */
+    .gallery-day > .gallery-date-banner .gallery-date-when { display: none; }
     .gallery-highlights-section > .gallery-date-banner {
         top: -14px;
         min-height: 44px; align-items: center;

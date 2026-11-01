@@ -420,6 +420,12 @@
 
         await ensureAspectRatios(photos);
         grid.innerHTML = '';
+        // The trip's reel drafts (localhost only): one collapsed section above the photos.
+        if (window.ReelsSite && !trip.category) {
+            const slot = document.createElement('div');
+            grid.appendChild(slot);
+            ReelsSite.tripSection(trip.id).then(sec => { if (sec) slot.replaceWith(sec); else slot.remove(); });
+        }
         if (highlights.length) renderHighlights(grid, highlights);
         const kindBar = Gallery.buildKindBar(photos, k => {
             renderByDate(flow, k === 'all' ? photos

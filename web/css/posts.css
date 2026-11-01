@@ -479,7 +479,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .reels-how { color: #889; font-size: 13px; line-height: 1.5; margin: 0 0 10px; max-width: 760px; }
 .reels-empty { color: #aaa; font-size: 14px; margin: 18px 0; }
 .reels-layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 28px; align-items: start; }
-.reels-side { position: sticky; top: 14px; }
+.reels-side { position: sticky; top: 84px; }
 .reels-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
 .reels-export-btn {
   background: #fff; color: #111; border: 0; border-radius: 999px; font-weight: 700; font-size: 13px;

@@ -170,7 +170,8 @@ window.ReelsSite = (function () {
 
     /** The phone-shaped screen: cover (16:9 letterboxed on black), plays in place on click. */
     function screen(reel) {
-        const box = el('div', 'reel-screen' + (reel.aspect === '16:9' ? ' wide' : ''));
+        const wide = reel.aspect && reel.aspect !== '9:16';
+        const box = el('div', 'reel-screen' + (wide ? ' wide' : ''));
         box.tabIndex = 0;
         box.setAttribute('role', 'button');
         box.title = 'Play';
@@ -183,7 +184,7 @@ window.ReelsSite = (function () {
         }
         box.appendChild(el('span', 'reel-play', '▶'));
         if (reel.dur) box.appendChild(el('span', 'reel-dur', fmtDur(reel.dur)));
-        if (reel.aspect === '16:9') box.appendChild(el('span', 'reel-aspect', '16:9'));
+        if (wide) box.appendChild(el('span', 'reel-aspect', reel.aspect));
         const start = () => {
             if (playing && playing.box === box) return;
             stopPlaying();

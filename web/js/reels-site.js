@@ -10,6 +10,10 @@
  * queue live in web/phone/reels/state.json and export_queue.json, written by the small local helper
  * tools/reels_local.py (127.0.0.1:8791, started by serve.sh). When the helper isn't running the state is kept in
  * this browser (localStorage) and the page says so.
+ *
+ * The same helper streams the reel videos with Range support (the dev server sends the whole file for every seek,
+ * which on the external SSD meant a long lag and no play). A video uses the helper's URL when the helper answered,
+ * and the same-origin /phone/reels/files/ URL when it didn't or when the helper's copy fails to load.
  */
 window.ReelsSite = (function () {
     'use strict';
@@ -19,6 +23,7 @@ window.ReelsSite = (function () {
         /^10\./.test(HOST) || /^192\.168\./.test(HOST) || /^172\.(1[6-9]|2\d|3[01])\./.test(HOST);
     const API = `http://${HOST === 'localhost' ? '127.0.0.1' : HOST}:8791`;
     const LS_KEY = 'reels_site_state';
+    const FILES_PREFIX = '/phone/reels/files/';
 
     let docP = null;
     function load() {
@@ -168,11 +173,18 @@ window.ReelsSite = (function () {
         playing = null;
     }
 
+    /** The helper's URL for a /phone/reels/files/ path, or the path itself when the helper isn't up. */
+    function mediaUrl(src) {
+        return stateWhere === 'disk' && src.startsWith(FILES_PREFIX)
+            ? `${API}/reels/files/${src.slice(FILES_PREFIX.length)}` : src;
+    }
+
     /** The phone-shaped screen: cover (16:9 letterboxed on black), plays in place on click. */
     function screen(reel) {
         const wide = reel.aspect && reel.aspect !== '9:16';
         const box = el('div', 'reel-screen' + (wide ? ' wide' : ''));
         box.tabIndex = 0;
+        loadState();                                    // finds out whether the helper is up before a click needs it
         box.setAttribute('role', 'button');
         box.title = 'Play';
         if (reel.cover) {
@@ -189,7 +201,15 @@ window.ReelsSite = (function () {
             if (playing && playing.box === box) return;
             stopPlaying();
             const v = el('video');
-            v.src = reel.src;
+            v.src = mediaUrl(reel.src);
+            if (v.src !== new URL(reel.src, location.href).href) {
+                // the helper answered the state call but not this file: play the same-origin copy instead
+                v.addEventListener('error', () => {
+                    if (!playing || playing.v !== v) return;       // already stopped
+                    v.src = reel.src;
+                    v.play().catch(() => {});
+                }, { once: true });
+            }
             v.controls = true;
             v.autoplay = true;
             v.playsInline = true;

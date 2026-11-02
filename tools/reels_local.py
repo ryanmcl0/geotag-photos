@@ -19,6 +19,10 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  Finder: the lightbox's "Finder" button on localhost. The file is looked up by
                                  the trip manifest's source folder + the photo's source filename, never from
                                  a path the browser sends.
+    GET/HEAD /reels/files/<folder>/<name>   a reel video or cover from web/phone/reels/files/, with Range support
+                                 (206 + Content-Range, streamed in chunks). The dev server ignores Range and sends the
+                                 whole file for every seek, which is what made the videos lag on the external SSD. Only
+                                 files that resolve under one of that folder's own links are served, nothing else.
 
     tools/reels_local.py [--port 8791]          (serve.sh starts it)
 """
@@ -29,11 +33,16 @@ import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent / "web" / "phone" / "reels"
 STATE = ROOT / "state.json"
 QUEUE = ROOT / "export_queue.json"
+FILES = ROOT / "files"
 MAX_BODY = 2_000_000
+CHUNK = 1 << 20
+MEDIA_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".jpg": "image/jpeg",
+               ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 
 def read(path, default):
@@ -97,6 +106,49 @@ def edit_path(trip, photo_id):
     return hit
 
 
+def media_path(rel):
+    """The file behind /reels/files/<rel>, or None. It must sit under the real folder one of files/'s own entries
+    (a delivery-folder link) points to: no '..', no absolute paths, and a link inside a delivery folder that leads
+    elsewhere is refused because the resolved path is checked, not the one asked for."""
+    if not rel or "\0" in rel or "\\" in rel:
+        return None
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts) or len(parts) < 2:
+        return None
+    if Path(parts[-1]).suffix.lower() not in MEDIA_TYPES:
+        return None
+    try:
+        top = (FILES / parts[0]).resolve(strict=True)
+        path = (FILES / rel).resolve(strict=True)
+        if not top.is_dir() or not path.is_file() or not path.is_relative_to(top):
+            return None
+    except (OSError, ValueError, RuntimeError):
+        return None
+    return path
+
+
+def parse_range(header, size):
+    """('full', 0, size-1) with no usable Range header, ('part', first, last) for one satisfiable range,
+    ('bad', 0, 0) when it lies outside the file. Several ranges are answered with the whole file (allowed)."""
+    if not header or not header.startswith("bytes=") or "," in header:
+        return "full", 0, size - 1
+    a, _, b = header[6:].strip().partition("-")
+    try:
+        if a == "":                                  # bytes=-N: the last N bytes
+            n = int(b)
+            if n <= 0:
+                return "bad", 0, 0
+            first, last = max(size - n, 0), size - 1
+        else:
+            first = int(a)
+            last = min(int(b), size - 1) if b else size - 1
+    except ValueError:
+        return "full", 0, size - 1
+    if first < 0 or first >= size or last < first:
+        return "bad", 0, 0
+    return "part", first, last
+
+
 def reveal(path):
     import subprocess
     subprocess.Popen(["open", "-R", path])
@@ -109,8 +161,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         self.send_header("Access-Control-Allow-Origin", origin or "*")
         self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
+        self.send_header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length")
         self.send_header("Access-Control-Allow-Private-Network", "true")
 
     def _json(self, code, data):
@@ -134,7 +187,61 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _media(self, head):
+        """A reel video/cover with Range support, streamed from disk in chunks (never read whole into memory)."""
+        host = self.headers.get("Host", "").rsplit(":", 1)[0]
+        path = None
+        if host in ("127.0.0.1", "localhost"):       # not a rebound DNS name
+            path = media_path(unquote(self.path.split("?")[0][len("/reels/files/"):]))
+        if path is None:
+            return self._json(404, {"error": "not found"})
+        try:
+            f = open(path, "rb")
+            st = os.fstat(f.fileno())
+        except OSError:
+            return self._json(404, {"error": "not found"})
+        with f:
+            size = st.st_size
+            kind, first, last = parse_range(self.headers.get("Range"), size)
+            if kind == "bad":
+                self.send_response(416)
+                self._cors()
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(206 if kind == "part" else 200)
+            self._cors()
+            self.send_header("Content-Type", MEDIA_TYPES[path.suffix.lower()])
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            if kind == "part":
+                self.send_header("Content-Range", f"bytes {first}-{last}/{size}")
+            self.send_header("Content-Length", str(last - first + 1))
+            self.end_headers()
+            if head:
+                return
+            left = last - first + 1
+            try:
+                f.seek(first)
+                while left > 0:
+                    buf = f.read(min(CHUNK, left))
+                    if not buf:
+                        break
+                    self.wfile.write(buf)
+                    left -= len(buf)
+            except (BrokenPipeError, ConnectionResetError):
+                pass                                 # the player seeked away or closed: normal
+
+    def do_HEAD(self):
+        if self.path.startswith("/reels/files/"):
+            return self._media(True)
+        self._json(404, {"error": "not found"})
+
     def do_GET(self):
+        if self.path.startswith("/reels/files/"):
+            return self._media(False)
         if self.path.split("?")[0] == "/reveal":
             from urllib.parse import parse_qs, urlsplit
             q = parse_qs(urlsplit(self.path).query)

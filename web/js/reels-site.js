@@ -147,6 +147,98 @@ window.ReelsSite = (function () {
         } catch (e) { return null; }
     }
 
+    // ── song feedback ─────────────────────────────────────────────────────────────────────────────────────────────
+    // A rejected song is only recorded here (the helper's song_feedback.json); the video project's
+    // tools/vlog/song_feedback.py acts on it, by hand like the 4K export: "pool" moves the song out of the music
+    // library, "reel" queues that reel for a new song. Item status: pending → applied (pool) / queued (reel).
+    let feedbackP = null;
+    const feedbackListeners = new Set();
+    function songFeedback() {
+        if (!feedbackP) {
+            feedbackP = fetch(`${API}/reels/song-feedback`, { cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null)).catch(() => null);
+        }
+        return feedbackP;
+    }
+    async function sendSongFeedback(id, verdict) {
+        const r = await fetch(`${API}/reels/song-feedback`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, verdict })
+        });
+        const doc = await r.json().catch(() => null);
+        if (!r.ok) throw new Error((doc && doc.error) || `song feedback failed (${r.status})`);
+        feedbackP = Promise.resolve(doc);
+        feedbackListeners.forEach(fn => fn());
+    }
+    // what the song line says about a reel: its own rejection, or its song taken out of the pool from any reel
+    function songVerdict(doc, reel) {
+        const items = (doc && doc.items) || [];
+        const pool = items.find(it => it.verdict === 'pool' && it.song === reel.song);
+        const mine = items.filter(it => it.id === reel.id && it.verdict === 'reel').pop();
+        if (pool) {
+            return { text: pool.status === 'applied' ? 'Song removed from the pool' : 'Removing from the pool',
+                     undo: pool.status === 'pending' && pool.id === reel.id };
+        }
+        if (mine) {
+            return { text: mine.status === 'pending' ? 'Rejected for this reel' : 'Queued for a new song',
+                     undo: mine.status === 'pending' };
+        }
+        return null;
+    }
+    function songLine(reel) {
+        const row = el('div', 'reel-song');
+        const name = el('span', 'reel-song-name', `♪ ${reel.song}`);
+        name.title = reel.song;
+        const reject = el('button', 'reel-song-reject', '✕');
+        reject.type = 'button';
+        reject.title = 'Reject this song';
+        const status = el('div', 'reel-song-status');
+        const menu = el('div', 'reel-song-menu');
+        menu.hidden = true;
+        const act = (verdict, label, hint) => {
+            const b = el('button', 'reel-song-opt', label);
+            b.type = 'button';
+            if (hint) b.title = hint;
+            b.addEventListener('click', async e => {
+                e.stopPropagation();
+                menu.hidden = true;
+                if (!verdict) return;
+                try { await sendSongFeedback(reel.id, verdict); }
+                catch (err) {
+                    status.textContent = /fetch/i.test(err.message)
+                        ? 'Local helper not running (serve.sh starts it)' : err.message;
+                }
+            });
+            menu.appendChild(b);
+        };
+        act('pool', 'Remove from pool', 'Never use this song again: moved out of the music library');
+        act('reel', 'Not for this reel', 'Keep the song, give this reel a different one');
+        act(null, 'Cancel');
+        reject.addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; });
+        const paint = () => songFeedback().then(doc => {
+            const v = songVerdict(doc, reel);
+            row.classList.toggle('rejected', !!v);
+            reject.hidden = !!v;
+            status.replaceChildren();
+            if (!v) return;
+            status.appendChild(document.createTextNode(v.text));
+            if (v.undo) {
+                const u = el('button', 'reel-song-undo', 'Undo');
+                u.type = 'button';
+                u.addEventListener('click', e => {
+                    e.stopPropagation();
+                    sendSongFeedback(reel.id, 'undo').catch(err => { status.textContent = err.message; });
+                });
+                status.appendChild(u);
+            }
+        });
+        feedbackListeners.add(paint);
+        paint();
+        row.append(name, reject);
+        const wrap = el('div', 'reel-song-wrap');
+        wrap.append(row, menu, status);
+        return wrap;
+    }
+
     // ── cards ─────────────────────────────────────────────────────────────────────────────────────────────────────
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -218,6 +310,21 @@ window.ReelsSite = (function () {
             box.classList.add('playing');
             playing = { v, box };
         };
+        // Fullscreen, always on the card: the browser's own button folds into its ⋮ menu on a card this
+        // narrow. Starts the reel if it isn't playing (requestFullscreen needs this same click).
+        const fs = el('button', 'reel-fs', '⛶');
+        fs.type = 'button';
+        fs.title = 'Fullscreen';
+        fs.setAttribute('aria-label', 'Play fullscreen');
+        fs.addEventListener('click', e => {
+            e.stopPropagation();
+            start();
+            const v = playing && playing.box === box ? playing.v : null;
+            if (!v) return;
+            const go = v.requestFullscreen || v.webkitRequestFullscreen || v.webkitEnterFullscreen;
+            if (go) Promise.resolve(go.call(v)).catch(() => {});
+        });
+        box.appendChild(fs);
         box.addEventListener('click', e => { if (e.target.tagName !== 'VIDEO') start(); });
         box.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); start(); } });
         return box;
@@ -238,6 +345,7 @@ window.ReelsSite = (function () {
             meta.push(reel.places.slice(0, 3).join(', ') + (reel.places.length > 3 ? '…' : ''));
         }
         if (meta.length) body.appendChild(el('div', 'reel-meta', meta.join(' · ')));
+        if (reel.song && LOCAL) body.appendChild(songLine(reel));
         c.appendChild(body);
         if (window.Posts && Posts.enabled && opts.postable !== false) {
             const b = el('button', 'reel-post-btn');
@@ -263,7 +371,8 @@ window.ReelsSite = (function () {
         return g;
     }
 
-    const KIND_ORDER = { day_montage: 0, shoot_reel: 1, vlog_cut: 2, trip_montage: 3, hook_reel: 4, other: 5 };
+    const KIND_ORDER = { day_montage: 0, day_route: 1, shoot_reel: 2, one_shot: 3, vlog_cut: 4, trip_montage: 5,
+        hook_reel: 6, other: 7 };
     function sortReels(list) {
         return list.slice().sort((a, b) =>
             (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) ||
@@ -279,8 +388,9 @@ window.ReelsSite = (function () {
         const kinds = Object.keys(counts).sort((a, b) => (KIND_ORDER[a] ?? 9) - (KIND_ORDER[b] ?? 9));
         const bar = el('div', 'reel-chips');
         if (kinds.length < 2) return bar;
-        const LABEL = { day_montage: 'Day montages', shoot_reel: 'Shoot reels', vlog_cut: 'Vlog cuts',
-            trip_montage: 'Whole-trip montages', hook_reel: 'Hook reels', other: 'Other' };
+        const LABEL = { day_montage: 'Day montages', day_route: 'Day routes', shoot_reel: 'Shoot reels',
+            one_shot: 'One-shots', vlog_cut: 'Vlog cuts', trip_montage: 'Whole-trip montages', hook_reel: 'Hook reels',
+            other: 'Other' };
         let cur = 'all';
         [['all', `All (${reels.length})`], ...kinds.map(k => [k, `${LABEL[k] || k} (${counts[k]})`])].forEach(([k, label]) => {
             const b = el('button', 'reel-chip' + (k === cur ? ' active' : ''), label);

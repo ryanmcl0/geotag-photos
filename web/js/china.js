@@ -1110,18 +1110,22 @@
   }
 
   /* ---------------- reels (localhost only, reels-site.js) ----------------
-   * The video pipeline's reel drafts on the place pages, matched by reel_site.py
-   * through the photos each page is built from (the reel's drone GPS near this
-   * page's photos; provinces also by the reel's own place names). */
+   * The video pipeline's reel drafts on the place pages, collapsed until opened.
+   * China provinces and energy sites come matched by reel_site.py (the reel's
+   * drone GPS near the page's photos; provinces also by the reel's own place
+   * names); every other page (bridges, buildings, mountains, cities, spots) by
+   * tools/phone_places.py from the same GPS, keyed "<collection>/<facet>/<page>". */
   let reelsToken = 0;
   async function placeReels(tile, s) {
-    if (COLL !== 'china' || !window.ReelsSite) return;
+    if (!window.ReelsSite) return;
     const token = ++reelsToken;
-    const doc = await ReelsSite.load();
+    const [doc, byGps] = await Promise.all([ReelsSite.load(), Gallery.reelPages()]);
     if (!doc || token !== reelsToken) return;
-    const reelsFor = key => doc.reels.filter(r => (r.pages || []).includes(key));
+    const reelsFor = key => doc.reels.filter(r =>
+      (COLL === 'china' && (r.pages || []).includes(key)) || (byGps[r.id] || []).includes(`${COLL}/${key}`));
     let section = null;
     if (!tile) {
+      if (COLL !== 'china') return;
       // the hub: every China reel, by province
       const prov = tileById('provinces');
       const groups = (prov ? allSubtiles(prov) : [])
@@ -1132,11 +1136,13 @@
       section = ReelsSite.master('Reels', all.length, body => fillGroups(body, groups, all),
         { note: 'by province · drafts, localhost only' });
     } else if (!s) {
-      if (!['provinces', 'bridges', 'energy'].includes(tile.id)) return;
+      // these China facets say so when nothing is edited yet; elsewhere no reels, no section
+      const always = COLL === 'china' && ['provinces', 'bridges', 'energy'].includes(tile.id);
       const groups = allSubtiles(tile)
         .map(x => ({ title: x.title, href: `#${tile.id}/${x.id}`, reels: reelsFor(`${tile.id}/${x.id}`) }))
         .filter(g => g.reels.length);
       const all = [...new Set(groups.flatMap(g => g.reels))];
+      if (!all.length && !always) return;
       section = ReelsSite.master('Reels', all.length, body => {
         if (!all.length) {
           body.appendChild(el('p', 'reels-day-sub', 'No reels edited here yet.'));
@@ -1162,7 +1168,7 @@
         const whole = list.filter(r => !r.day);
         if (whole.length) groups.push({ title: 'Whole trip', reels: whole });
         fillGroups(body, groups, list);
-      }, { open: list.length <= 8, note: `edited from ${s.title} · localhost only` });
+      }, { note: `edited from ${s.title} · localhost only` });
     }
     if (!section || token !== reelsToken) return;
     section.classList.add('reels-place');

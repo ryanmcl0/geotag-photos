@@ -85,11 +85,23 @@ window.People = (function () {
     // present only in the document serve.sh seeds — never in the deployed one).
     const PUBLIC = 0, GATED = 1, PHONE = 2;
 
+    // Portrait / Landscape (posts mode, as on the gallery pages): `a` is the
+    // photo's width / height from tools/people_index.py; unknown counts as
+    // landscape, like the grids' 1.5 default. The pick is shared with the
+    // gallery pages' filter bars for the browser session.
+    const SHAPE_KEY = 'postsOrientation';
+    const SHAPES = { portrait: p => (p.a || 1.5) < 1, landscape: p => (p.a || 1.5) > 1 };
+    function savedShape() {
+        try { return SHAPES[sessionStorage.getItem(SHAPE_KEY)] ? sessionStorage.getItem(SHAPE_KEY) : ''; }
+        catch (e) { return ''; }
+    }
+
     /** Photo refs the grid understands, filtered by the current view.
-     *  `f` is {kind, country, year} — country '' / year '' mean no constraint,
-     *  and country '?' selects the photos with no country at all. */
+     *  `f` is {kind, country, year, shape} — country '' / year '' / shape '' mean
+     *  no constraint, and country '?' selects the photos with no country at all. */
     function visible(person, f) {
         return person.photos.filter(p => {
+            if (f.shape && !SHAPES[f.shape](p)) return false;
             const kindOk = f.kind === 'all'
                 || (f.kind === 'public' && p.g === PUBLIC)
                 || (f.kind === 'gated' && p.g === GATED)
@@ -317,6 +329,28 @@ window.People = (function () {
             clear.addEventListener('click', () => draw({ ...filter, country: '', year: '' }));
             bar.appendChild(clear);
         }
+
+        // Portrait / Landscape at the end of the row, counted within everything
+        // else that is picked; clicking the lit one shows both again.
+        const shapes = document.createElement('div');
+        shapes.className = 'people-filters people-shapes';
+        const unshaped = visible(person, { ...filter, shape: '' });
+        [['portrait', '▯ Portrait'], ['landscape', '▭ Landscape']].forEach(([v, label]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = `${label} (${unshaped.filter(SHAPES[v]).length})`;
+            b.className = 'people-filter' + (v === filter.shape ? ' is-on' : '');
+            b.addEventListener('click', () => {
+                const shape = filter.shape === v ? '' : v;
+                try {
+                    if (shape) sessionStorage.setItem(SHAPE_KEY, shape);
+                    else sessionStorage.removeItem(SHAPE_KEY);
+                } catch (e) { /* storage off: the pick lasts this view */ }
+                draw({ ...filter, shape });
+            });
+            shapes.appendChild(b);
+        });
+        bar.appendChild(shapes);
         root.appendChild(bar);
 
         const count = document.createElement('p');
@@ -363,7 +397,7 @@ window.People = (function () {
         const key = decodeURIComponent(m[1]);
         const person = doc.people.concat(doc.unnamed).find(p => personKey(p) === key);
         if (!person) { renderIndex(root, doc); return; }
-        renderPerson(root, doc, person, { kind: 'all', country: '', year: '' });
+        renderPerson(root, doc, person, { kind: 'all', country: '', year: '', shape: savedShape() });
         window.scrollTo(0, 0);
     }
 

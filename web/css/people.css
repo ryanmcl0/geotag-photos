@@ -14,6 +14,7 @@
 }
 .people-filter:hover { color: #ddd; }
 .people-filter.is-on { color: #fff; border-color: #6b8cff; }
+.people-shapes { margin-left: auto; }
 
 /* Index of people: one compact row each, photos are one click in. */
 .people-index {

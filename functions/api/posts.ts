@@ -106,7 +106,7 @@ function validPosts(posts: unknown): posts is Post[] {
         ((p as Post).account === undefined ||
             (typeof (p as Post).account === 'string' && (p as Post).account!.length <= 40)) &&
         ((p as Post).platform !== 'xhs' ||
-            (p as Post).photos.length + ((p as Post).phone?.length || 0) <= 18) &&
+            (p as Post).photos.length + ((p as Post).phone?.length || 0) <= 20) &&
         ((p as Post).phone === undefined || (
             Array.isArray((p as Post).phone) &&
             (p as Post).phone!.length <= 200 &&

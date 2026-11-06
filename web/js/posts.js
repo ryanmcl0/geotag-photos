@@ -235,7 +235,10 @@ window.Posts = (function () {
     // Per-platform carousel caps. On Xiaohongshu the phone items are part of
     // the carousel so they count toward the cap; on Instagram the phone
     // bucket is behind-the-scenes material and exempt.
-    const CAPS = { ig: 20, xhs: 18 };
+    // Xiaohongshu takes 20; past 18 the count just turns amber (one account is
+    // happier at 18), no prompt and no block.
+    const CAPS = { ig: 20, xhs: 20 };
+    const XHS_WARN = 18;
     const platformOf = post => (post.platform === 'xhs' ? 'xhs' : 'ig');
     const platLabel = post => (platformOf(post) === 'xhs' ? 'XHS' : 'IG');
     const capOf = post => CAPS[platformOf(post)];
@@ -248,7 +251,7 @@ window.Posts = (function () {
     const WAITLIST_MAX = 40;
 
     /** Fit a cross-platform copy onto Xiaohongshu: carousel photos first, phone
-     *  items fill what remains of the 18, and everything over the cap goes on
+     *  items fill what remains of the 20, and everything over the cap goes on
      *  the copy's waitlist (after any it inherited) rather than being dropped,
      *  so the trimmed photos stay visible on the card. Phone videos have no
      *  thumbnail and cannot be waitlisted, so they are the only thing lost.
@@ -1557,7 +1560,8 @@ window.Posts = (function () {
             + (phonePhotos ? ` · ${phonePhotos} phone` : '')
             + (phoneVideos ? ` · ${phoneVideos} video${phoneVideos === 1 ? '' : 's'}` : '')
             + (set === 'main' && waitOf(post).length ? ` · ${waitOf(post).length} waitlisted` : '');
-        if (countOf(post) >= capOf(post)) count.classList.add('posts-count-full');
+        if (platformOf(post) === 'xhs' && countOf(post) >= XHS_WARN) count.classList.add('posts-count-warn');
+        else if (countOf(post) >= capOf(post)) count.classList.add('posts-count-full');
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'posts-delete';
@@ -1574,7 +1578,7 @@ window.Posts = (function () {
         if (set === 'auto') {
             // Promote a suggestion into the hand-made drafts (which is what
             // ./post.py pull pulls); the suggestion itself stays until
-            // dismissed. XHS copies obey the combined 18 cap: carousel photos
+            // dismissed. XHS copies obey the combined 20 cap: carousel photos
             // first, phone items fill any remaining slots, the rest go on the
             // copy's waitlist (see fitToXhs).
             [['ig', 'Copy → IG'], ['xhs', 'Copy → XHS']].forEach(([plat, label]) => {
@@ -1688,7 +1692,7 @@ window.Posts = (function () {
 
             // Duplicate this draft onto the other platform, keeping order,
             // blur/map marks, caption and song. XHS copies obey the combined
-            // 18 cap: carousel photos first, phone items fill what remains and
+            // 20 cap: carousel photos first, phone items fill what remains and
             // the rest go on the copy's waitlist (see fitToXhs).
             const otherPlat = platformOf(post) === 'xhs' ? 'ig' : 'xhs';
             const dupBtn = document.createElement('button');

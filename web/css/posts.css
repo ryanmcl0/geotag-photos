@@ -201,6 +201,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-picker-full { opacity: .45; }
 .posts-picker-full .posts-picker-count { color: #f87171; }
 .posts-count-full { color: #f87171; }
+.posts-count-warn { color: #fbbf24; }   /* Xiaohongshu at 18-20 of 20: fine, but past the usual 18 */
 .posts-picker-new { justify-content: center; color: #fff; font-weight: 600; }
 .posts-picker-cancel {
   display: block; width: 100%; background: none; border: none; color: #888;

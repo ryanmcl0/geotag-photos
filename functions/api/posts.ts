@@ -27,11 +27,14 @@ const tokenFor = async (key: string | undefined, tier: string, secret: string) =
 };
 
 // map: which location card ./post.py pull renders for this photo, if any.
+// loc: the place-name label ./post.py pull bakes into the photo, and its style.
+// route: ./post.py pull renders one map card of the whole trip's GPS route for it.
 interface PhotoRef {
     trip: string; id: string; ar?: number; blur?: boolean;
-    map?: 'route' | 'pin' | 'china';
+    map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; route?: boolean;
 }
 const MAP_STYLES = ['route', 'pin', 'china'];
+const LOC_STYLES = ['A', 'C'];
 // Behind-the-scenes items from the local-only phone library: {trip, id}
 // photos or {trip, file} videos. Uncapped (not part of the IG carousel).
 interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
@@ -39,14 +42,14 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 // can offer them back; the client caps the list and drops re-added entries.
 interface HistoryRef {
     trip: string; id?: string; file?: string; ar?: number; blur?: boolean;
-    map?: 'route' | 'pin' | 'china'; phone?: boolean; waitlist?: boolean; removed?: string;
+    map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; route?: boolean; phone?: boolean; waitlist?: boolean; removed?: string;
 }
 const MAX_HISTORY_PER_POST = 100;
 // Demoted photos: still attached to the post but outside the carousel, so they
 // do NOT count toward the platform cap (unlike phone items on xhs).
 const MAX_WAITLIST_PER_POST = 40;
 // platform: 'ig' (default) or 'xhs'. On xhs the phone items are part of the
-// carousel, so photos+phone together are capped at 18; on ig the phone bucket
+// carousel, so photos+phone together are capped at 20 (amber from 18 in the client); on ig the phone bucket
 // stays behind-the-scenes and uncapped. posted marks published drafts.
 // caption/song are free text pulled into <post>/caption.txt by ./post.py pull.
 // num is a small stable human-facing number (#N on the card, ./post.py pull N);
@@ -88,7 +91,9 @@ function validPosts(posts: unknown): posts is Post[] {
             ph && typeof ph === 'object' &&
             typeof ph.trip === 'string' && typeof ph.id === 'string' &&
             (ph.blur === undefined || typeof ph.blur === 'boolean') &&
-            (ph.map === undefined || MAP_STYLES.includes(ph.map))) &&
+            (ph.map === undefined || MAP_STYLES.includes(ph.map)) &&
+            (ph.loc === undefined || LOC_STYLES.includes(ph.loc)) &&
+            (ph.route === undefined || typeof ph.route === 'boolean')) &&
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
         ((p as Post).noHighlight === undefined || typeof (p as Post).noHighlight === 'boolean') &&
@@ -116,7 +121,9 @@ function validPosts(posts: unknown): posts is Post[] {
                 ph && typeof ph === 'object' &&
                 typeof ph.trip === 'string' && typeof ph.id === 'string' &&
                 (ph.blur === undefined || typeof ph.blur === 'boolean') &&
-                (ph.map === undefined || MAP_STYLES.includes(ph.map))))) &&
+                (ph.map === undefined || MAP_STYLES.includes(ph.map)) &&
+            (ph.loc === undefined || LOC_STYLES.includes(ph.loc)) &&
+            (ph.route === undefined || typeof ph.route === 'boolean')))) &&
         ((p as Post).history === undefined || (
             Array.isArray((p as Post).history) &&
             (p as Post).history!.length <= MAX_HISTORY_PER_POST &&
@@ -126,6 +133,8 @@ function validPosts(posts: unknown): posts is Post[] {
                 (typeof h.id === 'string' || typeof h.file === 'string') &&
                 (h.blur === undefined || typeof h.blur === 'boolean') &&
                 (h.map === undefined || MAP_STYLES.includes(h.map)) &&
+                (h.loc === undefined || LOC_STYLES.includes(h.loc)) &&
+                (h.route === undefined || typeof h.route === 'boolean') &&
                 (h.phone === undefined || typeof h.phone === 'boolean') &&
                 (h.waitlist === undefined || typeof h.waitlist === 'boolean') &&
                 (h.removed === undefined ||

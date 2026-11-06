@@ -223,6 +223,11 @@ window.Posts = (function () {
         china: 'photo pinned, plus a China locator',
     };
     const MAP_SHORT = { route: 'route', pin: 'pin', china: 'China' };
+    // Location pin: ./post.py pull bakes the place name into a corner of the photo
+    // (tools/location_pin.py). A = stacked (the default), C = editorial; each press
+    // moves to the next, then off. A wrong name is fixed at pull: --location N "Name".
+    const LOC_STYLES = [null, 'A', 'C'];
+    const LOC_LABELS = { A: 'place name, stacked', C: 'place name, editorial' };
 
     // The IG accounts a post can be marked for (the card chip cycles these).
     const IG_ACCOUNTS = ['ryanmcl0', 'urbex'];
@@ -736,6 +741,8 @@ window.Posts = (function () {
         };
         const blur = button('Blur faces when pulled', toggleBlur);
         const map = button('Map card: press for the next style', cycleMap);
+        const loc = button('Location pin: the place name baked into a corner on pull (press for the next style)', cycleLoc);
+        const route = button('Trip route: one map card of the whole trip\'s route on pull (needs a GPX)', toggleRoute);
         const wait = set === 'main' ? button('Move to the waitlist (keeps it on this post, out of the carousel or Phone section)', demoteToWaitlist) : null;
         const rm = button('Remove from this post', removeFromPost);
         const status = document.createElement('span');
@@ -754,10 +761,16 @@ window.Posts = (function () {
             blur.classList.toggle('is-on', !!ph.blur);
             map.textContent = ph.map ? `🗺 ${MAP_SHORT[ph.map]}` : '🗺 Map card';
             map.classList.toggle('is-on', !!ph.map);
+            loc.textContent = ph.loc ? `📍 ${ph.loc}` : '📍 Location';
+            loc.classList.toggle('is-on', !!ph.loc);
+            route.textContent = ph.route ? '🛣 Route on' : '🛣 Route';
+            route.classList.toggle('is-on', !!ph.route);
             if (wait) wait.textContent = '⇩ Waitlist';
             rm.textContent = '✕ Remove';
             // Off the carousel, the actions don't apply: show where it went instead.
             map.hidden = !inCarousel;
+            loc.hidden = !inCarousel;
+            route.hidden = !inCarousel;
             [blur, wait, rm].forEach(b => { if (b) b.hidden = !(inCarousel || inPhone); });
             status.textContent = st.where === 'waitlist' ? '⇩ On the waitlist'
                 : st.where === 'gone' ? 'Removed from this post' : '';
@@ -2070,12 +2083,15 @@ window.Posts = (function () {
             cell.appendChild(img);
         }
 
-        if (ref.blur || ref.map) {
+        if (ref.blur || ref.map || ref.loc || ref.route) {
             const mark = document.createElement('span');
             mark.className = 'posts-wait-marks';
-            mark.textContent = (ref.blur ? '🙂🚫' : '') + (ref.map ? ' 🗺' : '');
+            mark.textContent = (ref.blur ? '🙂🚫' : '') + (ref.map ? ' 🗺' : '') + (ref.loc ? ' 📍' : '') +
+                (ref.route ? ' 🛣' : '');
             mark.title = [ref.blur ? 'Faces blurred on pull' : null,
-                          ref.map ? `Map card: ${MAP_LABELS[ref.map]}` : null]
+                          ref.map ? `Map card: ${MAP_LABELS[ref.map]}` : null,
+                          ref.loc ? `Place name: ${LOC_LABELS[ref.loc]}` : null,
+                          ref.route ? 'Trip route card' : null]
                          .filter(Boolean).join('\n');
             cell.appendChild(mark);
         }
@@ -2275,6 +2291,17 @@ window.Posts = (function () {
         editPhoto(root, postId, ref, set, ph => {
             const next = MAP_STYLES[(MAP_STYLES.indexOf(ph.map || null) + 1) % MAP_STYLES.length];
             if (next) ph.map = next; else delete ph.map;
+        });
+
+    // Trip route mark: ./post.py pull renders ONE card per trip with a marked photo,
+    // the trip's whole GPS route at the post's shape (or says the trip has no GPX).
+    const toggleRoute = (root, postId, ref, set) =>
+        editPhoto(root, postId, ref, set, ph => { if (ph.route) delete ph.route; else ph.route = true; });
+
+    const cycleLoc = (root, postId, ref, set) =>
+        editPhoto(root, postId, ref, set, ph => {
+            const next = LOC_STYLES[(LOC_STYLES.indexOf(ph.loc || null) + 1) % LOC_STYLES.length];
+            if (next) ph.loc = next; else delete ph.loc;
         });
 
     /** The list a photo sits in on post p: its carousel or its Phone section. */
@@ -2571,6 +2598,22 @@ window.Posts = (function () {
         if (ref.map) mapBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
         mapBtn.addEventListener('click', () => cycleMap(root, post.id, ref, set));
 
+        const locBtn = document.createElement('button');
+        locBtn.type = 'button';
+        locBtn.textContent = '📍';
+        locBtn.title = ref.loc ? `Location pin: ${LOC_LABELS[ref.loc]} — click for the next style`
+                               : `Add the place name on pull (${LOC_LABELS.A})`;
+        if (ref.loc) locBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
+        locBtn.addEventListener('click', () => cycleLoc(root, post.id, ref, set));
+
+        const routeBtn = document.createElement('button');
+        routeBtn.type = 'button';
+        routeBtn.textContent = '🛣';
+        routeBtn.title = ref.route ? 'Trip route card ON: one map of the whole trip route on pull'
+                                   : 'Add a map of the whole trip route (one per trip, needs a GPX)';
+        if (ref.route) routeBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
+        routeBtn.addEventListener('click', () => toggleRoute(root, post.id, ref, set));
+
         const demote = document.createElement('button');
         demote.type = 'button';
         demote.textContent = '⇩';
@@ -2627,15 +2670,29 @@ window.Posts = (function () {
 
         controls.insertBefore(blurBtn, rm);
         controls.insertBefore(mapBtn, rm);
+        controls.insertBefore(locBtn, rm);
+        controls.insertBefore(routeBtn, rm);
         // Demote sits next to remove: the softer of the two "take it out" actions.
         if (set === 'main') controls.insertBefore(demote, rm);
-        if (ref.map) {
-            const mark = document.createElement('span');
-            mark.textContent = '🗺 ' + MAP_SHORT[ref.map];
-            mark.title = `Map card on pull: ${MAP_LABELS[ref.map]}`;
-            mark.style.cssText = 'position:absolute;top:4px;right:4px;font-size:11px;' +
-                'background:rgba(0,0,0,.65);border-radius:4px;padding:1px 4px';
-            cell.appendChild(mark);
+        // Pull marks stack down the top-right corner (the order number owns the
+        // top-left, the blur mark the bottom-left), so none can sit on another.
+        const pullMarks = [
+            ref.map && ['🗺 ' + MAP_SHORT[ref.map], `Map card on pull: ${MAP_LABELS[ref.map]}`],
+            ref.loc && ['📍 ' + ref.loc, `Place name on pull: ${LOC_LABELS[ref.loc]}`],
+            ref.route && ['🛣', 'Trip route card on pull'],
+        ].filter(Boolean);
+        if (pullMarks.length) {
+            const stack = document.createElement('div');
+            stack.style.cssText = 'position:absolute;top:4px;right:4px;display:flex;flex-direction:column;' +
+                'align-items:flex-end;gap:3px;pointer-events:none';
+            pullMarks.forEach(([text, title]) => {
+                const mark = document.createElement('span');
+                mark.textContent = text;
+                mark.title = title;
+                mark.style.cssText = 'font-size:11px;background:rgba(0,0,0,.65);border-radius:4px;padding:1px 4px';
+                stack.appendChild(mark);
+            });
+            cell.appendChild(stack);
         }
         if (ref.blur) {
             const mark = document.createElement('span');

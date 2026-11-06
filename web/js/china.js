@@ -883,7 +883,9 @@
     (tile.sections || []).forEach(sec => {
       // a section can name its own unit (the Passes section of the Mountains page)
       const unit = sec.unit || tileUnit;
-      const units = n => `${n} ${esc(n === 1 ? unit : unit.endsWith('s') ? unit + 'es' : unit + 's')}`;
+      const plural = sec.unit_plural || (sec.unit && sec.unit !== tile.unit ? null : tile.unit_plural) ||
+        (unit.endsWith('s') ? unit + 'es' : unit + 's');
+      const units = n => `${n} ${esc(n === 1 ? unit : plural)}`;
       const subs = sec.subtiles.filter(s =>
         !selected || (s.years || []).some(y => selected.has(y)));
       if (!subs.length) return;
@@ -918,7 +920,7 @@
     .toLowerCase().replace(/[^a-z0-9一-鿿]+/g, ' ').trim();
 
   function searchText(s) {
-    return fold([s.title, s.name_zh, s.city, s.range, s.country, s.province, s.height_label || s.subtitle,
+    return fold([s.title, s.name_zh, ...(s.aka || []), s.city, s.range, s.country, s.province, s.height_label || s.subtitle,
       s.crane_m ? 'crane' : '', s.underground ? 'underground tunnel' : '',
       s.pass ? 'pass col' : '', s.reached === false ? 'not summited' : ''].join(' '));
   }
@@ -1041,6 +1043,14 @@
     const zh = s.name_zh ? ` <span class="count">${esc(s.name_zh)}</span>` : '';
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}${sub}
       <span class="count" id="gallery-count">${(s.photos || []).length} photos</span>`));
+    // Places: a city links to its spots, a spot back to its city.
+    const links = [
+      ...(s.in_city && s.in_city.id ? [[`#cities/${s.in_city.id}`, `↖ ${s.in_city.title}`]] : []),
+      ...(s.spots || []).map(x => [`#spots/${x.id}`, x.title])];
+    if (links.length) {
+      app.appendChild(el('div', 'ss-chips place-links', links.map(([href, label]) =>
+        `<a class="ss-chip" href="${esc(href)}">${esc(label)}</a>`).join('')));
+    }
     // lightbox caption: name · height · province/city (bridges + buildings carry these)
     const caption = [s.title, s.height_label || (s.height_m ? `${s.height_m} m` : null), s.province || s.range || s.city || null]
       .filter(Boolean).join(' · ');

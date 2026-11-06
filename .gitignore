@@ -47,6 +47,9 @@ config/*.json
 config/geo/
 !config/trips.example.json
 
+# Downloaded place-name data (place_names.py fetches it when missing)
+.cache/
+
 # Generated year/trip HTML pages
 web/20*/
 

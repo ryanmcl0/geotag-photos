@@ -797,14 +797,37 @@
     app.appendChild(el('div', 'section-head',
       `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
     const grid = el('div');
-    let kind = 'all';
     const photos = tile.photos || [];
-    const applyFilters = () => Gallery.renderGrid(grid, kind === 'all'
-      ? photos : photos.filter(p => Gallery.photoKind(p) === kind));
-    const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
-    if (kindBar) app.appendChild(kindBar);
+    let phone = [];
+    let kind = cameraKind();
+    const applyFilters = () => Gallery.renderGrid(grid, Gallery.filterKind(photos, phone, kind));
+    attachKindBar(grid, photos, `${COLL}/${tile.id}`, k => { kind = k; applyFilters(); },
+      p => { phone = p; applyFilters(); });
     app.appendChild(grid);
     applyFilters();
+  }
+
+  // Camera/Drone chips above `grid`, swapped for Camera/Drone/Phone/Me once the
+  // page's phone photos and the photos of me (localhost only) arrive. The kind
+  // survives Back via ?kind=.
+  function attachKindBar(grid, photos, key, onPick, onPhone) {
+    const pick = k => { setHashQuery({ kind: k === 'all' ? null : k }); onPick(k); };
+    const initial = parseHash().query.kind;
+    let bar = Gallery.buildKindBar(photos, pick, null, initial);
+    if (bar) app.appendChild(bar);
+    Promise.all([Gallery.phoneFor(key), Gallery.markMe(photos)]).then(([phone, mine]) => {
+      if ((!phone.length && !mine) || !grid.isConnected) return;
+      const next = Gallery.buildKindBar(photos, pick, phone, initial);
+      if (bar) bar.replaceWith(next); else grid.before(next);
+      bar = next;
+      onPhone(phone);
+      onPick((initial || '').startsWith('phone') && phone.length ? 'phone' : cameraKind());
+    });
+  }
+  // the hash's ?kind= when it needs no phone data (phone picks apply once it loads)
+  function cameraKind() {
+    const k = parseHash().query.kind;
+    return k === 'camera' || k === 'drone' ? k : 'all';
   }
 
   // roofs: height-tier sections, one tile per building → its gallery
@@ -860,7 +883,9 @@
     (tile.sections || []).forEach(sec => {
       // a section can name its own unit (the Passes section of the Mountains page)
       const unit = sec.unit || tileUnit;
-      const units = n => `${n} ${esc(n === 1 ? unit : unit.endsWith('s') ? unit + 'es' : unit + 's')}`;
+      const plural = sec.unit_plural || (sec.unit && sec.unit !== tile.unit ? null : tile.unit_plural) ||
+        (unit.endsWith('s') ? unit + 'es' : unit + 's');
+      const units = n => `${n} ${esc(n === 1 ? unit : plural)}`;
       const subs = sec.subtiles.filter(s =>
         !selected || (s.years || []).some(y => selected.has(y)));
       if (!subs.length) return;
@@ -895,7 +920,7 @@
     .toLowerCase().replace(/[^a-z0-9一-鿿]+/g, ' ').trim();
 
   function searchText(s) {
-    return fold([s.title, s.name_zh, s.city, s.range, s.country, s.province, s.height_label || s.subtitle,
+    return fold([s.title, s.name_zh, ...(s.aka || []), s.city, s.range, s.country, s.province, s.height_label || s.subtitle,
       s.crane_m ? 'crane' : '', s.underground ? 'underground tunnel' : '',
       s.pass ? 'pass col' : '', s.reached === false ? 'not summited' : ''].join(' '));
   }
@@ -1018,6 +1043,14 @@
     const zh = s.name_zh ? ` <span class="count">${esc(s.name_zh)}</span>` : '';
     app.appendChild(el('div', 'section-head', `<h2>${esc(s.title)}</h2>${zh}${sub}
       <span class="count" id="gallery-count">${(s.photos || []).length} photos</span>`));
+    // Places: a city links to its spots, a spot back to its city.
+    const links = [
+      ...(s.in_city && s.in_city.id ? [[`#cities/${s.in_city.id}`, `↖ ${s.in_city.title}`]] : []),
+      ...(s.spots || []).map(x => [`#spots/${x.id}`, x.title])];
+    if (links.length) {
+      app.appendChild(el('div', 'ss-chips place-links', links.map(([href, label]) =>
+        `<a class="ss-chip" href="${esc(href)}">${esc(label)}</a>`).join('')));
+    }
     // lightbox caption: name · height · province/city (bridges + buildings carry these)
     const caption = [s.title, s.height_label || (s.height_m ? `${s.height_m} m` : null), s.province || s.range || s.city || null]
       .filter(Boolean).join(' · ');
@@ -1032,13 +1065,17 @@
     const years = [...new Set(photos.map(p => p.year).filter(Boolean))].sort((a, b) => b - a);
     const q = parseHash().query.year;
     let year = q && q !== 'all' && years.includes(Number(q)) ? Number(q) : 'all';
-    let kind = 'all';
+    let kind = cameraKind();
+    let phone = [];
     const applyFilters = () => {
-      const shown = photos.filter(p =>
-        (year === 'all' || p.year === year) &&
-        (kind === 'all' || Gallery.photoKind(p) === kind));
+      const inYear = p => year === 'all' || p.year === year;
+      const shown = Gallery.filterKind(photos, phone, kind).filter(inYear);
       const count = document.getElementById('gallery-count');
-      if (count) count.textContent = `${shown.length} photos`;   // header tracks the filter
+      // header tracks the filter, and says so when a posts-mode shape narrows it
+      const shape = Gallery.orientationActive();
+      if (count) count.textContent = shape
+        ? `${shown.length} ${shape} of ${Gallery.filterKind(photos, phone, kind, true).filter(inYear).length} photos`
+        : `${shown.length} photos`;
       Gallery.renderGrid(grid, shown);
     };
     if (years.length > 1) {
@@ -1048,8 +1085,8 @@
         applyFilters();
       }, year));
     }
-    const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
-    if (kindBar) app.appendChild(kindBar);
+    attachKindBar(grid, photos, `${COLL}/${tile.id}/${s.id}`, k => { kind = k; applyFilters(); },
+      p => { phone = p.map(x => ({ ...x, title: caption })); applyFilters(); });
     app.appendChild(grid);
     applyFilters();
   }
@@ -1073,18 +1110,22 @@
   }
 
   /* ---------------- reels (localhost only, reels-site.js) ----------------
-   * The video pipeline's reel drafts on the place pages, matched by reel_site.py
-   * through the photos each page is built from (the reel's drone GPS near this
-   * page's photos; provinces also by the reel's own place names). */
+   * The video pipeline's reel drafts on the place pages, collapsed until opened.
+   * China provinces and energy sites come matched by reel_site.py (the reel's
+   * drone GPS near the page's photos; provinces also by the reel's own place
+   * names); every other page (bridges, buildings, mountains, cities, spots) by
+   * tools/phone_places.py from the same GPS, keyed "<collection>/<facet>/<page>". */
   let reelsToken = 0;
   async function placeReels(tile, s) {
-    if (COLL !== 'china' || !window.ReelsSite) return;
+    if (!window.ReelsSite) return;
     const token = ++reelsToken;
-    const doc = await ReelsSite.load();
+    const [doc, byGps] = await Promise.all([ReelsSite.load(), Gallery.reelPages()]);
     if (!doc || token !== reelsToken) return;
-    const reelsFor = key => doc.reels.filter(r => (r.pages || []).includes(key));
+    const reelsFor = key => doc.reels.filter(r =>
+      (COLL === 'china' && (r.pages || []).includes(key)) || (byGps[r.id] || []).includes(`${COLL}/${key}`));
     let section = null;
     if (!tile) {
+      if (COLL !== 'china') return;
       // the hub: every China reel, by province
       const prov = tileById('provinces');
       const groups = (prov ? allSubtiles(prov) : [])
@@ -1095,11 +1136,13 @@
       section = ReelsSite.master('Reels', all.length, body => fillGroups(body, groups, all),
         { note: 'by province · drafts, localhost only' });
     } else if (!s) {
-      if (!['provinces', 'bridges', 'energy'].includes(tile.id)) return;
+      // these China facets say so when nothing is edited yet; elsewhere no reels, no section
+      const always = COLL === 'china' && ['provinces', 'bridges', 'energy'].includes(tile.id);
       const groups = allSubtiles(tile)
         .map(x => ({ title: x.title, href: `#${tile.id}/${x.id}`, reels: reelsFor(`${tile.id}/${x.id}`) }))
         .filter(g => g.reels.length);
       const all = [...new Set(groups.flatMap(g => g.reels))];
+      if (!all.length && !always) return;
       section = ReelsSite.master('Reels', all.length, body => {
         if (!all.length) {
           body.appendChild(el('p', 'reels-day-sub', 'No reels edited here yet.'));
@@ -1125,7 +1168,7 @@
         const whole = list.filter(r => !r.day);
         if (whole.length) groups.push({ title: 'Whole trip', reels: whole });
         fillGroups(body, groups, list);
-      }, { open: list.length <= 8, note: `edited from ${s.title} · localhost only` });
+      }, { note: `edited from ${s.title} · localhost only` });
     }
     if (!section || token !== reelsToken) return;
     section.classList.add('reels-place');

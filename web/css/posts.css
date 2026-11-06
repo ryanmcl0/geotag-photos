@@ -201,6 +201,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-picker-full { opacity: .45; }
 .posts-picker-full .posts-picker-count { color: #f87171; }
 .posts-count-full { color: #f87171; }
+.posts-count-warn { color: #fbbf24; }   /* Xiaohongshu at 18-20 of 20: fine, but past the usual 18 */
 .posts-picker-new { justify-content: center; color: #fff; font-weight: 600; }
 .posts-picker-cancel {
   display: block; width: 100%; background: none; border: none; color: #888;
@@ -295,7 +296,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   pointer-events: none;
 }
 .posts-thumb-controls {
-  position: absolute; left: 0; right: 0; bottom: 0; display: flex;
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 3px;
   justify-content: space-between; padding: 4px; opacity: 0; transition: opacity .15s;
   background: linear-gradient(transparent, rgba(0,0,0,.6)); border-radius: 0 0 6px 6px;
 }
@@ -303,9 +304,9 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 @media (hover: none) { .posts-thumb-controls { opacity: 1; } }
 .posts-thumb-controls button {
   background: rgba(0,0,0,.55); color: #fff; border: none; border-radius: 5px;
-  /* Five controls on a 132px tile (and narrower on phones): let them shrink
-     to fit rather than pushing each other out of the row. */
-  flex: 0 1 26px; min-width: 0; padding: 0;
+  /* Eight controls on a 132px tile (and narrower on phones): four to a row,
+     two rows, each still big enough to hit. */
+  flex: 1 0 calc(25% - 3px); max-width: calc(25% - 2px); min-width: 0; padding: 0;
   height: 26px; font-size: 12px; cursor: pointer;
 }
 .posts-thumb-controls button:disabled { opacity: .3; cursor: default; }

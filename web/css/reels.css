@@ -98,6 +98,33 @@
     padding: 5px 9px; cursor: pointer;
 }
 .reel-post-btn.on { background: #fff; color: #111; border-color: #fff; }
+/* the song, with its reject button and what has been decided about it */
+.reel-song { display: flex; align-items: baseline; gap: 6px; margin-top: 3px; font-size: 11.5px; color: rgba(255, 255, 255, 0.6); }
+.reel-song-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reel-song.rejected .reel-song-name { text-decoration: line-through; color: rgba(255, 255, 255, 0.35); }
+.reel-song-reject {
+    flex: none; border: none; background: none; color: rgba(255, 255, 255, 0.45);
+    font-size: 12px; line-height: 1; padding: 2px 3px; cursor: pointer;
+}
+.reel-song-reject:hover { color: #ff8a80; }
+.reel-song-menu { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.reel-song-menu[hidden] { display: none; }
+.reel-song-opt, .reel-song-undo {
+    border: 1px solid #555; border-radius: 999px; background: none; color: #ddd;
+    font: inherit; font-size: 11px; padding: 3px 8px; cursor: pointer;
+}
+.reel-song-opt:hover, .reel-song-undo:hover { border-color: #fff; color: #fff; }
+.reel-song-status { font-size: 11px; color: #ffb74d; margin-top: 3px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.reel-song-status:empty { display: none; }
+/* fullscreen: top-left, opposite "+ Post", and above the playing video so it stays in reach */
+.reel-fs {
+    position: absolute; top: 7px; left: 7px; z-index: 3;
+    width: 28px; height: 28px; padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.7); border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55); color: #fff;
+    font-size: 15px; line-height: 1; cursor: pointer;
+}
+.reel-fs:hover { background: #fff; color: #111; }
 
 @media (max-width: 768px) {
     .reel-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -108,7 +135,9 @@
     .reel-title { font-size: 12px; }
     .reel-meta { font-size: 10.5px; }
     .reel-post-btn { padding: 4px 7px; font-size: 10.5px; top: 5px; right: 5px; }
+    .reel-fs { width: 24px; height: 24px; font-size: 13px; top: 5px; left: 5px; }
 }
 
-/* ── place pages (china.html) ── */
-.reels-place { margin: 0 0 28px; }
+/* ── place pages (china.js: China, Places, Mountains, Urbex) ── */
+/* right under the page title: room above as well as below */
+.reels-place { margin: 18px 0 28px; }

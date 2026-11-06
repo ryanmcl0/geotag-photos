@@ -1240,11 +1240,154 @@ def facet_category(facet, records, force, echo):
 
 # ---------------------------------------------------------------- orchestration
 
+# ---------------------------------------------------------------- places (cities + spots)
+
+PRIVACY_ZONES = ROOT / 'config' / 'privacy_zones.json'
+_PLACES = None     # place_names.PlaceIndex, loaded on first use
+_PLACE_IDS = {}    # (facet id, group key) → page id: fixed by the full pass, reused by the public one
+
+
+_PROVINCE_FIX = None   # (trip, id) → province adcode, from config/province_overrides.json
+
+
+def _place_of(r):
+    """City and spot for a record; a hand-set province override (Duge Bridge's
+    pin sits just over the Yunnan bank of a border river) files it there."""
+    global _PLACES, _PROVINCE_FIX
+    if _PLACES is None:
+        from place_names import PlaceIndex
+        _PLACES = PlaceIndex()
+        geo = json.loads((ROOT / 'config' / 'geo' / 'china_provinces.geojson').read_text())
+        code = {PROVINCE_ZH_EN.get(f['properties'].get('name')): f['properties'].get('adcode')
+                for f in geo.get('features', [])}
+        _PROVINCE_FIX = {(trip, pid): code.get(prov)
+                         for trip, ids in (_load_json(PROVINCE_OVERRIDES) or {}).items()
+                         for pid, prov in ids.items()}
+    return _PLACES.lookup(r['lat'], r['lon'], _PROVINCE_FIX.get((r['trip'], r['id'])))
+
+
+def _in_privacy_zone(r, zones):
+    return any(dist_km(r['lat'], r['lon'], z['lat'], z['lon']) < z['radius_km'] for z in zones)
+
+
+def _place_groups(records, level):
+    """{(cc, name, city): {'photos', 'keys', 'zh', 'city_*'}} for level 'city' or 'spot'.
+    Groups by name, not key: a town and the area around it can carry the same name
+    ("Nashik"), and that is one place to a visitor. Spots inside a privacy zone are
+    left out of both variants: a neighbourhood name there is too precise."""
+    zones = (_load_json(PRIVACY_ZONES) or []) if level == 'spot' else []
+    groups = {}
+    for r in records:
+        pl = _place_of(r)
+        if not pl or not pl[level]:
+            continue
+        if level == 'spot' and (pl['spot'] == pl['city'] or (zones and _in_privacy_zone(r, zones))):
+            continue   # the town a city is named after is the city page itself
+        gk = (pl['cc'], pl[level]) + ((pl['city'],) if level == 'spot' else ())
+        g = groups.setdefault(gk, {'photos': [], 'keys': set(), 'zh': None,
+                                   'city': pl['city'], 'city_key': pl['city_key']})
+        g['photos'].append(r)
+        g['keys'].add(pl[f'{level}_key'])
+        g['zh'] = g['zh'] or pl[f'{level}_zh']
+    return groups
+
+
+def _place_slug(name):
+    """Page id for a place name, accents folded first ("Yümên" → yumen, where
+    slugify alone gives "y-m-n"). Places only: other pages keep their ids."""
+    import unicodedata
+    return slugify(unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode()) or 'place'
+
+
+def _place_ids(facet_id, groups, slug_of):
+    """Page ids, unique within the facet and stable between the two variants."""
+    taken = {v for (f, _), v in _PLACE_IDS.items() if f == facet_id}
+    for gk in sorted(groups, key=lambda k: -len(groups[k]['photos'])):
+        if (facet_id, gk) in _PLACE_IDS:
+            continue
+        base = slug_of(gk)
+        pid = base
+        for extra in (gk[0].lower(), *(slugify(x) for x in gk[2:]), 'x2', 'x3'):
+            if pid not in taken:
+                break
+            pid = f'{base}-{extra}'
+        _PLACE_IDS[(facet_id, gk)] = pid
+        taken.add(pid)
+    return {gk: _PLACE_IDS[(facet_id, gk)] for gk in groups}
+
+
+def _country_sections(subs_by_cc, unit):
+    from place_names import COUNTRY_NAMES
+    order = sorted(subs_by_cc, key=lambda cc: -sum(s['count'] for s in subs_by_cc[cc]))
+    return [{'id': cc.lower(), 'title': COUNTRY_NAMES.get(cc, cc), 'unit': unit,
+             'subtiles': sorted(subs_by_cc[cc], key=lambda s: -s['count'])} for cc in order]
+
+
+def facet_cities(facet, records, echo):
+    """One page per city (or, out in the country, per area) with at least
+    `min_photos` photos, in country sections. See place_names.py for what a city
+    is. Each city lists its spot pages (facet_spots) to link to."""
+    min_n = facet.get('min_photos', 5)
+    groups = _place_groups(records, 'city')
+    spot_groups = _place_groups(records, 'spot')
+    groups = {k: g for k, g in groups.items() if len(g['photos']) >= min_n}
+    ids = _place_ids(facet['id'], groups, lambda gk: _place_slug(gk[1]))
+    spot_ids = _place_ids('spots', {k: g for k, g in spot_groups.items()
+                                    if len(g['photos']) >= facet.get('spot_min_photos', min_n)},
+                          lambda gk: _place_slug(gk[1]))
+    aliases = _PLACES.aliases if _PLACES else {}
+    by_cc, all_photos = {}, []
+    for gk, g in groups.items():
+        cc, name = gk
+        spots = sorted(((spot_ids[sk], sk[1], len(sg['photos'])) for sk, sg in spot_groups.items()
+                        if sk in spot_ids and sk[0] == cc and sk[2] == name), key=lambda x: -x[2])
+        sub = _subtile_for({'id': ids[gk], 'name': name, 'name_zh': g['zh']}, g['photos'],
+                           {'keys': sorted(g['keys']), 'cc': cc,
+                            'aka': sorted({a for k in g['keys'] for a in aliases.get(k, [])}) or None,
+                            'spots': [{'id': i, 'title': t} for i, t, _ in spots] or None})
+        sub['subtitle'] = f"{len(spots)} spot{'s' if len(spots) != 1 else ''}" if spots else None
+        by_cc.setdefault(cc, []).append({k: v for k, v in sub.items() if v is not None})
+        all_photos.extend(g['photos'])
+    sections = _country_sections(by_cc, 'city')
+    years = sorted({y for sec in sections for s in sec['subtiles'] for y in s['years']}, reverse=True)
+    n = sum(len(sec['subtiles']) for sec in sections)
+    echo(f"  cities: {n} cities in {len(sections)} countries ({len(all_photos)} photos)")
+    return {'kind': 'tiered_tilegroup', 'infographic': facet['infographic']['format'].format(value=n),
+            'years': years, 'sections': sections, 'unit': 'city', 'unit_plural': 'cities',
+            'search_placeholder': 'Search cities, countries'}, all_photos
+
+
+def facet_spots(facet, records, echo):
+    """One page per spot (the nearest town or neighbourhood, see place_names.py)
+    with at least `min_photos` photos, in country sections, each naming its city."""
+    min_n = facet.get('min_photos', 5)
+    groups = {k: g for k, g in _place_groups(records, 'spot').items() if len(g['photos']) >= min_n}
+    ids = _place_ids(facet['id'], groups, lambda gk: _place_slug(gk[1]))
+    city_ids = {gk: pid for (f, gk), pid in _PLACE_IDS.items() if f == 'cities'}
+    by_cc, all_photos = {}, []
+    for gk, g in groups.items():
+        cc, name, city = gk
+        city_id = city_ids.get((cc, city))
+        sub = _subtile_for({'id': ids[gk], 'name': name, 'name_zh': g['zh']}, g['photos'],
+                           {'keys': sorted(g['keys']), 'cc': cc, 'subtitle': city,
+                            'in_city': {'id': city_id, 'title': city} if city_id else None})
+        by_cc.setdefault(cc, []).append({k: v for k, v in sub.items() if v is not None})
+        all_photos.extend(g['photos'])
+    sections = _country_sections(by_cc, 'spot')
+    years = sorted({y for sec in sections for s in sec['subtiles'] for y in s['years']}, reverse=True)
+    n = sum(len(sec['subtiles']) for sec in sections)
+    echo(f"  spots: {n} spots in {len(sections)} countries ({len(all_photos)} photos)")
+    return {'kind': 'tiered_tilegroup', 'infographic': facet['infographic']['format'].format(value=n),
+            'years': years, 'sections': sections, 'unit': 'spot',
+            'search_placeholder': 'Search spots, cities, countries'}, all_photos
+
+
 FACET_BUILDERS = {
     'road_trips': facet_roads, 'bridges': facet_bridges,
     'province': facet_provinces, 'rooftopping': facet_roofs,
     'energy': facet_energy, 'highways': facet_highways,
     'stories': facet_stories, 'mountains': facet_mountains,
+    'cities': facet_cities, 'spots': facet_spots,
 }
 
 
@@ -1701,7 +1844,11 @@ def build_collection(coll, do_category, force, private_map):
         # The public `pool`/records remain the fallback for auto ('auto'/None) covers.
         result['cover'] = resolve_cover(spec, id_index, pool)
         apply_subtile_covers(result, id_index)
-        _mark_not_public(result, full_tile, id_index)
+        # `public_only`: the public file shows public photos and nothing else (the
+        # Places pages): no locked tiles naming places only private trips reached,
+        # no counts that include private photos.
+        if not facet.get('public_only'):
+            _mark_not_public(result, full_tile, id_index)
         if facet['id'] not in photo_privacy.PRIVATE_COVER_SECTIONS:
             _public_covers_only(result, pub_ref_set)
         pub_tiles.append(result)

@@ -288,6 +288,24 @@ def photo_meta() -> dict:
     return meta
 
 
+def photo_ratios() -> dict:
+    """(display_trip_id, photo_id) -> width / height, from the same manifests
+    photo_meta reads (camera trips, then the local phone library when present).
+    Lets the People page's posts-mode Portrait / Landscape filter work without
+    loading every image first."""
+    ratios = {}
+    dirs = [d for d in TRIPS.iterdir() if d.is_dir()]
+    if PHONE_TRIPS.is_dir():
+        dirs += [d for d in PHONE_TRIPS.iterdir() if d.is_dir()]
+    for d in dirs:
+        man = (_load(d / 'manifest.full.json') or _load(d / 'manifest.all.json')
+               or _load(d / 'manifest.json'))
+        for ph in (man or {}).get('photos', []):
+            if ph.get('ar'):
+                ratios[(d.name, ph['id'])] = ph['ar']
+    return ratios
+
+
 NEAR_HOURS = 24        # how far a photo may borrow a country from another photo
 
 
@@ -361,6 +379,7 @@ def site_payload(roster: dict, detail: dict, include_phone: bool = False) -> dic
     by_cluster, _ = cluster_photos()
     phone_by_cluster = cluster_photos_phone() if include_phone else {}
     meta = photo_meta()
+    ratios = photo_ratios()
     assigned = {c for p in roster.values() for c in p['clusters']}
     blocked_pairs = {pair for k, d in detail.items() if d['hide'] == 'blocked'
                      for pair in d['photos']}
@@ -375,11 +394,11 @@ def site_payload(roster: dict, detail: dict, include_phone: bool = False) -> dic
                 pub_cache[slug] = public_ids(slug)
             d, cc = meta.get((slug, pid), (None, None))
             out.append({'t': slug, 'i': pid, 'g': 0 if pid in pub_cache[slug] else 1,
-                        'd': d, 'c': cc})
+                        'd': d, 'c': cc, 'a': ratios.get((slug, pid))})
         # g=2: local phone library. Never public, never gated, never deployed.
         for slug, pid in sorted(phone_pairs):
             d, cc = meta.get((slug, pid), (None, None))
-            out.append({'t': slug, 'i': pid, 'g': 2, 'd': d, 'c': cc})
+            out.append({'t': slug, 'i': pid, 'g': 2, 'd': d, 'c': cc, 'a': ratios.get((slug, pid))})
         # Newest first: opening a person on their oldest trip (alphabetical by
         # slug) buried anything recent hundreds of rows down.
         out.sort(key=lambda e: (e.get('d') or '', e['t'], e['i']), reverse=True)
@@ -498,11 +517,13 @@ def main():
         # entries on the People page. Local document ONLY — they can reference the
         # phone library and backup photos, none of which exist on the deployed site.
         cmeta = photo_meta()
+        cratios = photo_ratios()
         for name, entries in (_load(ROOT / 'config' / 'curated_sets.json') or {}).items():
             for e in entries:
                 d, cc = cmeta.get((e['t'], e['i']), (None, None))
                 e.setdefault('d', d)
                 e.setdefault('c', cc)
+                e.setdefault('a', cratios.get((e['t'], e['i'])))
             local['people'].insert(0, {'key': name.lower().replace(' ', '-'), 'label': name,
                                        'hide': False, 'clusters': [], 'curated_set': True,
                                        'n': len(entries), 'photos': entries})

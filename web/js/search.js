@@ -33,6 +33,8 @@
   // cards, the rest as rows.
   const SECTIONS = [
     { k: 'trip', title: 'Trips', unit: ['trip', 'trips'], grid: true },
+    { k: 'city', title: 'Cities', unit: ['city', 'cities'], grid: true },
+    { k: 'spot', title: 'Spots', unit: ['spot', 'spots'], grid: true },
     { k: 'province', title: 'China · Provinces', unit: ['province', 'provinces'], grid: true },
     { k: 'bridge', title: 'China · Bridges', unit: ['bridge', 'bridges'], grid: true },
     { k: 'road', title: 'China · On the Roads', unit: ['road trip', 'road trips'], grid: true },
@@ -340,7 +342,13 @@
     }).join('');
     let cover = null, photos = 0;
     let kicker = ['HK', 'MO'].includes(place.cc) ? 'Special Administrative Region of China' : 'Country';
-    if (place.k === 'province') {
+    if (place.k === 'city' || place.k === 'spot') {
+      // a city / spot page (places.html): its own cover and count
+      kicker = place.k === 'city' ? `City · ${place.of}` : `Spot · ${place.of}`;
+      const page = DATA.items.find(i => i.k === place.k && i.u === place.u);
+      cover = page && page.c;
+      photos = page ? page.n || 0 : 0;
+    } else if (place.k === 'province') {
       kicker = 'Province of China';
       const tile = DATA.items.find(i => i.k === 'province' && fold(i.t) === fold(place.n));
       cover = tile && tile.c;
@@ -356,7 +364,7 @@
       cover = any && any.it.c;
     }
     const links = [
-      place.u ? `<a class="ss-btn" href="${esc(place.u)}">Open ${place.k === 'province' ? 'province' : 'gallery'}</a>` : '',
+      place.u ? `<a class="ss-btn" href="${esc(place.u)}">Open ${['province', 'city', 'spot'].includes(place.k) ? place.k : 'gallery'}</a>` : '',
       place.m ? `<a class="ss-btn" href="${esc(place.m)}">Show on the map</a>` : '',
     ].join('');
     return `<section class="ss-place">

@@ -6,15 +6,23 @@ export requests are written by this helper instead, next to the reel manifest in
 
     state.json          {"queue": [reel ids, in posting order], "posted": {id: "YYYY-MM-DD"}, "captions": {id: text}}
     export_queue.json   {"items": [{"id", "requested", "status": "queued"|"running"|"done"|"failed", "caption", ...}]}
+    song_feedback.json  {"items": [{"id", "song", "plan", "verdict": "pool"|"reel", "note", "requested",
+                                    "status": "pending"|"applied"|"queued"|"failed", ...}]}
 
 The 4K render itself is the video project's job (tools/vlog/reel_export.py reads export_queue.json, renders one reel
-at a time and marks each item done); the browser only ever asks for it.
+at a time and marks each item done); the browser only ever asks for it. Song feedback works the same way: the
+video project's tools/vlog/song_feedback.py reads song_feedback.json ("pool": move the song out of the music
+library; "reel": not this song for this reel, queued for a new one) and marks each item.
 
 Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing else on the network can write):
     GET  /reels/state            the state (an empty one if none yet)
     PUT  /reels/state            replace it (validated)
     GET  /reels/export           the export queue
     POST /reels/export           {"ids": [...], "captions": {id: text}} → queue the ids not already queued
+    GET  /reels/song-feedback    the song feedback
+    POST /reels/song-feedback    {"id", "verdict": "pool"|"reel"|"undo", "note"} → record a rejection of the reel's
+                                 song (the song and plan are taken from reels.json, not from the browser); "undo"
+                                 withdraws that reel's rejections the pipeline hasn't acted on yet
     GET  /reveal?trip=&id=       show the photo's EDITED file (the Lightroom export the site was built from) in
                                  Finder: the lightbox's "Finder" button on localhost. The file is looked up by
                                  the trip manifest's source folder + the photo's source filename, never from
@@ -38,6 +46,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent.parent / "web" / "phone" / "reels"
 STATE = ROOT / "state.json"
 QUEUE = ROOT / "export_queue.json"
+SONGS = ROOT / "song_feedback.json"
 FILES = ROOT / "files"
 MAX_BODY = 2_000_000
 CHUNK = 1 << 20
@@ -73,6 +82,32 @@ def clean_state(s):
 def known_ids():
     doc = read(ROOT / "reels.json", {})
     return {r["id"] for r in doc.get("reels", []) if isinstance(r, dict) and "id" in r}
+
+
+def song_feedback(body):
+    """Apply one POST /reels/song-feedback to song_feedback.json; → (code, response)."""
+    rid, verdict = body.get("id"), body.get("verdict")
+    if verdict not in ("pool", "reel", "undo"):
+        return 400, {"error": "verdict must be pool, reel or undo"}
+    reel = next((r for r in read(ROOT / "reels.json", {}).get("reels", [])
+                 if isinstance(r, dict) and r.get("id") == rid), None)
+    if not reel:
+        return 400, {"error": "unknown reel"}
+    fb = read(SONGS, {"items": []})
+    if verdict == "undo":
+        fb["items"] = [it for it in fb["items"] if not (it.get("id") == rid and it.get("status") == "pending")]
+    elif not reel.get("song"):
+        return 400, {"error": "this reel has no song on record"}
+    elif not any(it.get("id") == rid and it.get("verdict") == verdict and it.get("status") == "pending"
+                 for it in fb["items"]):
+        item = {"id": rid, "song": reel["song"], "plan": (reel.get("source") or {}).get("plan"),
+                "trip": reel.get("trip"), "verdict": verdict,
+                "requested": dt.datetime.now().isoformat(timespec="seconds"), "status": "pending"}
+        if isinstance(body.get("note"), str) and body["note"].strip():
+            item["note"] = body["note"].strip()[:500]
+        fb["items"].append(item)
+    write(SONGS, fb)
+    return 200, fb
 
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -254,6 +289,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, read(STATE, {"queue": [], "posted": {}, "captions": {}}))
         if self.path.split("?")[0] == "/reels/export":
             return self._json(200, read(QUEUE, {"items": []}))
+        if self.path.split("?")[0] == "/reels/song-feedback":
+            return self._json(200, read(SONGS, {"items": []}))
         self._json(404, {"error": "not found"})
 
     def do_PUT(self):
@@ -267,6 +304,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, s)
 
     def do_POST(self):
+        if self.path.split("?")[0] == "/reels/song-feedback":
+            try:
+                return self._json(*song_feedback(self._body()))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
         if self.path.split("?")[0] != "/reels/export":
             return self._json(404, {"error": "not found"})
         try:

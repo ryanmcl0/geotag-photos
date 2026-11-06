@@ -7,8 +7,16 @@ Everything for working with post drafts. Always takes a subcommand:
                       into "IG <name>" or "XHS <name>" by platform, with
                       "Posted " in front once marked posted (every pull
                       renames all folders to match, even a one-post pull)
-                      (plus a location card in <post>/maps/ for every photo
-                      marked with the map button — see tools/map_card.py)
+                      (plus a location card beside every photo marked with
+                      the map button, NN_<photo>_map.jpg — see tools/map_card.py)
+                      A trip with a photo marked 🛣 gets one route card
+                      (the trip's whole GPS route at the post's shape),
+                      NN_route_<trip>.jpg, or a message when it has no GPX.
+                      Photos marked with the 📍 button get the place name
+                      baked into a corner (tools/location_pin.py); each one
+                      is listed, and a wrong name is fixed with
+                      --location <photo number> "Name" (or "Name / Region",
+                      "auto" to go back, "off" to drop the label).
                       A photo over 32 MB (Xiaohongshu's upload limit) is
                       shrunk to fit as it is copied: a lossless repack if
                       that is enough, else the best re-encode that fits.
@@ -830,7 +838,7 @@ def _adopt_renamed_exports(dest_dir, plan, planned_names):
     loose = [f for f in dest_dir.iterdir()
              if f.is_file() and f.suffix.lower() in SOURCE_EXTS
              and f.name not in planned_names and not f.name.startswith('.')
-             and not re.match(r'^removed_', f.name)]
+             and not re.match(r'^removed_', f.name) and not is_card(f.name)]
     if not loose:
         return {}
     by_core = {}
@@ -984,7 +992,7 @@ def blur_note(n):
             f'could not decode, left unblurred as *{NEEDS_BLUR}, blur it by hand')
 
 
-def sync_post_dir(dest_dir, plan, reblur=False, found=None):
+def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
     only genuinely new photos are copied from the drive. Returns (copied,
@@ -1004,7 +1012,12 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
 
     Blur-flagged copies with no detectable face end up named *NEEDS_BLUR (see
     flagged); they are moved to their plain name while this runs and back at
-    the end."""
+    the end.
+
+    locs ({source name: "style|name|region"}, from location_sigs) are the
+    location labels to bake in, after any blur. Like the blur, a label that
+    changed (or was turned on or off) regenerates that copy from its source,
+    and a re-edit exported over a labelled copy is labelled again in place."""
     found = [] if found is None else found
     planned = {dst.name for _, _, _, dst in plan}
 
@@ -1014,7 +1027,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
     parked, parked_n = {}, 0
     for f in sorted(dest_dir.iterdir()):
         m = re.match(r'^\d{2,3}_(.+)$', unflagged_name(f.name))
-        if not m or not f.is_file() or unflagged_name(f.name) in planned:
+        if not m or not f.is_file() or unflagged_name(f.name) in planned or is_card(f.name):
             continue
         tmp = dest_dir / f'.reorder_{parked_n}_{m.group(1)}'
         parked_n += 1
@@ -1033,6 +1046,19 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
     hashes = state.setdefault('hashes', {})   # md5 of each copy as we wrote it, by source name
     needs = state.setdefault('needs_blur', {})   # source name -> True: no face found, flagged
     shrunk = state.setdefault('compressed', {})   # md5 of copies shrunk to UPLOAD_CAP, by source name
+    located = state.setdefault('located', {})   # source name -> the label baked into its copy
+    locs = locs or {}
+
+    def label(ref, src, dst):
+        """Bake the wanted location label into dst (after any blur); remember what went in."""
+        sig = locs.get(src.name)
+        if sig:
+            style, head, sub = sig.split('|', 2)
+            corner = stamp_location(dst, ref, style, head, sub)
+            print(f'   📍 {dst.name}: {head}' + (f' / {sub}' if sub else '') + f' ({style}, {corner})')
+            located[src.name] = sig
+        else:
+            located.pop(src.name, None)
     state.pop('manual_faces', None)   # retired hand-marking tool
 
     def fit(src, dst):
@@ -1078,13 +1104,15 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 if n <= 0:
                     needs[src.name] = True
             blurred[src.name] = want_blur
+            label(ref, src, dst)
             fit(src, dst)
             adopted_n += 1
             continue
         if reblur and want_blur and dst.exists():
             dst.unlink(missing_ok=True)   # regenerate from source (missing_ok: SMB dir cache can be stale)
             have_blur = False
-        if dst.exists() and have_blur == want_blur:
+        want_loc, have_loc = locs.get(src.name), located.get(src.name)
+        if dst.exists() and have_blur == want_blur and have_loc == want_loc:
             rec = hashes.get(src.name)
             cur = _file_md5(dst)
             if rec is None or cur == rec:
@@ -1109,6 +1137,8 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 continue
             note_reedit(found, ref, src, dst, dest_dir, dst, want_blur)
             if not want_blur:
+                if want_loc:   # a re-edit exported over a labelled copy: label it again
+                    label(ref, src, dst)
                 fit(src, dst)   # local re-edit kept (shrunk if over the limit), just remember it
                 continue
             # blur-flagged copy was replaced (re-edit re-exported over it):
@@ -1120,17 +1150,19 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
                 needs[src.name] = True
             else:
                 needs.pop(src.name, None)
+            if want_loc:
+                label(ref, src, dst)
             fit(src, dst)
             copied += 1
             continue
         if parked.get(src.name):
             tmp = parked[src.name].pop(0)
-            if have_blur == want_blur:
+            if have_blur == want_blur and have_loc == want_loc:
                 tmp.rename(dst)
                 renamed += 1
                 print(f'   ↷ {dst.name}: reordered')
                 continue
-            tmp.unlink()   # blur state changed: regenerate below
+            tmp.unlink()   # blur or label changed: regenerate below
         dst.unlink(missing_ok=True)
         needs.pop(src.name, None)
         try:
@@ -1148,6 +1180,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             print(f'   ⇣ {dst.name}: copying{mb}...')
             shutil.copy2(src, dst)
         blurred[src.name] = want_blur
+        label(ref, src, dst)
         fit(src, dst)
         copied += 1
     for _, ref, src, dst in plan:
@@ -1164,6 +1197,166 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None):
             tmp.rename(dest_dir / f'removed_{orig}')
             print(f'   ⚠️  {orig} is no longer in this post, kept as removed_{orig}')
     return copied, renamed, adopted_n
+
+
+# ---------------------------------------------------------------- cards in the post folder
+
+# Map and route cards sit in the post folder beside the photos they belong to (they used to live in maps/).
+# Anything that sorts the post's own NN_ photos (reorders, re-export adoption) must leave them alone.
+CARD_RE = re.compile(r'^\d{2,3}_(.+_map|route_.+)\.jpg$')
+
+
+def is_card(name):
+    return bool(CARD_RE.match(name))
+
+
+def lift_old_cards(dest_dir):
+    """Cards rendered into <post>/maps/ by earlier pulls move up into the post folder (the folder goes once
+    empty), so the next render finds them where it now looks."""
+    old = dest_dir / 'maps'
+    if not old.is_dir():
+        return
+    for f in sorted(old.iterdir()):
+        if f.is_file() and is_card(f.name) and not (dest_dir / f.name).exists():
+            f.rename(dest_dir / f.name)
+    try:
+        old.rmdir()
+    except OSError:
+        pass   # something else in it: leave it
+
+
+# ---------------------------------------------------------------- trip route cards
+
+def route_jobs(plan):
+    """[(photo number, trip, [refs])] for the trips with photos marked 🛣, in post order: one route card per
+    trip, numbered after its first marked photo so it sorts beside it."""
+    jobs = {}
+    for i, ref, _, _ in plan:
+        if ref.get('route'):
+            jobs.setdefault(ref['trip'], (i, []))[1].append(ref)
+    return [(i, trip, refs) for trip, (i, refs) in jobs.items()]
+
+
+def sync_route_cards(dest_dir, plan, size):
+    """The trip route card for every trip with a photo marked 🛣 (tools/map_card.render_trip_route): the
+    trip's whole GPS route at the post's shape, a dot on each marked photo, one card per trip however many
+    photos asked for it, in the post folder as NN_route_<trip>.jpg. Re-rendered only when the marked photos, the
+    shape or the route itself changed. A trip with no GPX is skipped and said so. → (rendered, skipped)."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import map_card
+
+    maps_dir = dest_dir
+    lift_old_cards(dest_dir)
+    ours = re.compile(r'^\d{2,3}_route_.+\.jpg$')
+    state_path = dest_dir / '.pull_state.json'
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    cards = state.setdefault('routes', {})
+    rendered = skipped = 0
+    keep = set()
+    jobs = route_jobs(plan)
+    for i, trip, refs in jobs:
+        target = maps_dir / f'{i:02d}_route_{trip}.jpg'
+        route_file = ROOT / 'web' / 'trips' / trip / 'route.geojson'
+        if not map_card.route_segments(trip):     # no file, or one with no line in it
+            print(f"   🛣  {trip}: no GPX route on record for this trip, so no route card "
+                  f"({len(refs)} photo{'s' if len(refs) != 1 else ''} marked)")
+            skipped += 1
+            continue
+        keep.add(target.name)
+        sig = {'file': target.name, 'size': list(size), 'marks': sorted(r['id'] for r in refs),
+               'route': route_file.stat().st_mtime, 'v': map_card.CARD_VERSION}
+        if cards.get(trip) == sig and target.exists():
+            continue
+        was = cards.get(trip) or {}
+        old = maps_dir / was['file'] if was.get('file') else None
+        if old and old.exists() and {**was, 'file': None} == {**sig, 'file': None}:
+            old.replace(target)            # only its number changed (the post was reordered)
+            cards[trip] = sig
+            continue
+        photos, _ = trip_manifest_photos(trip)
+        marks = [(ph['lat'], ph['lon']) for ph in (photos.get(r['id']) for r in refs)
+                 if ph and ph.get('lat') is not None]
+        print(f"   🛣  {target.name}: rendering the {trip} route...")
+        card, why = map_card.render_trip_route(trip, size, marks)
+        if card is None:
+            print(f"   ⚠️  no route card for {trip}: {why}")
+            skipped += 1
+            continue
+        maps_dir.mkdir(parents=True, exist_ok=True)
+        card.save(target, quality=93)
+        cards[trip] = sig
+        rendered += 1
+    for trip in [t for t in cards if t not in {t for _, t, _ in jobs}]:
+        del cards[trip]
+    if dest_dir.exists():
+        state_path.write_text(json.dumps(state, indent=1))
+    # cards for trips that lost all their marks (or whose first marked photo moved)
+    if maps_dir.exists():
+        for f in sorted(maps_dir.iterdir()):
+            if f.is_file() and ours.match(f.name) and f.name not in keep:
+                f.unlink()
+    return rendered, skipped
+
+
+# ---------------------------------------------------------------- location pins
+
+def stamp_location(path, ref, style, head, sub):
+    """Bake the place name into the copy at path (tools/location_pin.py) → the corner it went in."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    return location_pin.stamp(path, path, head, sub, style, ref['trip'], ref['id'])
+
+
+def location_sigs(dest_dir, plan, overrides=()):
+    """{source name: "style|name|region"} for every photo to label: marked 📍 on the site (ref.loc, style
+    A or C), or named with --location at pull. This pull's --location overrides are remembered in the
+    post folder's .pull_state.json (by source name, so they survive reorders): "Name" replaces the name
+    and keeps the worked-out region line, "Name / Region" sets both, "auto" forgets the override, "off"
+    keeps that photo unlabelled. → (sigs, notes to print)."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    state_path = dest_dir / '.pull_state.json'
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    texts = state.setdefault('loc_text', {})
+    by_num = {i: src for i, _, src, _ in plan}
+    notes = []
+    for num, text in overrides:
+        num = int(num) if str(num).isdigit() else None
+        src = by_num.get(num)
+        if src is None:
+            notes.append(f'⚠️  --location: no photo with that number in this post (its NN_ prefix)')
+            continue
+        if text.strip().lower() == 'auto':
+            texts.pop(src.name, None)
+        else:
+            texts[src.name] = text.strip()
+    if overrides and dest_dir.exists():
+        state_path.write_text(json.dumps(state, indent=1))
+    sigs = {}
+    for i, ref, src, _ in plan:
+        text = texts.get(src.name)
+        if text and text.lower() == 'off':
+            continue
+        style = ref.get('loc')
+        if not style and not text:
+            continue
+        style = style if style in location_pin.STYLES else 'A'
+        head, sub = location_pin.label_for(ref['trip'], ref['id'])
+        if text:
+            given, _, region = text.partition(' / ')
+            head, sub = given.strip(), (region.strip() if region else (sub or ''))
+        if not head:
+            notes.append(f'⚠️  📍 {i:02d}: no position on record, so no name: '
+                         f'give one with --location {i} "Name"')
+            continue
+        sigs[src.name] = f'{style}|{head}|{sub or ""}'
+    return sigs, notes
 
 
 # ---------------------------------------------------------------- map cards
@@ -1198,7 +1391,7 @@ def post_card_size(post, plan):
 def sync_map_dir(dest_dir, plan, size):
     """Render a location card for every photo carrying a map mark.
 
-    Cards go in <post>/maps/, named after the photo they belong to so the pair
+    Cards go in the post folder beside their photo (NN_<photo>_map.jpg), so the pair
     is obvious in Lightroom. Which card was rendered is remembered next to the
     blur state, so an unchanged one is neither re-rendered nor re-downloaded and
     a reorder on the site is just a rename. Returns (rendered, renamed, failed).
@@ -1206,7 +1399,8 @@ def sync_map_dir(dest_dir, plan, size):
     sys.path.insert(0, str(ROOT / 'tools'))
     import map_card
 
-    maps_dir = dest_dir / 'maps'
+    maps_dir = dest_dir
+    lift_old_cards(dest_dir)
     jobs = [(i, ref, src, ref.get('map')) for i, ref, src, _ in plan if ref.get('map')]
     ours = re.compile(r'^\d{2,3}_.+_map\.jpg$')
     if not jobs:
@@ -1235,7 +1429,8 @@ def sync_map_dir(dest_dir, plan, size):
             continue
         was = cards.get(src.name) or {}
         old = maps_dir / was['file'] if was.get('file') else None
-        if was.get('style') == style and was.get('size') == list(size) and old and old.exists():
+        if was.get('style') == style and was.get('size') == list(size) and old and old.exists() \
+                and was.get('v') == map_card.CARD_VERSION:
             if old != target:
                 old.replace(target)
                 cards[src.name] = {**was, 'file': target.name}
@@ -1250,7 +1445,7 @@ def sync_map_dir(dest_dir, plan, size):
         if old and old.exists() and old != target:
             old.unlink()
         card.save(target, quality=93)
-        cards[src.name] = {'file': target.name, 'style': style, 'size': list(size)}
+        cards[src.name] = {'file': target.name, 'style': style, 'size': list(size), 'v': map_card.CARD_VERSION}
         rendered += 1
     for name in [n for n in cards if n not in {s.name for _, _, s, _ in jobs}]:
         del cards[name]
@@ -1447,6 +1642,9 @@ def cmd_pull(args):
         except (urllib.error.URLError, urllib.error.HTTPError):
             pass
 
+    if getattr(args, 'location', None) and args.num is None and not args.post:
+        sys.exit('❌ --location needs the post: ./post.py pull <#> --location <photo> "Name"')
+
     print(f'⇣ Fetching drafts from {url} ...')
     doc = fetch_posts(url, env)
     posts = doc.get('posts', [])
@@ -1504,12 +1702,25 @@ def cmd_pull(args):
             size = post_card_size(post, plan)
             if cap_what:
                 print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
+            sigs, notes = location_sigs(dest_dir, plan)
+            for n in notes:
+                print(f"   {n}")
             for i, ref, src, dst in plan:
                 big = '  (over 32 MB, shrunk to fit)' if _too_big(src) else ''
                 print(f"   {i:02d} {src}  →  {dst}{big}")
+                if src.name in sigs:
+                    style, head, sub = sigs[src.name].split('|', 2)
+                    print(f"      📍 {head}" + (f" / {sub}" if sub else '') + f"  ({style})")
                 if ref.get('map'):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
-                          f"{dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg'}")
+                          f"{dest_dir / f'{i:02d}_{src.stem}_map.jpg'}")
+            sys.path.insert(0, str(ROOT / 'tools'))
+            import map_card
+            for i, trip, refs in route_jobs(plan):
+                has = bool(map_card.route_segments(trip))
+                print(f"   🛣  {trip} route card ({len(refs)} marked)  →  "
+                      + (f"{dest_dir / f'{i:02d}_route_{trip}.jpg'}" if has
+                         else 'skipped: no GPX route on record for this trip'))
             for i, ref in enumerate([] if args.skip_waitlist else post.get('waitlist') or [], 1):
                 src, why = resolve_wait(ref, prev.get((ref['trip'], ref.get('id'))))
                 print(f"   Waitlist {i:02d} {src or why}  →  {dest_dir / 'Waitlist'}")
@@ -1525,9 +1736,21 @@ def cmd_pull(args):
             old_manifest = json.loads((dest_dir / 'manifest.json').read_text())
         except (OSError, ValueError):
             old_manifest = {}
+        sigs, notes = location_sigs(dest_dir, plan, getattr(args, 'location', None) or [])
+        for n in notes:
+            print(f"   {n}")
         copied, renamed, adopted = sync_post_dir(dest_dir, plan,
                                                  reblur=getattr(args, 'reblur', False),
-                                                 found=found)
+                                                 found=found, locs=sigs)
+        if sigs:
+            # every label on this post, with the fix for a wrong one
+            num = post.get('num')
+            print(f"   📍 {len(sigs)} labelled:")
+            for i, ref, src, dst in plan:
+                if src.name in sigs:
+                    style, head, sub = sigs[src.name].split('|', 2)
+                    print(f"      {i:02d} {head}" + (f" / {sub}" if sub else ''))
+            print(f"      wrong? ./post.py pull {num if num else '<#>'} --location <photo number> \"Name\"")
         manifest = {
             'name': post['name'],
             'version': doc.get('version'),
@@ -1562,7 +1785,7 @@ def cmd_pull(args):
                 cap_path.write_text(txt)
                 print(f"   ✓ caption.txt ({cap_what})")
 
-        # Location cards for the photos marked with the map button -> <post>/maps/
+        # Location cards for the photos marked with the map button -> beside them in the post folder
         marked = [ref for _, ref, _, _ in plan if ref.get('map')]
         try:
             size = post_card_size(post, plan)
@@ -1574,15 +1797,25 @@ def cmd_pull(args):
                 if mfailed:
                     mparts.append(f'{mfailed} failed')
                 mparts.append(f'{len(marked) - mrendered - mrenamed - mfailed} already up to date')
-                print(f"   ✓ maps/ ({size[0]}x{size[1]}): {', '.join(mparts)}")
+                print(f"   ✓ map cards ({size[0]}x{size[1]}): {', '.join(mparts)}")
                 manifest['maps'] = [
                     {'order': i, 'style': ref['map'],
-                     'file': str(dest_dir / 'maps' / f'{i:02d}_{src.stem}_map.jpg')}
+                     'file': str(dest_dir / f'{i:02d}_{src.stem}_map.jpg')}
                     for i, ref, src, _ in plan if ref.get('map')]
                 (dest_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         except Exception as e:
             if marked:
                 print(f"   ⚠️  map cards not rendered: {e}")
+
+        # Trip route cards: one per trip with a photo marked 🛣 -> NN_route_<trip>.jpg in the post folder
+        try:
+            size = post_card_size(post, plan)
+            rrendered, rskipped = sync_route_cards(dest_dir, plan, size)
+            if rrendered:
+                print(f"   ✓ route cards ({size[0]}x{size[1]}): {rrendered} rendered")
+        except Exception as e:
+            if route_jobs(plan):
+                print(f"   ⚠️  route cards not rendered: {e}")
 
         # Demoted photos -> <post>/Waitlist/. Still attached to the post but
         # out of the carousel, so they are pulled (blur marks honoured, same
@@ -2359,6 +2592,13 @@ def main():
     p.add_argument('--reblur', action='store_true',
                    help='Regenerate every blur-flagged copy from its source (after blur changes)')
     p.add_argument('--list', action='store_true', help='List drafts and resolved paths only')
+    p.add_argument('photo', nargs='?', type=int,
+                   help='A photo of that post (its NN_ number), for --location')
+    p.add_argument('--location', nargs='+', action='append', metavar='[PHOTO] NAME',
+                   help='Correct the place name baked onto a photo: pull 32 08 --location "Name" '
+                        '(or --location 08 "Name"). "Name / Region" sets both lines, "auto" goes '
+                        'back to the worked-out name, "off" drops the label. Remembered; repeat '
+                        'for more photos.')
     p.add_argument('--waitlist', action='store_true',
                    help='Also pull the Waitlist photos (also: a bare "wl" word); '
                         'skipped by default')
@@ -2397,6 +2637,19 @@ def main():
     args = ap.parse_args(argv)
     if argv[:1] == ['pull']:
         args.skip_waitlist = not args.waitlist
+        # --location NAME (the photo given after the post number) or --location PHOTO NAME
+        pairs = []
+        for vals in args.location or []:
+            if len(vals) == 2 and vals[0].isdigit():
+                pairs.append((int(vals[0]), vals[1]))
+            elif len(vals) == 1 and args.photo is not None:
+                pairs.append((args.photo, vals[0]))
+            else:
+                ap.error('--location: say which photo: pull 32 08 --location "Name" '
+                         '(or --location 08 "Name"); quote a name with spaces')
+        args.location = pairs
+        if args.photo is not None and not pairs:
+            ap.error(f'photo {args.photo:02d} given but nothing to do with it: add --location "Name"')
     args.func(args)
 
 

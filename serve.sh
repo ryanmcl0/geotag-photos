@@ -33,6 +33,12 @@ if [ -f "$PEOPLE_DOC" ]; then
         && echo "✓ seeded local R2 with _state/people.json (from $PEOPLE_DOC)"
 fi
 
+# The Phone / Me chips on gallery and place pages (localhost only) read
+# web/phone/places.json; rebuild it from the current manifests and pages (~3 s).
+if [ -d web/phone/trips ]; then
+    python3 tools/phone_places.py | head -1
+fi
+
 # Post drafts live in the real R2 bucket, but `wrangler pages dev` simulates its
 # own local one, so the two sides start out unrelated: a post made on the live
 # site (or on your phone) is invisible here until it is copied down. ./post.py

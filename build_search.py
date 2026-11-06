@@ -303,6 +303,37 @@ class Builder:
                              p=sorted(set(place + self.provinces_of(photos))), n=s.get('count') or len(photos),
                              y=s.get('years'))
 
+    # ------------------------------------------------------------ places (cities + spots)
+
+    def place_pages(self):
+        """Every city and spot page (places.html, built from photo locations by
+        build_collections.py / place_names.py). → the whole-query directory entries."""
+        data = _load(OUT_DIR / ('places.json' if self.public else 'places.all.json'), {}) or {}
+        directory = []
+        for tile in data.get('tiles', []):
+            kind = {'cities': 'city', 'spots': 'spot'}.get(tile['id'])
+            if not kind:
+                continue
+            for sec in tile.get('sections') or []:
+                for s in sec.get('subtiles') or []:
+                    if s.get('locked') or not s.get('photos'):
+                        continue
+                    photos = s['photos']
+                    city = (s.get('in_city') or {}).get('title')
+                    u = f"places.html#{tile['id']}/{s['id']}"
+                    self.add(k=kind, t=s['title'], x=s.get('name_zh'),
+                             s=' · '.join(x for x in (city, sec['title']) if x),
+                             u=u, c=_cover(s.get('cover')), cc=[s['cc']] if s.get('cc') else None,
+                             p=sorted(set(([city] if city else []) + (s.get('aka') or [])
+                                          + self.provinces_of(photos))) or None,
+                             n=s.get('count') or len(photos), y=s.get('years'))
+                    directory.append({'n': s['title'], 'k': kind, 'of': city or sec['title'],
+                                      'a': [x for x in [s.get('name_zh'), *(s.get('aka') or [])] if x],
+                                      'u': u, 'n_photos': s.get('count') or len(photos)})
+        # a city before a spot of the same name; bigger first
+        directory.sort(key=lambda d: (d['k'] != 'city', -d.pop('n_photos')))
+        return [{k: v for k, v in d.items() if v} for d in directory]
+
     # ------------------------------------------------------------ blogs + videos
 
     def blogs(self):
@@ -360,6 +391,7 @@ class Builder:
         n_places = self.trips()
         visited = self.china()
         self.mountains()
+        place_dir = self.place_pages()
         if not self.public:
             self.urbex()
             self.videos()
@@ -372,7 +404,7 @@ class Builder:
             if c and c.get('id') in focus:
                 c['f'] = focus[c['id']]['y']
         doc = {'generated': date.today().isoformat(), 'public': self.public,
-               'places': self.places(visited), 'items': self.items}
+               'places': self.places(visited) + place_dir, 'items': self.items}
         if not self.public:
             doc['sections'] = GATED_SECTIONS
         return doc, n_places

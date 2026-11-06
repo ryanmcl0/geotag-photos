@@ -278,8 +278,8 @@
         banner.innerHTML =
             `<span class="gallery-date-label">✦ Highlights</span>` +
             `<span class="gallery-date-count">${photos.length} photo${photos.length === 1 ? '' : 's'}</span>`;
-        // own section so the line pins while the highlights scroll (the filter
-        // bar below them isn't pinned yet), then gives way to the bar and days
+        // own section so the line pins under the filter bar while the
+        // highlights scroll, then gives way to the days
         const section = document.createElement('section');
         section.className = 'gallery-day gallery-highlights-section';
         section.appendChild(banner);
@@ -289,6 +289,7 @@
         sub.className = 'gallery-highlights-grid';
         section.appendChild(sub);
         Gallery.renderGrid(sub, photos);
+        return section;
     }
 
     function setInfo(name, dates, count) {
@@ -561,16 +562,23 @@
             grid.appendChild(slot);
             ReelsSite.tripSection(trip.id).then(sec => { if (sec) slot.replaceWith(sec); else slot.remove(); });
         }
-        if (highlights.length) renderHighlights(grid, highlights);
+        // The phone photos taken on this trip (localhost only), behind a Phone chip.
+        const phone = trip.id.startsWith('phone-') ? [] : (await Gallery.phoneFor(`trip/${trip.id}`))
+            .map(p => ({ ...p, title: (window.TripDays ? TripDays.pretty(p.folder) : p.folder) || '' }));
+        await Gallery.markMe(photos);       // the camera photos of me, for the Me toggle (localhost)
+        // The filter bar comes first, above the highlights: below them it sat
+        // thousands of pixels down a long trip. Highlights are part of "All" and
+        // step aside for any narrower pick (a kind, or a posts-mode shape).
+        let hlSection = null;
         const kindBar = Gallery.buildKindBar(photos, k => {
-            renderByDate(flow, k === 'all' ? photos
-                : photos.filter(p => Gallery.photoKind(p) === k),
+            if (hlSection) hlSection.hidden = k !== 'all' || Gallery.orientationActive();
+            renderByDate(flow, Gallery.filterKind(photos, phone, k),
                 { emptyText: 'No photos of this kind in this trip.', dayDates });
             // Picked from the pinned bar further down: start the new set at its top.
             const view = document.getElementById('gallery-view');
-            const top = flow.offsetTop - kindBar.offsetHeight;
+            const top = (hlSection && !hlSection.hidden ? hlSection : flow).offsetTop - kindBar.offsetHeight;
             if (view && view.scrollTop > top) view.scrollTop = top;
-        });
+        }, phone);
         if (kindBar) {
             grid.appendChild(kindBar);
             // the pinned day headings sit directly under the pinned filter bar
@@ -579,9 +587,13 @@
             setH();
             if (window.ResizeObserver) new ResizeObserver(setH).observe(kindBar);
         }
+        if (highlights.length) {
+            hlSection = renderHighlights(grid, highlights);
+            hlSection.hidden = Gallery.orientationActive();
+        }
         const flow = document.createElement('div');
         grid.appendChild(flow);
-        renderByDate(flow, photos, { emptyText: 'No photos in this trip yet.', dayDates });
+        renderByDate(flow, Gallery.filterKind(photos, phone, 'all'), { emptyText: 'No photos in this trip yet.', dayDates });
     }
 
     if (document.readyState === 'loading') {

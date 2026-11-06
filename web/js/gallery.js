@@ -23,41 +23,164 @@ window.Gallery = (function () {
     return /^dji/i.test(ref.id || '') ? 'drone' : 'camera';
   }
 
+  // Posts mode (posts.js: the posts_ui cookie rides along with the owner-only
+  // posts_auth one) adds a Portrait / Landscape pair to every filter bar, for
+  // getting a feel for a post's shape. The pick holds across pages this session.
+  const postsMode = () => document.cookie.split(';').some(c => /^\s*posts_ui=./.test(c));
+  const ORIENT_KEY = 'postsOrientation';
+  let orientation = null;   // null | 'portrait' | 'landscape'
+  try { orientation = sessionStorage.getItem(ORIENT_KEY) || null; } catch (e) { /* storage off */ }
+  const isPortrait = p => (p.ar || 1.5) < 1;
+  const isLandscape = p => (p.ar || 1.5) > 1;
+  const byOrientation = list => !orientation || !postsMode() ? list
+    : list.filter(orientation === 'portrait' ? isPortrait : isLandscape);
+
+  // "Me" (localhost: the face index's photos of me, camera and phone alike) narrows
+  // whichever kind is picked. Held across the pages of one visit like the shape pick.
+  let meOnly = false;
+
   /**
-   * Camera/Drone filter chips for any photo list where both kinds appear.
-   * Returns null when the list is single-kind (no bar needed). onPick gets
-   * 'all' | 'camera' | 'drone'.
+   * Camera/Drone filter chips for any photo list where both kinds appear, plus,
+   * when `phone` is given (localhost: phoneFor()), a Phone chip; then a Me toggle
+   * when any photo here is flagged `me` (markMe() for camera ones). "All" stays
+   * the camera + drone set; phone photos only show when picked. In posts mode a
+   * Portrait / Landscape pair sits at the right end of the row. Returns null when
+   * there is nothing to pick. onPick gets 'all' | 'camera' | 'drone' | 'phone'
+   * (and fires again, same kind, when Me or the shape changes); filterKind()
+   * applies every pick.
    */
-  function buildKindBar(photos, onPick) {
+  function buildKindBar(photos, onPick, phone, initial) {
     const counts = { camera: 0, drone: 0 };
     photos.forEach(p => counts[photoKind(p)]++);
-    if (!counts.camera || !counts.drone) return null;
+    phone = phone || [];
+    const anyMe = photos.some(p => p.me) || phone.some(p => p.me);
+    if (initial === 'phone-me') { initial = 'phone'; meOnly = true; }   // the old link form
+    if (!anyMe) meOnly = false;              // nothing to narrow to on this page
+    const mixed = counts.camera && counts.drone;
+    const posts = postsMode();
+    if (!mixed && !phone.length && !posts && !anyMe) return null;
     const bar = document.createElement('div');
     bar.className = 'kindbar';
     bar.style.cssText = 'display:flex;gap:8px;margin:10px 0;flex-wrap:wrap';
-    const defs = [['all', `All (${photos.length})`],
-                  ['camera', `📷 Camera (${counts.camera})`],
-                  ['drone', `🚁 Drone (${counts.drone})`]];
-    const style = on => 'border-radius:999px;padding:5px 14px;cursor:pointer;font-size:13px;' +
-      'font-family:inherit;' + (on
+    const defs = [['all', `All (${photos.length})`]];
+    if (mixed) defs.push(['camera', `📷 Camera (${counts.camera})`], ['drone', `🚁 Drone (${counts.drone})`]);
+    if (phone.length) defs.push(['phone', `📱 Phone (${phone.length})`]);
+    const style = (on, sub) => 'border-radius:999px;padding:5px 14px;cursor:pointer;font-size:13px;' +
+      'font-family:inherit;' + (sub && !on ? 'border-style:dashed;' : '') + (on
         ? 'background:#fff;color:#111;border:1px solid #fff'
         : 'background:none;color:#ddd;border:1px solid #555');
-    let current = 'all';
+    let current = defs.some(d => d[0] === initial) ? initial : 'all';
+    const orients = [];
+    let meBtn = null;
+    const refire = () => { paint(); onPick(current); };
+    const paint = () => {
+      bar.querySelectorAll('button[data-kind]').forEach(x => { x.style.cssText = style(x.dataset.kind === current); });
+      // Me counts within the picked kind; the shape pair within the kind and Me
+      const kindList = filterKind(photos, phone, current, true, true);
+      if (meBtn) {
+        const n = kindList.filter(p => p.me).length;
+        meBtn.textContent = `👤 Me (${n})`;
+        meBtn.style.cssText = style(meOnly, true);
+        meBtn.hidden = !n && !meOnly;
+      }
+      const base = filterKind(photos, phone, current, true);
+      orients.forEach(([b, val, label, test]) => {
+        b.textContent = `${label} (${base.filter(test).length})`;
+        b.style.cssText = style(orientation === val) + (val === 'portrait' ? ';margin-left:auto' : '');
+      });
+    };
     defs.forEach(([val, label]) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = label;
       b.dataset.kind = val;
-      b.style.cssText = style(val === current);
-      b.addEventListener('click', () => {
-        current = val;
-        bar.querySelectorAll('button').forEach(x =>
-          x.style.cssText = style(x.dataset.kind === current));
-        onPick(val);
-      });
+      b.addEventListener('click', () => { current = val; refire(); });
       bar.appendChild(b);
     });
+    if (anyMe) {
+      meBtn = document.createElement('button');
+      meBtn.type = 'button';
+      meBtn.dataset.me = '1';
+      meBtn.title = 'Only the photos I am in (click again for all)';
+      meBtn.addEventListener('click', () => { meOnly = !meOnly; refire(); });
+      bar.appendChild(meBtn);
+    }
+    if (posts) {
+      [['portrait', '▯ Portrait', isPortrait], ['landscape', '▭ Landscape', isLandscape]].forEach(([val, label, test]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.orient = val;
+        b.title = 'Posts mode: show only this shape (click again for both)';
+        b.addEventListener('click', () => {
+          orientation = orientation === val ? null : val;
+          try {
+            if (orientation) sessionStorage.setItem(ORIENT_KEY, orientation);
+            else sessionStorage.removeItem(ORIENT_KEY);
+          } catch (e) { /* storage off: the pick lasts this page */ }
+          refire();
+        });
+        orients.push([b, val, label, test]);
+        bar.appendChild(b);
+      });
+    }
+    paint();
     return bar;
+  }
+
+  // {reel id: [page keys]} for the reels placed by their GPS (same file, same
+  // localhost-only rule); {} elsewhere.
+  function reelPages() {
+    return loadPlaces().then(d => (d && d.reels) || {});
+  }
+
+  // anyShape / anyone: ignore the posts-mode shape pick / the Me toggle (the chips' own counts)
+  function filterKind(photos, phone, kind, anyShape, anyone) {
+    let list;
+    if (kind === 'phone' || kind === 'phone-me') list = phone || [];
+    else list = kind === 'all' ? photos : photos.filter(p => photoKind(p) === kind);
+    if (meOnly && !anyone) list = list.filter(p => p.me);
+    return anyShape ? list : byOrientation(list);
+  }
+
+  // Flags the camera / drone photos of me in `photos` (sets p.me) from the face
+  // index's list in places.json; → how many. Localhost only, like phoneFor().
+  function markMe(photos) {
+    return loadPlaces().then(d => {
+      const mine = (d && d.me_camera) || {};
+      let n = 0;
+      photos.forEach(p => {
+        if ((mine[p.trip] || []).includes(p.id)) { p.me = true; n++; }
+      });
+      return n;
+    });
+  }
+
+  // 'portrait' | 'landscape' while posts mode narrows grids to one shape, else null
+  const orientationActive = () => (orientation && postsMode() ? orientation : null);
+
+  /**
+   * Phone photos for a page, from web/phone/places.json (tools/phone_places.py).
+   * Localhost only: the file is never deployed, and elsewhere it isn't fetched.
+   * key: "trip/<slug>" or "<collection>/<facet>/<subtile>". → [] when none.
+   */
+  let placesP = null;
+  function loadPlaces() {
+    if (!placesP) {
+      placesP = LOCAL
+        ? fetch('/phone/places.json', { cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => (d && d.schema === 'phone-places.v1' ? d : null))
+            .catch(() => null)
+        : Promise.resolve(null);
+    }
+    return placesP;
+  }
+  function phoneFor(key) {
+    return loadPlaces().then(d => ((d && d.pages[key]) || []).map(i => {
+      const p = d.photos[i];
+      return { trip: p.t, id: p.i, ar: p.ar, year: Number(p.ts.slice(0, 4)),
+               timestamp: p.ts, date: p.ts.slice(0, 10), folder: p.f || '', me: !!p.me, phone: true };
+    }));
   }
 
   function photoUrl(ref, kind /* 'thumbnails' | 'display' */) {
@@ -380,6 +503,6 @@ window.Gallery = (function () {
     document.body.appendChild(ov);
   }
 
-  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar, createNav,
-           isLocal: LOCAL };
+  return { photoUrl, renderGrid, openLightbox, openVideo, lockedCover, photoKind, buildKindBar, filterKind,
+           orientationActive, phoneFor, markMe, reelPages, createNav, isLocal: LOCAL };
 })();

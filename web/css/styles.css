@@ -1999,9 +1999,7 @@ details[open] .country-summary::after {
 .gallery-day-item-label { font-size: 0.88rem; font-weight: 600; line-height: 1.3; }
 .gallery-day-item-sub { font-size: 0.74rem; opacity: 0.6; }
 
-/* Highlights come above the filter bar, which isn't pinned yet while they
-   scroll: their line pins at the very top instead. */
-.gallery-highlights-section > .gallery-date-banner { top: -18px; }
+/* Highlights sit below the filter bar, so their line pins under it like a day's. */
 .gallery-highlights-section { margin-bottom: 36px; }
 .gallery-highlights-section .gallery-highlights-grid { margin-bottom: 0; }
 @media (max-width: 768px) {
@@ -2012,11 +2010,6 @@ details[open] .country-summary::after {
     }
     /* too narrow for the date: the day menu shows it */
     .gallery-day > .gallery-date-banner .gallery-date-when { display: none; }
-    .gallery-highlights-section > .gallery-date-banner {
-        top: -14px;
-        min-height: 44px; align-items: center;
-        padding-left: 64px;          /* clear the floating menu button */
-    }
 }
 .theme-dark .gallery-date-banner .gallery-date-when { color: rgba(255, 255, 255, 0.55); }
 

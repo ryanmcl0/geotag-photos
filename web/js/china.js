@@ -797,14 +797,37 @@
     app.appendChild(el('div', 'section-head',
       `<h2>${esc(tile.title)}</h2>${tile.infographic ? `<span class="count">${esc(tile.infographic)}</span>` : ''}`));
     const grid = el('div');
-    let kind = 'all';
     const photos = tile.photos || [];
-    const applyFilters = () => Gallery.renderGrid(grid, kind === 'all'
-      ? photos : photos.filter(p => Gallery.photoKind(p) === kind));
-    const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
-    if (kindBar) app.appendChild(kindBar);
+    let phone = [];
+    let kind = cameraKind();
+    const applyFilters = () => Gallery.renderGrid(grid, Gallery.filterKind(photos, phone, kind));
+    attachKindBar(grid, photos, `${COLL}/${tile.id}`, k => { kind = k; applyFilters(); },
+      p => { phone = p; applyFilters(); });
     app.appendChild(grid);
     applyFilters();
+  }
+
+  // Camera/Drone chips above `grid`, swapped for Camera/Drone/Phone/Me once the
+  // page's phone photos and the photos of me (localhost only) arrive. The kind
+  // survives Back via ?kind=.
+  function attachKindBar(grid, photos, key, onPick, onPhone) {
+    const pick = k => { setHashQuery({ kind: k === 'all' ? null : k }); onPick(k); };
+    const initial = parseHash().query.kind;
+    let bar = Gallery.buildKindBar(photos, pick, null, initial);
+    if (bar) app.appendChild(bar);
+    Promise.all([Gallery.phoneFor(key), Gallery.markMe(photos)]).then(([phone, mine]) => {
+      if ((!phone.length && !mine) || !grid.isConnected) return;
+      const next = Gallery.buildKindBar(photos, pick, phone, initial);
+      if (bar) bar.replaceWith(next); else grid.before(next);
+      bar = next;
+      onPhone(phone);
+      onPick((initial || '').startsWith('phone') && phone.length ? 'phone' : cameraKind());
+    });
+  }
+  // the hash's ?kind= when it needs no phone data (phone picks apply once it loads)
+  function cameraKind() {
+    const k = parseHash().query.kind;
+    return k === 'camera' || k === 'drone' ? k : 'all';
   }
 
   // roofs: height-tier sections, one tile per building → its gallery
@@ -1032,13 +1055,17 @@
     const years = [...new Set(photos.map(p => p.year).filter(Boolean))].sort((a, b) => b - a);
     const q = parseHash().query.year;
     let year = q && q !== 'all' && years.includes(Number(q)) ? Number(q) : 'all';
-    let kind = 'all';
+    let kind = cameraKind();
+    let phone = [];
     const applyFilters = () => {
-      const shown = photos.filter(p =>
-        (year === 'all' || p.year === year) &&
-        (kind === 'all' || Gallery.photoKind(p) === kind));
+      const inYear = p => year === 'all' || p.year === year;
+      const shown = Gallery.filterKind(photos, phone, kind).filter(inYear);
       const count = document.getElementById('gallery-count');
-      if (count) count.textContent = `${shown.length} photos`;   // header tracks the filter
+      // header tracks the filter, and says so when a posts-mode shape narrows it
+      const shape = Gallery.orientationActive();
+      if (count) count.textContent = shape
+        ? `${shown.length} ${shape} of ${Gallery.filterKind(photos, phone, kind, true).filter(inYear).length} photos`
+        : `${shown.length} photos`;
       Gallery.renderGrid(grid, shown);
     };
     if (years.length > 1) {
@@ -1048,8 +1075,8 @@
         applyFilters();
       }, year));
     }
-    const kindBar = Gallery.buildKindBar(photos, k => { kind = k; applyFilters(); });
-    if (kindBar) app.appendChild(kindBar);
+    attachKindBar(grid, photos, `${COLL}/${tile.id}/${s.id}`, k => { kind = k; applyFilters(); },
+      p => { phone = p.map(x => ({ ...x, title: caption })); applyFilters(); });
     app.appendChild(grid);
     applyFilters();
   }

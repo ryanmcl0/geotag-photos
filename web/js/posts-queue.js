@@ -115,7 +115,7 @@ window.PostsQueue = (function () {
     function fmtWhen(iso) {
         if (!iso) return '';
         const d = new Date(iso);
-        const opt = { timeZone: 'Asia/Shanghai', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
+        const opt = { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
         try { return d.toLocaleString('en-GB', opt) + ' China'; } catch (e) { return iso; }
     }
 
@@ -213,7 +213,7 @@ window.PostsQueue = (function () {
         }
         const tbl = el('table', 'pq-table');
         const head = el('tr');
-        ['Day', 'China time', 'Reel', ''].forEach(h => head.appendChild(el('th', '', h)));
+        ['Day', 'UK time', 'Reel', ''].forEach(h => head.appendChild(el('th', '', h)));
         tbl.appendChild(head);
         const word = { planned: 'planned', approved: 'approved', posted: 'posted', off: 'posting was off',
             skipped: 'skipped that day', late: 'moved on', removed: 'removed', failed: 'failed', refused: 'not public',
@@ -221,8 +221,8 @@ window.PostsQueue = (function () {
         rows.forEach(r => {
             const tr = el('tr', 'pq-' + (r.status || 'planned'));
             const d = new Date(r.time);
-            const day = d.toLocaleDateString('en-GB', { timeZone: 'Asia/Shanghai', weekday: 'short', day: 'numeric', month: 'short' });
-            const time = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false });
+            const day = d.toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' });
+            const time = d.toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
             [day, time, r.title || r.key, word[r.status] || r.status || ''].forEach(v => tr.appendChild(el('td', '', v)));
             tbl.appendChild(tr);
         });

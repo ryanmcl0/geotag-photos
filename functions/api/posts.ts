@@ -72,7 +72,42 @@ interface Post {
 // gallery-less preview (absent = on; false = the original locked tile).
 interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean; bridgesPreview?: boolean }
 const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs', 'bridgesPreview'];
-interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings }
+// reel_queue: the Reels tab's post queue (localhost page): the paths of reels he
+// approved, the slider's span, and what the video project's Mac helper
+// (tools/reelbot/queue_sync.py) found for each line and the bot's schedule.
+// Absent in a PUT = unchanged, like settings.
+interface QueueItem {
+    id?: string; path: string; added?: string; status?: string; why?: string; key?: string;
+    title?: string; kind?: string; place?: string; frame?: string; dur?: number; thumb?: string;
+    when?: string; approved?: boolean; checked?: string;
+}
+interface ReelQueue {
+    items: QueueItem[]; span_days?: number; span_set?: string; updated?: string;
+    schedule?: Record<string, unknown>; synced?: string;
+}
+const QUEUE_STATUSES = ['pending', 'valid', 'invalid', 'scheduled', 'posted', 'skipped'];
+const QUEUE_TEXT = ['id', 'added', 'why', 'key', 'title', 'kind', 'place', 'frame', 'thumb', 'when', 'checked'];
+interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings; reel_queue?: ReelQueue }
+
+function validQueue(q: unknown): q is ReelQueue | undefined {
+    if (q === undefined) return true;
+    if (!q || typeof q !== 'object' || Array.isArray(q)) return false;
+    const r = q as ReelQueue;
+    const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    if (!Array.isArray(r.items) || r.items.length > 500) return false;
+    if (r.span_days !== undefined &&
+        !(Number.isInteger(r.span_days) && r.span_days >= 1 && r.span_days <= 90)) return false;
+    if (!text(r.span_set, 40) || !text(r.updated, 40) || !text(r.synced, 40)) return false;
+    if (r.schedule !== undefined && (!r.schedule || typeof r.schedule !== 'object' || Array.isArray(r.schedule) ||
+        JSON.stringify(r.schedule).length > 200 * 1024)) return false;
+    return r.items.every(i =>
+        i && typeof i === 'object' &&
+        typeof i.path === 'string' && i.path.length <= 1000 &&
+        (i.status === undefined || QUEUE_STATUSES.includes(i.status)) &&
+        QUEUE_TEXT.every(k => text((i as unknown as Record<string, unknown>)[k], k === 'id' ? 1000 : 400)) &&
+        (i.dur === undefined || (typeof i.dur === 'number' && i.dur >= 0 && i.dur < 86400)) &&
+        (i.approved === undefined || typeof i.approved === 'boolean'));
+}
 
 function validSettings(s: unknown): s is Settings | undefined {
     if (s === undefined) return true;
@@ -178,14 +213,14 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
     if (context.request.method === 'PUT') {
         const raw = await context.request.text();
         if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 });
-        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown };
+        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown; reel_queue?: unknown };
         try {
             body = JSON.parse(raw);
         } catch {
             return new Response('Bad request', { status: 400 });
         }
         if (typeof body.baseVersion !== 'number' || !validPosts(body.posts) ||
-            !validSettings(body.settings)) {
+            !validSettings(body.settings) || !validQueue(body.reel_queue)) {
             return new Response('Bad request', { status: 400 });
         }
         const current = await readDoc();
@@ -201,6 +236,9 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         // the stored switches — absent means "unchanged", not "reset".
         const settings = body.settings !== undefined ? body.settings : current.settings;
         if (settings && Object.keys(settings).length) next.settings = settings;
+        // The same for the Reels tab's post queue: a drafts-only save keeps it.
+        const queue = body.reel_queue !== undefined ? body.reel_queue as ReelQueue : current.reel_queue;
+        if (queue) next.reel_queue = queue;
         await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });

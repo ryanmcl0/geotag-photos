@@ -56,6 +56,85 @@ class Merge3(unittest.TestCase):
         self.assertEqual(P.merge3(B, [post('a')], [post('a')])[0], [post('a')])
 
 
+def line(path, **k):
+    return {'id': path, 'path': path, 'added': '2026-11-07', **k}
+
+
+QB = {'items': [line('/a.mp4', status='valid'), line('/b.mp4', status='pending')], 'span_days': 14}
+
+
+class MergeQueue(unittest.TestCase):
+    """The Reels tab's post queue: his new line on the laptop and queue_sync's statuses on the live site combine."""
+
+    def test_a_new_line_here_and_a_status_there_combine(self):
+        local = {'items': QB['items'] + [line('/c.mp4', status='pending')], 'span_days': 14}
+        remote = {'items': [QB['items'][0], line('/b.mp4', status='invalid', why='no plan')], 'span_days': 14,
+                  'schedule': {'per_day': 1}}
+        out = P.merge_queue(QB, local, remote)
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4', '/b.mp4', '/c.mp4'])
+        self.assertEqual(out['items'][1]['status'], 'invalid')
+        self.assertEqual(out['schedule'], {'per_day': 1})
+
+    def test_the_slider_moved_here_wins_over_an_unchanged_live_copy(self):
+        out = P.merge_queue(QB, dict(QB, span_days=7, span_set='t'), QB)
+        self.assertEqual((out['span_days'], out['span_set']), (7, 't'))
+
+    def test_a_removed_line_stays_removed(self):
+        out = P.merge_queue(QB, {'items': QB['items'][:1], 'span_days': 14}, QB)
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4'])
+
+    def test_a_side_without_a_queue_never_empties_the_other(self):
+        # a live site still on the old functions/api/posts.ts drops the field on every save
+        self.assertEqual(P.merge_queue(QB, QB, None), QB)
+        self.assertIsNone(P.merge_queue(None, None, None))
+
+
+class MirrorCarriesTheQueue(unittest.TestCase):
+    """RemoteMirror._sync_set with a fake local and live store: the queue goes up; a live site on the old
+    functions/api/posts.ts (it drops the field) neither empties the laptop's queue nor gets it re-sent every tick."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig = (P.read_doc, P.write_doc, P.SYNC_BASE)
+        P.SYNC_BASE = Path(self.tmp.name) / 'base.json'
+        self.docs = {'L': {'version': 1, 'posts': B, 'reel_queue': QB}, 'R': {'version': 1, 'posts': B}}
+        self.writes = []
+
+        def read(base, env, which='main'):
+            return json.loads(json.dumps(self.docs[base]))
+
+        def write(base, env, which, posts, v, settings=None, reel_queue=None):
+            self.writes.append(base)
+            d = {'version': v + 1, 'posts': posts}
+            if reel_queue is not None and (base == 'L' or self.live_keeps):
+                d['reel_queue'] = reel_queue
+            self.docs[base] = d
+        P.read_doc, P.write_doc = read, write
+        self.m = P.RemoteMirror({}, 'R', 'L')
+        self.m.base = {'main': {'posts': B, 'settings': {}}}
+
+    def tearDown(self):
+        P.read_doc, P.write_doc, P.SYNC_BASE = self.orig
+        self.tmp.cleanup()
+
+    def tick(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.m._sync_set('main')
+
+    def test_the_queue_goes_up_and_stays_here_when_the_live_site_drops_it(self):
+        self.live_keeps = False
+        self.assertEqual(self.tick(), 'up')
+        self.assertEqual(self.tick(), 'same')
+        self.assertEqual(self.writes, ['R'])
+        self.assertEqual(self.docs['L']['reel_queue'], QB)
+
+    def test_a_live_site_that_keeps_it_matches(self):
+        self.live_keeps = True
+        self.tick()
+        self.assertEqual(self.docs['R']['reel_queue'], QB)
+        self.assertEqual(self.tick(), 'same')
+
+
 class ServerUp(unittest.TestCase):
     def test_a_non_json_answer_is_down_not_a_crash(self):
         orig = P.api_call

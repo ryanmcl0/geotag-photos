@@ -2,6 +2,9 @@
  * Posts ▸ Reels (localhost only): the reels picked for posting, in posting order, with their captions and posted
  * ticks, a phone preview of how the profile will look, and the 4K export.
  *
+ * At the top, the post queue (posts-queue.js): the paths of reels he approved, spread by the bot on the NAS over the
+ * slider's time frame and approved in Telegram once a day.
+ *
  * Reels are picked with "+ Post" on their cards (galleries and China pages, in posts mode). The list, captions and
  * ticks are kept by reels-site.js (web/phone/reels/state.json through tools/reels_local.py, or this browser when that
  * helper isn't running). "Export 4K" only queues a request (web/phone/reels/export_queue.json): the render is the
@@ -190,6 +193,9 @@ window.PostsReels = (function () {
         const byId = Object.fromEntries(doc.reels.map(r => [r.id, r]));
         const list = st.queue.map(id => byId[id]).filter(Boolean);
         selected = new Set([...selected].filter(id => st.queue.includes(id)));
+
+        // the post queue (posts-queue.js): paste approved reels' paths, the slider, the bot's schedule
+        if (window.PostsQueue) root.appendChild(PostsQueue.panel());
 
         const where = ReelsSite.where() === 'disk'
             ? 'Saved on this Mac (web/phone/reels/state.json).'

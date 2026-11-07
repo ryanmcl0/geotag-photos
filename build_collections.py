@@ -28,6 +28,7 @@ import hashlib
 import json
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -1468,6 +1469,7 @@ def main(collection, do_category, force):
     emit_gallery_highlights(click.echo)
     emit_gallery_descriptions(click.echo)
     emit_gallery_regions(click.echo)
+    emit_hashtags(click.echo)
     stamp_road_km(click.echo)
     stamp_trip_bounds(click.echo)
     save_dims_cache()
@@ -1966,6 +1968,29 @@ def emit_gallery_descriptions(echo):
             out[slug] = text.strip()
     (OUT_DIR / 'gallery_descriptions.json').write_text(json.dumps(out, indent=2, ensure_ascii=False))
     echo(f"✓ Wrote web/collections/gallery_descriptions.json ({len(out)} trip(s))")
+
+
+def emit_hashtags(echo):
+    """Theme hashtags for the Posts page's Suggest tags button (config/hashtags.json)
+    → web/collections/hashtags.json. Nothing private in it (a tag list), so it is
+    published as is, normalised to lowercase #letters/digits."""
+    cfg_path = ROOT / 'config' / 'hashtags.json'
+    if not cfg_path.exists():
+        return
+    cfg = json.loads(cfg_path.read_text())
+
+    def tag(t):
+        t = ''.join(c for c in unicodedata.normalize('NFD', str(t)) if not unicodedata.combining(c))
+        t = ''.join(c for c in t.lower() if c.isalnum())
+        return f'#{t}' if t else None
+
+    def tags(ts):
+        return list(dict.fromkeys(x for x in map(tag, ts or []) if x))
+    out = {'tags': tags(cfg.get('tags')),
+           'by_country': {(tag(k) or '#')[1:]: tags(v) for k, v in (cfg.get('by_country') or {}).items() if tag(k)}}
+    (OUT_DIR / 'hashtags.json').write_text(json.dumps(out, indent=2, ensure_ascii=False))
+    echo(f"✓ Wrote web/collections/hashtags.json ({len(out['tags'])} tag(s), "
+         f"{len(out['by_country'])} countr{'y' if len(out['by_country']) == 1 else 'ies'})")
 
 
 def emit_gallery_regions(echo):

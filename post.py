@@ -28,6 +28,19 @@ Everything for working with post drafts. Always takes a subcommand:
                       (see reedits.py)
   ./post.py backfill  the same for re-edits not written back yet (earlier
                       pulls, or answered "not now")
+  ./post.py ig N      post Xiaohongshu draft N (its #number, name or id) to
+                      Instagram as @ryanmcl0 (the Instagram tab is the
+                      urbex account, posted by hand): a fresh pull of that one post, then the
+                      items in the draft's order, the caption exactly as it
+                      goes out and any problems (which block it), then
+                      "Post this to @ryanmcl0? [y/N]" (--yes skips the
+                      question, --dry stops before it). Once Instagram
+                      confirms, the draft is marked posted (+ its permalink),
+                      the same mark as the Posts page's Posted tick, and
+                      synced to the live site. A single video with the
+                      card's Trial reel set goes out as a trial reel
+                      (non-followers first); more than 5 hashtags is a note.
+                      Setup and limits: RUNBOOK §9, tools/instagram_post.py
   ./post.py mirror    sync a dev server started elsewhere (./serve.sh runs this)
   ./post.py sync      copy the remote state down to the local dev server
   ./post.py push      copy the local dev state up to the remote
@@ -1660,6 +1673,10 @@ def cmd_pull(args):
         if not posts:
             sys.exit(f'❌ No post named "{args.post}". '
                      f'Available: {", ".join(p["name"] for p in doc.get("posts", []))or "none"}')
+    if getattr(args, 'id', None):            # ./post.py ig: exactly one draft, by its id
+        posts = [p for p in posts if p.get('id') == args.id]
+        if not posts:
+            sys.exit(f'❌ The draft {args.id} is no longer on {url}.')
     if not posts:
         print('No post drafts yet.')
         return
@@ -2553,6 +2570,230 @@ def cmd_status(args):
                       f"out of sync: {', '.join(diff)} — ./post.py push or ./post.py sync"))
 
 
+# ---------------------------------------------------------------- ig
+
+# One line per Instagram post made by `ig` (ids, name, permalink; no secrets).
+IG_LOG = ROOT / 'local_browse' / 'instagram_posts.jsonl'
+POSTS_DEST = '/Volumes/RYAN/Edits/Posts'
+
+
+def _ask_mirror():
+    """POST /sync to the running mirror (./serve.sh or ./post.py serve started it) → its status, or None
+    when none runs."""
+    try:
+        req = urllib.request.Request(f'http://127.0.0.1:{SYNC_PORT}/sync', data=b'', method='POST')
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read())
+    except (OSError, ValueError):
+        return None
+
+
+def sync_with_live(env):
+    """One two-way sync of the local dev server with the live site, the way an edit made on the localhost
+    Posts page travels: the running mirror does it when there is one, else one RemoteMirror pass from here
+    (merge3 against SYNC_BASE, conflicts kept in SYNC_BACKUPS). Returns the status dict."""
+    st = _ask_mirror()
+    if st is not None:
+        return st
+    return RemoteMirror(env, remote_base(env), LOCAL_BASE).sync(force_remote=True)
+
+
+def pick_ig_post(posts, which):
+    """The Xiaohongshu draft `which` names (its #number, its id, or its name, any case): the Xiaohongshu tab's
+    drafts go to @ryanmcl0 as well as Xiaohongshu; the Instagram tab is the urbex account, posted by hand."""
+    w = str(which).strip().lstrip('#')
+    xhs = [p for p in posts if p.get('platform') == 'xhs']
+    urbex = [p for p in posts if p.get('platform') != 'xhs']
+
+    def named(group):
+        if w.isdigit():
+            return [p for p in group if p.get('num') == int(w)]
+        return ([p for p in group if p.get('id') == w]
+                or [p for p in group if p.get('name', '').strip().lower() == w.lower()])
+    hits = named(xhs)
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        sys.exit(f'❌ {len(hits)} Xiaohongshu drafts are called "{which}"; use the number: '
+                 + ', '.join(f"#{p.get('num')}" for p in hits))
+    if named(urbex):
+        sys.exit(f'❌ "{which}" is on the Instagram tab: that is the urbex account, posted by hand. '
+                 'Only Xiaohongshu-tab drafts go to @ryanmcl0.')
+    open_ = [f"#{p.get('num')} {p['name']}" for p in xhs if not p.get('posted')]
+    sys.exit(f'❌ No Xiaohongshu draft "{which}". Not yet posted: {", ".join(open_) or "none"}')
+
+
+def mark_posted(base, env, post_id, permalink):
+    """The Posts page's own Posted tick, plus the permalink, on one draft at `base`. Written the way the page
+    writes: against the version just read, re-applied to a fresh copy if another edit landed first (409).
+    True once saved, False if the draft is gone."""
+    for _ in range(5):
+        d = read_doc(base, env)
+        posts = d.get('posts', [])
+        p = next((x for x in posts if x.get('id') == post_id), None)
+        if p is None:
+            return False
+        p['posted'] = True
+        p['permalink'] = permalink
+        try:
+            write_doc(base, env, 'main', posts, d.get('version', 0))
+            return True
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+    raise OSError('the draft kept changing while saving the Posted mark')
+
+
+def _find(doc, post_id):
+    return next((p for p in doc.get('posts', []) if p.get('id') == post_id), None)
+
+
+def print_ig_plan(IG, post, folder, plan, setup):
+    shape = {'IMAGE': 'one photo', 'REELS': 'a Reel',
+             'CAROUSEL': f"a carousel of {len(plan['items'])}"}[plan['type']]
+    tag = f"#{post['num']} " if post.get('num') else ''
+    print(f"\n📸 {tag}{post['name']} → @{plan['account']} ({shape})")
+    print(f'   {folder}')
+    trial = {'auto': 'shared to followers automatically if it performs well',
+             'manual': 'you share it to followers yourself in the app'}.get(plan.get('trial'))
+    if trial:
+        print(f'   Trial reel: shown to non-followers first; {trial}')
+    for it in plan['items']:
+        size = f"{it['bytes'] / 1e6:.1f} MB" if it.get('bytes') else '-'
+        if it['kind'] == 'image' and it.get('staged_bytes'):
+            size += f" → {it['staged_bytes'] / 1e6:.1f} MB JPEG"
+        dims = (f"  {it['width']}×{it['height']} ({IG.ratio_name(it['width'], it['height'])})"
+                if it.get('width') and it.get('height') else '')
+        dur = f"  {it['duration']:.1f} s" if it.get('duration') else ''
+        what = '' if it['what'] == 'photo' else f"  [{it['what']}]"
+        print(f"   {it['n']:>2}  {it['label']}  {size}{dims}{dur}{what}")
+        for p in it.get('problems', []):
+            print(f'        ⛔ {p}')
+    print('\n   Caption, exactly as it goes out:')
+    print('   ' + '─' * 50)
+    print(plan['caption'] or '(no caption)')
+    print('   ' + '─' * 50)
+    for n in plan['notes'] + ['no location tag (the API needs a Facebook Page permission for that)']:
+        print(f'   ℹ️  {n}')
+    if setup.missing:
+        print(f"   {'⛔' if setup.enabled else 'ℹ️ '} not set up: {', '.join(setup.missing)}")
+    for p in plan['problems']:
+        print(f'   ⛔ {p}')
+
+
+def cmd_ig(args):
+    """Post one Xiaohongshu-tab draft to Instagram (@ryanmcl0). See the module docstring and RUNBOOK §9.
+
+    Where the draft is read from: with the local dev server up, the localhost Posts page's copy, after one sync
+    with the live site (so the page's latest edits and the phone's are both in); without it, the live site.
+    The Posted mark goes back the same way: onto the local copy and up through the sync, or straight onto the
+    live copy when no dev server runs."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import instagram_post as IG
+    env = require_env()
+    remote = remote_base(env)
+    local_up = server_up(LOCAL_BASE, env)
+    if local_up:
+        print('⇅ Syncing the localhost Posts page with the live site first...')
+        print(f"   ↳ {sync_with_live(env).get('message', '')}")
+    base = LOCAL_BASE if local_up else remote
+    url = posts_url(base)
+    post = pick_ig_post(fetch_posts(url, env).get('posts', []), args.post)
+    if post.get('posted'):
+        sys.exit(f"❌ \"{post['name']}\" is already marked posted"
+                 + (f" ({post['permalink']})" if post.get('permalink') else '') + '.')
+
+    # 1. A fresh pull of this one post: his latest order and re-edits.
+    try:
+        cmd_pull(argparse.Namespace(
+            dest=args.dest, url=url, local=True, num=None, post=None, id=post['id'], list=False,
+            dry_run=False, reblur=False, waitlist=False, skip_waitlist=True))
+    except SystemExit as e:
+        if 'could not be resolved' not in str(e.code):
+            raise
+        print(e.code)                       # the folder check below names what is missing
+    doc = fetch_posts(url, env)
+    post = _find(doc, post['id'])
+    if post is None:
+        sys.exit('❌ The draft was deleted during the pull.')
+    folder = post_dir(Path(args.dest), post, doc.get('posts', []), move=False, quiet=True)
+    try:
+        manifest = json.loads((folder / 'manifest.json').read_text())
+    except (OSError, ValueError):
+        sys.exit(f'❌ No pulled folder at {folder}.')
+    seen = json.dumps(post, sort_keys=True)
+
+    # 2. What goes out, checked before anything is uploaded.
+    staging = Path(tempfile.mkdtemp(prefix='ig-post-'))
+    try:
+        plan = IG.prepare(post, manifest, folder, staging)
+        setup = IG.Setup()
+        problems = IG.blocking(plan) + ([f"not set up: {', '.join(setup.missing)}"]
+                                        if setup.enabled and setup.missing else [])
+        print_ig_plan(IG, post, folder, plan, setup)
+        if args.dry:
+            print(f"\n{'⛔ ' + str(len(problems)) + ' problem(s). ' if problems else ''}Dry run: nothing posted.")
+            return
+        if problems:
+            sys.exit(f'\n⛔ Not posted: {len(problems)} problem(s) above. Fix them, then run ./post.py ig again.')
+
+        # 3. The question.
+        if not args.yes:
+            try:
+                ans = input(f"\nPost this to @{plan['account']}? [y/N] ") if sys.stdin.isatty() else ''
+            except EOFError:
+                ans = ''
+            if ans.strip().lower() not in ('y', 'yes'):
+                print('Not posted.')
+                return
+        if not setup.enabled:
+            print('Posting is off (publish_enabled): nothing was posted. '
+                  f'Turn it on in {setup.folder / "config.json"}.')
+            return
+        fresh = _find(fetch_posts(url, env), post['id'])
+        if fresh is None or json.dumps(fresh, sort_keys=True) != seen:
+            sys.exit('⛔ Not posted: the draft changed since the pull. Run ./post.py ig again.')
+
+        # 4. Publish.
+        print('⇡ Posting to Instagram...')
+        try:
+            res = IG.publish_items(plan['items'], plan['caption'], setup.publisher(), setup.r2(), setup.prefix,
+                                   trial=plan['trial'])
+        except IG.LimitReached as e:
+            sys.exit(f'⛔ Not posted: {e}.')
+        except Exception as e:                                  # noqa: BLE001 — nothing went out
+            sys.exit(f'⛔ Not posted: {IG.clean(e)}\n   Nothing was marked posted.')
+        for w in res['warnings']:
+            print(f'   ⚠️  {w}')
+        IG.log_post({'time': time.strftime('%Y-%m-%dT%H:%M:%S'), 'post_id': post['id'], 'num': post.get('num'),
+                     'name': post['name'], 'account': plan['account'], 'type': plan['type'], 'trial': plan['trial'],
+                     'items': [it['label'] for it in plan['items']], 'media_id': res['media_id'],
+                     'permalink': res['permalink']}, IG_LOG)
+        if not res['permalink']:
+            sys.exit(f"⚠️  Posted (Instagram media id {res['media_id']}), but Instagram did not return its link, "
+                     'so the draft is NOT marked posted: tick Posted on the Posts page by hand.')
+        print(f"✅ Posted: {res['permalink']}  ({res['left']} posts left in Instagram's 24 h limit)")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    # 5. The Posted mark (+ permalink), where the Posts pages read it.
+    try:
+        if not mark_posted(base, env, post['id'], res['permalink']):
+            print('⚠️  The draft is gone from the Posts page, so nothing was marked.')
+            return
+        if base == LOCAL_BASE:
+            st = sync_with_live(env)
+            live = _find(read_doc(remote, env), post['id']) or {}
+            print('✓ Marked posted on the localhost Posts page'
+                  + (' and the live site.' if live.get('posted') else
+                     f"; the live site gets it with the next sync ({st.get('message', '')})."))
+        else:
+            print('✓ Marked posted on the live site; the localhost Posts page picks it up when it next syncs.')
+        print('   The next ./post.py pull renames the folder "Posted …".')
+    except Exception as e:                                      # noqa: BLE001 — the post itself is out
+        print(f'⚠️  Posted, but the Posted mark was not saved ({e}): tick Posted on the Posts page.')
+
+
 def require_env():
     env = load_env()
     if not env.get('CF_POSTS_PASSWORD'):
@@ -2628,6 +2869,14 @@ def main():
 
     t = sub.add_parser('status', help='show both sides')
     t.set_defaults(func=cmd_status)
+
+    g = sub.add_parser('ig', help='post one Xiaohongshu draft to Instagram (@ryanmcl0)')
+    g.add_argument('post', help='the draft: its number (the #N on its card), name or id')
+    g.add_argument('--yes', action='store_true', help='post without asking')
+    g.add_argument('--dry', action='store_true',
+                   help='pull and show what would go out, then stop (no question, nothing posted)')
+    g.add_argument('--dest', default=POSTS_DEST, help=f'Post folders root (default: {POSTS_DEST})')
+    g.set_defaults(func=cmd_ig)
 
     argv = sys.argv[1:]
     # `post.py pull 24 wl`: a bare word is quicker to type than the flag.

@@ -123,11 +123,12 @@ async function bridgesPreviewEnabled(context: EventContext<Env, string, unknown>
 // text (private trips' regions sit in gallery_regions.all.json, gated like the rest).
 // search.json is the public search index (build_search.py builds it from public
 // sources only); its full twin search.all.json stays gated like every other file.
+// hashtags.json is the Posts page's theme hashtag list (config/hashtags.json): tags only.
 const PUBLIC_COLLECTIONS = ['/collections/china.json', '/collections/mountains.json', '/collections/places.json',
     '/collections/site_stats.json',
     '/collections/gallery_covers.json', '/collections/gallery_highlights.json',
     '/collections/trip_blogs.json', '/collections/gallery_descriptions.json',
-    '/collections/gallery_regions.json', '/collections/search.json'];
+    '/collections/gallery_regions.json', '/collections/search.json', '/collections/hashtags.json'];
 
 async function needsAllAccess(path: string, context: EventContext<Env, string, unknown>): Promise<boolean> {
     // A Chinese sidecar (x.zh.json, written by i18n_zh.py next to x.json) is gated

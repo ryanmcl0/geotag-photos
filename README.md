@@ -192,6 +192,7 @@ A set of owner-side tools lives in `tools/` and runs only on the laptop:
 
 - **Pickers** (small local web pages) for tile covers, gallery highlights, bridge photos and province corrections.
 - **Lightroom plugins** to import photos from a list and sync edits made for posts.
+- **Post to Instagram** (`./post.py ig N`): a finished Xiaohongshu draft from the Posts page straight to @ryanmcl0 (the Instagram tab is the urbex account, by hand), carousel and all (RUNBOOK §9).
 - **People index**: local face clustering across the archive.
 - **Phone library** (`tools/build_phone_site.py`): browse phone photos by trip or month, never deployed.
 - **Video browser** (`video_browse/`): search clip proxies and build Resolve projects.

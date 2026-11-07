@@ -57,11 +57,13 @@ const MAX_WAITLIST_PER_POST = 40;
 // account marks which IG account the post is for (free string, client cycles
 // through its known handles).
 // noHighlight opts a draft out of the public Highlights page (/api/highlights).
+// trial (xhs drafts, which ./post.py ig also posts to Instagram): a trial reel,
+// 'auto' = shared to followers if it performs well, 'manual' = shared by hand.
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
     num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
-    noHighlight?: boolean;
+    noHighlight?: boolean; trial?: 'auto' | 'manual';
 }
 // Doc-level owner switches. highlightsEnabled is the Highlights page's master
 // feature flag (absent/false = the page doesn't exist anywhere on the site);
@@ -97,6 +99,7 @@ function validPosts(posts: unknown): posts is Post[] {
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
         ((p as Post).noHighlight === undefined || typeof (p as Post).noHighlight === 'boolean') &&
+        ((p as Post).trial === undefined || ['auto', 'manual'].includes((p as Post).trial!)) &&
         ((p as Post).caption === undefined ||
             (typeof (p as Post).caption === 'string' && (p as Post).caption!.length <= 4000)) &&
         ((p as Post).song === undefined ||

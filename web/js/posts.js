@@ -117,6 +117,97 @@ window.Posts = (function () {
         }
     });
 
+    // ---------- Hashtag suggestions (a Xiaohongshu card's "Suggest tags") ----------
+    // Instagram capped posts at 5 hashtags in Dec 2025 (tools/instagram_post.py
+    // HASHTAG_SOFT), so the button only ever fills a caption up to 5. Place tags
+    // come from the site's own place data for the draft's photos: each photo's
+    // country section and city/region tile in collections/places.json, and for
+    // China its province tile in collections/china.json (the See All variants
+    // when unlocked; both are supersets). Theme tags are config/hashtags.json,
+    // published as collections/hashtags.json by build_collections.py and every
+    // deploy; DEFAULT_HASHTAGS stands in until it is.
+    const HASHTAG_SOFT = 5;
+    const DEFAULT_HASHTAGS = {
+        tags: ['#roadtrip', '#travelphotography', '#landscapephotography', '#dronephotography',
+               '#documentaryphotography', '#overlanding'],
+        by_country: { china: ['#chinatravel'], kyrgyzstan: ['#visitkyrgyzstan'], mongolia: ['#mongolia'] },
+    };
+    const TAG_RE = /(?<![\p{L}\p{N}_#])#[\p{L}\p{N}_]+/gu;
+    // "Issyk-Kul" → #issykkul, "Ömnögovĭ" → #omnogovi: lowercase letters and digits only.
+    const hashTag = name => '#' + String(name).replace(/^#/, '').normalize('NFD')
+        .replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+    /** The tags to append to `caption` (pure). places: one {country, region}
+     *  per photo, either may be missing; cfg: {tags, by_country}; drone: true /
+     *  false when the photo files tell, null when unknown (drone tags then stay
+     *  in their place). Order: the most common country, its most common region
+     *  (at most 2 place tags), that country's extras, the theme list; never one
+     *  already in the caption, never past 5 hashtags in all. */
+    function suggestHashtags(caption, places, cfg, drone) {
+        const have = new Set((caption.match(TAG_RE) || []).map(t => t.toLowerCase()));
+        const most = vals => {
+            const n = new Map();
+            vals.filter(Boolean).forEach(v => n.set(v, (n.get(v) || 0) + 1));
+            return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+        };
+        const country = most(places.map(p => p.country));
+        const region = country && most(places.filter(p => p.country === country).map(p => p.region));
+        const out = [];
+        const add = t => {
+            const tag = hashTag(t);
+            if (tag.length > 1 && !have.has(tag) && !out.includes(tag)) out.push(tag);
+        };
+        if (country) add(country);
+        if (region && hashTag(region) !== hashTag(country)) add(region);
+        if (country) ((cfg.by_country || {})[hashTag(country).slice(1)] || []).forEach(add);
+        (cfg.tags || []).forEach(t => { if (!(drone === false && /drone/i.test(t))) add(t); });
+        return out.slice(0, Math.max(0, HASHTAG_SOFT - have.size));
+    }
+
+    const allAccess = () => document.cookie.split(';').some(c => {
+        const t = c.trim();
+        return t.startsWith('all_access_ui=') && t.length > 'all_access_ui='.length;
+    });
+    async function collectionJson(name) {
+        for (const f of allAccess() ? [name + '.all', name] : [name]) {
+            try {
+                const r = await fetch(`collections/${f}.json`);
+                if (r.ok) return await r.json();
+            } catch (e) { /* try the next */ }
+        }
+        return null;
+    }
+    const subtilesOf = tile => (tile.subtiles || [])
+        .concat(...(tile.sections || []).map(s => s.subtiles || []));
+    let placesP = null, chinaP = null, hashtagsP = null;
+
+    /** {country, region} for each of the draft's photos (empty when the place
+     *  data does not have it). */
+    async function draftPlaces(post) {
+        placesP = placesP || collectionJson('places');
+        const at = new Map();
+        const cities = ((await placesP) || {}).tiles?.find(t => t.id === 'cities');
+        (cities?.sections || []).forEach(sec => (sec.subtiles || []).forEach(st => (st.photos || [])
+            .forEach(ph => at.set(`${ph.trip}/${ph.id}`, { country: sec.title, cc: sec.id, region: st.title }))));
+        const out = post.photos.map(r => ({ ...at.get(`${r.trip}/${r.id}`) }));
+        if (out.some(p => p.cc === 'cn')) {          // China: the province, not the prefecture
+            chinaP = chinaP || collectionJson('china');
+            const prov = ((await chinaP) || {}).tiles?.find(t => t.id === 'provinces');
+            const of = new Map();
+            if (prov) subtilesOf(prov).forEach(st => (st.photos || [])
+                .forEach(ph => of.set(`${ph.trip}/${ph.id}`, st.title)));
+            post.photos.forEach((r, i) => {
+                if (out[i].cc === 'cn') out[i].region = of.get(`${r.trip}/${r.id}`) || null;
+            });
+        }
+        return out;
+    }
+    function hashtagConfig() {
+        hashtagsP = hashtagsP || fetch('collections/hashtags.json', { cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : DEFAULT_HASHTAGS)).catch(() => DEFAULT_HASHTAGS);
+        return hashtagsP;
+    }
+
     // Current-post chip inside the pill: shows which post "+ Post" / "Add"
     // target, with name and count; clicking it opens the post switcher.
     // Empty (hidden by CSS) until the posts doc has loaded.
@@ -1914,6 +2005,62 @@ window.Posts = (function () {
             });
             meta.appendChild(caption);
             captionResize.observe(caption);   // first fit once it is laid out
+
+            // Xiaohongshu drafts also go to Instagram @ryanmcl0 (./post.py ig):
+            // hashtag suggestions for it, and its trial-reel setting.
+            if (platformOf(post) === 'xhs') {
+                const row = document.createElement('div');
+                row.className = 'posts-meta-row';
+                const tagsBtn = document.createElement('button');
+                tagsBtn.type = 'button';
+                tagsBtn.className = 'posts-delete posts-tags-btn';
+                tagsBtn.textContent = 'Suggest tags';
+                tagsBtn.title = `Add hashtags for Instagram: the photos' country and region, then the theme ` +
+                    `list (config/hashtags.json), up to ${HASHTAG_SOFT} in the caption`;
+                tagsBtn.addEventListener('click', async () => {
+                    tagsBtn.disabled = true;
+                    try {
+                        const [places, cfg] = await Promise.all([draftPlaces(post), hashtagConfig()]);
+                        // Drone files keep DJI's name (DJI_<date>_<n>_D...)
+                        const drone = post.photos.length ? post.photos.some(r => /^DJI_/i.test(r.id)) : null;
+                        const cur = caption.value.trim();
+                        const add = suggestHashtags(cur, places, cfg, drone);
+                        if (!add.length) {
+                            toast(`Already ${HASHTAG_SOFT} or more hashtags (Instagram's cap)`);
+                            return;
+                        }
+                        const last = cur.split('\n').pop();
+                        const sep = !cur ? '' : last.replace(TAG_RE, '').trim() ? '\n\n' : ' ';
+                        caption.value = cur + sep + add.join(' ');
+                        fitCaption(caption);
+                        caption.dispatchEvent(new Event('change'));
+                    } catch (e) {
+                        toast('Could not suggest tags: ' + e.message);
+                    } finally {
+                        tagsBtn.disabled = false;
+                    }
+                });
+
+                const trialWrap = document.createElement('label');
+                trialWrap.className = 'posts-trial';
+                trialWrap.title = 'Instagram trial reel: shown to non-followers first. Only for a draft that ' +
+                    'goes out as one video (./post.py ig refuses it on a carousel or a photo).';
+                const trial = document.createElement('select');
+                [['', 'off'], ['auto', 'share if it performs well'], ['manual', "I'll share it"]]
+                    .forEach(([v, label]) => trial.add(new Option(label, v)));
+                trial.value = post.trial || '';
+                trial.addEventListener('change', () => {
+                    const v = trial.value;
+                    M(posts => {
+                        const p = posts.find(x => x.id === post.id);
+                        if (!p) return;
+                        if (v) p.trial = v; else delete p.trial;
+                    });
+                });
+                trialWrap.append('Trial reel: ', trial);
+                row.append(tagsBtn, trialWrap);
+                meta.appendChild(row);
+            }
             card.appendChild(meta);
         }
 

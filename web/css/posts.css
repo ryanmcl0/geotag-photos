@@ -421,6 +421,15 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-song-suggest-song { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .posts-song-suggest-used { color: #e2a336; font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
 .posts-song-warn { display: none; color: #e2a336; font-size: 12px; margin: -2px 0 0; }
+/* Xiaohongshu drafts (also Instagram @ryanmcl0): Suggest tags + Trial reel under the caption */
+.posts-meta-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.posts-tags-btn:hover { color: #fff; border-color: #666; }
+.posts-tags-btn:disabled { opacity: .5; cursor: default; }
+.posts-trial { color: #888; font-size: 12px; white-space: nowrap; }
+.posts-trial select {
+  background: #141414; border: 1px solid #333; border-radius: 6px; color: #ddd;
+  font: inherit; font-size: 12px; padding: 4px 6px; margin-left: 4px;
+}
 
 /* ---------- "Posted Buildings" banner (top of the manager) ----------
    Collapsed by default: a reminder of which climbs have already gone out,

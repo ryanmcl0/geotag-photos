@@ -2058,7 +2058,11 @@ window.Posts = (function () {
                     });
                 });
                 trialWrap.append('Trial reel: ', trial);
-                row.append(tagsBtn, trialWrap);
+                // Only a draft that goes out as one video can be a trial reel: no carousel photos and a single
+                // Phone video (tools/instagram_post.py post_items). Kept while set, so it can be switched off.
+                const oneVideo = !(post.photos || []).length && (post.phone || []).length === 1 && !!post.phone[0].file;
+                row.append(tagsBtn);
+                if (oneVideo || post.trial) row.append(trialWrap);
                 meta.appendChild(row);
             }
             card.appendChild(meta);

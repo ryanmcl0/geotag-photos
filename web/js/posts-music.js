@@ -293,7 +293,7 @@ window.PostsMusic = (function () {
         const b = el('button', 'reels-mini pm-add', 'Add');
         b.type = 'button';
         b.title = source === 'review' && !r.in_library
-            ? 'Into the pool: the Mac copies it into your music library (your Downloads file stays), measures it and works out its sections'
+            ? 'Into the pool: the Mac moves it into your music library (out of Downloads), measures it and works out its sections'
             : 'Into the pool: new reels can use it';
         b.addEventListener('click', () => add(r, source));
         btns.appendChild(b);
@@ -366,8 +366,8 @@ window.PostsMusic = (function () {
         const rb = el('div', 'pm-review');
         rb.appendChild(el('div', 'pm-sub2', `Waiting for your review (${rev.length})`));
         rb.appendChild(el('p', 'reels-how', 'Songs in your Downloads folders named reel-song-candidates-… (folders inside ' +
-            'them too). Listen, then Add: the Mac copies the song into your music library (your Downloads file stays ' +
-            'where it is), measures it and works out its sections, so the reel builders can use it.' +
+            'them too). Listen, then Add: the Mac moves the song into your music library (no copy is left in ' +
+            'Downloads), measures it and works out its sections, so the reel builders can use it.' +
             (review ? '' : ' (This list is from the last sync: for a live one, the local helper must be running and ' +
                 'up to date: restart ./serve.sh.)')));
         if (!rev.length) rb.appendChild(el('p', 'reels-empty', 'Nothing waiting.'));

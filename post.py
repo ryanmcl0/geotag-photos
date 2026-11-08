@@ -194,12 +194,19 @@ def read_doc(base, env, which='main'):
     return api_call(posts_url(base, which), env)
 
 
-def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=None):
+# The Reels tab's own fields of the Posts document, beside the drafts: the post queue, and the reels he rejected
+# (each with his reason, for the video project's feedback loop). Each travels with the drafts; absent = kept.
+REEL_FIELDS = ('reel_queue', 'reel_rejects')
+
+
+def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=None, reel_rejects=None):
     body = {'baseVersion': base_version, 'posts': posts}
     if settings is not None:
         body['settings'] = settings
     if reel_queue is not None:      # absent = the stored queue is kept (functions/api/posts.ts)
         body['reel_queue'] = reel_queue
+    if reel_rejects is not None:    # the same for the reject list
+        body['reel_rejects'] = reel_rejects
     return api_call(posts_url(base, which), env, method='PUT', body=body)
 
 
@@ -210,15 +217,29 @@ def merge_queue(base, local, remote):
     shortlist's lines the same way),
     every other field (span_days, span_set, schedule, ...) taken from the side that changed it, the
     live site's when both did. None when neither side has a queue."""
+    # items: the queue proper; shortlist: reels he approved but isn't posting yet (the bot never reads it)
+    return _merge_lists_doc(base, local, remote, ('items', 'shortlist'))
+
+
+def merge_rejects(base, local, remote):
+    """The Reels tab's reject list (reel_rejects: the reels he rejected, each with his reason; video-editor
+    docs/POST_QUEUE.md "Reject list"), merged exactly like the queue: its lines by id through merge3 (a reject added
+    here and the Mac's "noted" on another line there combine; an undo stays undone), other fields from the side that
+    changed them. A side with no list never empties the other. None when neither side has one."""
+    return _merge_lists_doc(base, local, remote, ('items',))
+
+
+MERGE_FIELD = {'reel_queue': merge_queue, 'reel_rejects': merge_rejects}
+
+
+def _merge_lists_doc(base, local, remote, lists):
     if local is None and remote is None:
         return None
-    # A side with no queue at all has not deleted it: a live site still on the old
+    # A side with no such field at all has not deleted it: a live site still on an older
     # functions/api/posts.ts drops the field, and that must never empty the laptop's.
     b = base or {}
     l = local if local is not None else b
     r = remote if remote is not None else b
-    # items: the queue proper; shortlist: reels he approved but isn't posting yet (the bot never reads it)
-    lists = ('items', 'shortlist')
     out = {}
     for k in sorted((set(l) | set(r)) - set(lists)):
         lv, rv, bv = l.get(k), r.get(k), b.get(k)
@@ -325,11 +346,12 @@ def copy_state(src_base, dst_base, env, label, quiet=False, keep_extra=False):
         dst = read_doc(dst_base, env, which)
         posts, kept = (merge_down(src.get('posts', []), dst.get('posts', []))
                        if keep_extra else (src.get('posts', []), []))
-        # the Reels tab's post queue travels with the drafts (a source without one keeps the destination's)
-        queue = src.get('reel_queue') if src.get('reel_queue') is not None else dst.get('reel_queue')
-        if same_posts(posts, dst.get('posts', [])) and same_posts(queue, dst.get('reel_queue')):
+        # the Reels tab's post queue and reject list travel with the drafts (a source without one keeps the
+        # destination's)
+        reel = {f: src.get(f) if src.get(f) is not None else dst.get(f) for f in REEL_FIELDS}
+        if same_posts(posts, dst.get('posts', [])) and all(same_posts(reel[f], dst.get(f)) for f in REEL_FIELDS):
             continue
-        write_doc(dst_base, env, which, posts, dst.get('version', 0), reel_queue=queue)
+        write_doc(dst_base, env, which, posts, dst.get('version', 0), **reel)
         changed += 1
         if not quiet:
             extra = (f" (+{len(kept)} kept from here: "
@@ -2304,10 +2326,14 @@ class RemoteMirror:
         R = read_doc(self.remote, self.env, which)
         lp, rp = L.get('posts', []), R.get('posts', [])
         ls, rs = L.get('settings') or {}, R.get('settings') or {}
-        lq, rq = L.get('reel_queue'), R.get('reel_queue')
+        lr = {f: L.get(f) for f in REEL_FIELDS}       # the Reels tab's queue and reject list
+        rr = {f: R.get(f) for f in REEL_FIELDS}
         self.status['versions'][which] = {'local': L.get('version', 0), 'live': R.get('version', 0)}
-        if same_posts(lp, rp) and same_posts(ls, rs) and same_posts(lq, rq):
-            agreed = {'posts': rp, 'settings': rs, **({'reel_queue': rq} if rq is not None else {})}
+
+        def agreed_doc(posts, settings, reel):
+            return {'posts': posts, 'settings': settings, **{f: v for f, v in reel.items() if v is not None}}
+        if same_posts(lp, rp) and same_posts(ls, rs) and same_posts(lr, rr):
+            agreed = agreed_doc(rp, rs, rr)
             if self.base.get(which) != agreed:
                 self.base[which] = agreed
                 self._save_base()
@@ -2322,33 +2348,32 @@ class RemoteMirror:
             posts, conflicts = merge3(base.get('posts', []), lp, rp)
             bs = base.get('settings') or {}
             settings = rs if (same_posts(ls, rs) or same_posts(ls, bs)) else ls if same_posts(rs, bs) else rs
-        queue = merge_queue((base or {}).get('reel_queue'), lq, rq) if base is not None else (rq or lq)
+        reel = {f: MERGE_FIELD[f]((base or {}).get(f), lr[f], rr[f]) if base is not None else (rr[f] or lr[f])
+                for f in REEL_FIELDS}
         if conflicts:
             f = self._backup(f'{which}_conflicts', [{'laptop': l, 'live': r} for l, r in conflicts])
             self.status['conflicts'] += len(conflicts)
             names = ', '.join(r.get('name', '?') for _l, r in conflicts[:3])
             print(f"\n⚠️  {which}: {len(conflicts)} post(s) changed on both sides ({names}). "
                   f"Kept the live site's; this laptop's copy is in {f}")
-        down = not (same_posts(posts, lp) and same_posts(settings, ls) and same_posts(queue, lq))
-        # A live site still on the old functions/api/posts.ts drops reel_queue: once it has been sent, don't
-        # send it again every tick for that alone.
-        queue_up = not same_posts(queue, rq) and not (
-            rq is None and base is not None and same_posts(queue, base.get('reel_queue')))
-        up = not (same_posts(posts, rp) and same_posts(settings, rs)) or queue_up
+        down = not (same_posts(posts, lp) and same_posts(settings, ls) and same_posts(reel, lr))
+        # A live site still on an older functions/api/posts.ts drops reel_queue / reel_rejects: once one has been
+        # sent, don't send it again every tick for that alone.
+        reel_up = any(not same_posts(reel[f], rr[f]) and not (
+            rr[f] is None and base is not None and same_posts(reel[f], base.get(f))) for f in REEL_FIELDS)
+        up = not (same_posts(posts, rp) and same_posts(settings, rs)) or reel_up
         if not down and not up:
-            self.base[which] = {'posts': posts, 'settings': settings,
-                                **({'reel_queue': queue} if queue is not None else {})}
+            self.base[which] = agreed_doc(posts, settings, reel)
             self._save_base()
             return 'same'
         # Local first: if the page saved meanwhile (409) nothing has been written
         # anywhere, and the next tick merges again from fresh copies. Only when
         # both writes landed does the agreed state move on.
         if down:
-            write_doc(self.local, self.env, which, posts, L.get('version', 0), settings, queue)
+            write_doc(self.local, self.env, which, posts, L.get('version', 0), settings, **reel)
         if up:
-            write_doc(self.remote, self.env, which, posts, R.get('version', 0), settings, queue)
-        self.base[which] = {'posts': posts, 'settings': settings,
-                            **({'reel_queue': queue} if queue is not None else {})}
+            write_doc(self.remote, self.env, which, posts, R.get('version', 0), settings, **reel)
+        self.base[which] = agreed_doc(posts, settings, reel)
         self._save_base()
         what = 'both' if down and up else 'down' if down else 'up'
         arrow = {'down': '⇣ from', 'up': '⇡ to', 'both': '⇅ with'}[what]
@@ -2362,7 +2387,7 @@ class RemoteMirror:
                 d = read_doc(self.local, self.env, w)
                 b = self.base.get(w) or {}
                 return not (same_posts(d.get('posts', []), b.get('posts')) and
-                            same_posts(d.get('reel_queue'), b.get('reel_queue')))
+                            all(same_posts(d.get(f), b.get(f)) for f in REEL_FIELDS))
             local_changed = any(changed_here(w) for w in SETS) if not force_remote else True
             if not (force_remote or local_changed or
                     time.time() - self.last_remote >= self.REMOTE_EVERY):

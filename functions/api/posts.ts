@@ -89,7 +89,31 @@ interface ReelQueue {
 }
 const QUEUE_STATUSES = ['pending', 'valid', 'invalid', 'scheduled', 'posted', 'skipped'];
 const QUEUE_TEXT = ['id', 'added', 'why', 'key', 'title', 'kind', 'place', 'frame', 'thumb', 'when', 'checked'];
-interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings; reel_queue?: ReelQueue }
+// reel_rejects: reels he rejected from his Short Form Content pool on the Reels tab, each with his reason. The video
+// project's Mac helper (queue_sync.py) keeps the bot from ever offering them and logs each reason for the reel
+// builders (Short Form Content/REJECTS.jsonl); noted = when it logged that line. Absent in a PUT = unchanged.
+interface RejectItem { id?: string; path: string; reason: string; rejected?: string; noted?: string }
+interface ReelRejects { items: RejectItem[]; updated?: string; synced?: string }
+const MAX_REJECTS = 1000;
+interface PostsDoc {
+    version: number; updated: string | null; posts: Post[]; settings?: Settings; reel_queue?: ReelQueue;
+    reel_rejects?: ReelRejects;
+}
+
+function validRejects(r: unknown): r is ReelRejects | undefined {
+    if (r === undefined) return true;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return false;
+    const j = r as ReelRejects;
+    const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    if (!Array.isArray(j.items) || j.items.length > MAX_REJECTS) return false;
+    if (!text(j.updated, 40) || !text(j.synced, 40)) return false;
+    return j.items.every(i =>
+        i && typeof i === 'object' &&
+        typeof i.path === 'string' && i.path.length > 0 && i.path.length <= 1000 &&
+        typeof i.reason === 'string' && i.reason.trim().length > 0 && i.reason.length <= 500 &&
+        text(i.id, 1000) && text(i.rejected, 40) && text(i.noted, 40) &&
+        Object.keys(i).every(k => ['id', 'path', 'reason', 'rejected', 'noted'].includes(k)));
+}
 
 function validQueue(q: unknown): q is ReelQueue | undefined {
     if (q === undefined) return true;
@@ -218,14 +242,15 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
     if (context.request.method === 'PUT') {
         const raw = await context.request.text();
         if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 });
-        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown; reel_queue?: unknown };
+        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown; reel_queue?: unknown; reel_rejects?: unknown };
         try {
             body = JSON.parse(raw);
         } catch {
             return new Response('Bad request', { status: 400 });
         }
         if (typeof body.baseVersion !== 'number' || !validPosts(body.posts) ||
-            !validSettings(body.settings) || !validQueue(body.reel_queue)) {
+            !validSettings(body.settings) || !validQueue(body.reel_queue) ||
+            !validRejects(body.reel_rejects)) {
             return new Response('Bad request', { status: 400 });
         }
         const current = await readDoc();
@@ -244,6 +269,9 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         // The same for the Reels tab's post queue: a drafts-only save keeps it.
         const queue = body.reel_queue !== undefined ? body.reel_queue as ReelQueue : current.reel_queue;
         if (queue) next.reel_queue = queue;
+        // And the reject list: a save that leaves it out (post.py mirror, older pages) keeps it.
+        const rejects = body.reel_rejects !== undefined ? body.reel_rejects as ReelRejects : current.reel_rejects;
+        if (rejects) next.reel_rejects = rejects;
         await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });

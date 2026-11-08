@@ -185,6 +185,27 @@
 .pq-table tr.pq-posted td { color: #8ab4ff; }
 .pq-table tr.pq-approved td:last-child { color: #8fd18f; }
 .pq-table tr.pq-skipped td, .pq-table tr.pq-late td, .pq-table tr.pq-removed td { color: #777; }
+/* the reject list: the Rejected box, greyed rows with the reason, the reason form under a row */
+.pq-rejects { border-color: #3a2626; }
+.pq-rejects .pq-h { color: #f08a7a; }
+.pq-rejects .pq-paste { width: 100%; }
+.pq-row { flex-wrap: wrap; }
+.pq-row > .pq-main { flex: 1 1 200px; }
+.pq-row.pq-rejected { opacity: 0.6; }
+.pq-row.pq-rejected:hover { opacity: 0.9; }
+.reels-row.rejected { opacity: 0.55; }
+.pq-reason { flex: 1 1 100%; margin-top: 8px; }
+.pq-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.pq-chips .reel-chip { font-size: 12px; padding: 3px 10px; }
+.pq-reason-row { display: flex; gap: 6px; align-items: center; }
+.pq-reason-text {
+    flex: 1; min-width: 0; box-sizing: border-box; background: #0f0f0f; color: #ddd; border: 1px solid #333;
+    border-radius: 6px; font: inherit; font-size: 13px; padding: 6px 8px;
+}
+.pq-reject-go:not(:disabled) { border-color: #f08a7a; color: #f08a7a; }
+.pq-reject-ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.pq-reject-ctl .pq-status { margin-top: 0; }
+.pq-reject-ctl .pq-reason { margin-top: 2px; }
 @media (max-width: 768px) {
     .pq { padding: 12px; }
     .pq-addbar { flex-direction: column; align-items: stretch; }

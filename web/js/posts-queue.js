@@ -13,6 +13,13 @@
  * Two boxes: the post queue (reel_queue.items) is what can go out now; the shortlist (reel_queue.shortlist) holds the
  * reels he approved but isn't posting yet. Only this page reads the shortlist: queue_sync.py hands the bot the queue's
  * lines alone, so a shortlisted reel goes nowhere until "Post now" moves it into the queue.
+ *
+ * The reject list (owner 2026-11-08): "Reject" on a queued or shortlisted reel, on a picked reel below, or pasted paths
+ * in the Rejected box, each with a reason (quick reasons to tap, or his own words). State: "reel_rejects" =
+ * {items: [{id, path, reason, rejected, noted}], updated} in the same document, kept by functions/api/posts.ts and
+ * post.py's mirror like reel_queue. A rejected reel leaves the queue and the shortlist and can't be added back until
+ * "Undo". queue_sync.py on the Mac keeps the bot from ever offering it and logs the reason for the reel builders
+ * (Short Form Content/REJECTS.jsonl; "noted" is when it did): the feedback loop.
  */
 window.PostsQueue = (function () {
     'use strict';
@@ -25,6 +32,14 @@ window.PostsQueue = (function () {
     let panelEl = null;
     let timer = null;
     let lastAdd = { where: null, lines: [] };   // the last paste: which box, its lines and what happened to each
+    let openReject = null;           // the path whose reason form is open (kept across redraws)
+    let showAllRejects = false;
+    let lastRejectSig = null;        // what the reject list looked like when listeners were last told
+    const rejectListeners = new Set();
+    const REJECTS_SHOWN = 20;
+    // quick reasons to tap (owner 2026-11-08); several can be combined, and his own words added
+    const QUICK_REASONS = ["song doesn't fit", 'too slow', 'repeated shot', 'bad grade / colour', 'wrong place name',
+        'boring'];
 
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -40,6 +55,22 @@ window.PostsQueue = (function () {
         return q;
     }
 
+    function rejects() {
+        const r = (doc && doc.reel_rejects) || {};
+        return Array.isArray(r.items) ? r.items : [];
+    }
+
+    function rejectOf(path) { return rejects().find(i => i.path === path) || null; }
+
+    // the reels tab's other parts (posts-reels.js rows) redraw when the reject list changes
+    function tellRejects() {
+        const sig = JSON.stringify(rejects().map(i => [i.path, i.reason]));
+        if (sig === lastRejectSig) return;
+        const first = lastRejectSig === null;
+        lastRejectSig = sig;
+        if (!first || rejects().length) rejectListeners.forEach(fn => { try { fn(); } catch (e) { /* its own problem */ } });
+    }
+
     async function fetchDoc() {
         const r = await fetch('/api/posts', { cache: 'no-store' });
         if (!r.ok) throw new Error('posts unavailable (' + r.status + ')');
@@ -47,25 +78,38 @@ window.PostsQueue = (function () {
         return doc;
     }
 
-    // fn(q) changes the queue in place; re-applied to a fresh copy if the document moved on meanwhile (409).
+    // fn(q, rj) changes the queue and the reject list in place; re-applied to a fresh copy if the document moved on
+    // meanwhile (409).
     function change(fn) {
         const run = async () => {
             if (!doc) await fetchDoc();
             const apply = () => {
+                const now = new Date().toISOString();
                 const q = Object.assign({ items: [], span_days: SPAN_DEFAULT }, doc.reel_queue || {});
                 q.items = (q.items || []).map(i => Object.assign({}, i));
                 q.shortlist = (q.shortlist || []).map(i => Object.assign({}, i));
-                fn(q);
+                const rj = Object.assign({}, doc.reel_rejects || {});
+                rj.items = (rj.items || []).map(i => Object.assign({}, i));
+                const before = JSON.stringify(rj.items);
+                fn(q, rj);
+                // a rejected reel can't be queued or shortlisted, whichever save put it there
+                const out = new Set(rj.items.map(i => i.path));
+                q.items = q.items.filter(i => !out.has(i.path) || i.status === 'posted');
+                q.shortlist = q.shortlist.filter(i => !out.has(i.path));
                 if (!q.shortlist.length) delete q.shortlist;
-                q.updated = new Date().toISOString();
+                q.updated = now;
                 doc.reel_queue = q;
+                if (JSON.stringify(rj.items) !== before) rj.updated = now;
+                if (doc.reel_rejects || rj.items.length) doc.reel_rejects = rj;
             };
             apply();
             const put = () => fetch('/api/posts', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 // no settings: the API keeps the stored ones; posts as read with this version
-                body: JSON.stringify({ baseVersion: doc.version, posts: doc.posts || [], reel_queue: doc.reel_queue })
+                body: JSON.stringify(Object.assign(
+                    { baseVersion: doc.version, posts: doc.posts || [], reel_queue: doc.reel_queue },
+                    doc.reel_rejects ? { reel_rejects: doc.reel_rejects } : {}))
             });
             let r = await put();
             if (r.status === 409) {
@@ -92,6 +136,8 @@ window.PostsQueue = (function () {
     function checkLine(path, inQueue, inShort) {
         if (!path.startsWith('/') && !path.startsWith('~')) return 'not a full path';
         if (!/\.mp4$/i.test(path)) return 'not an .mp4 file';
+        const rj = rejectOf(path);
+        if (rj) return `rejected (${rj.reason}): Undo it under Rejected first`;
         if (inQueue.has(path)) return 'already in the queue';
         if (inShort.has(path)) return 'already on the shortlist';
         return null;
@@ -115,8 +161,8 @@ window.PostsQueue = (function () {
         });
         if (!take.length) { redraw(); return; }
         const now = new Date().toISOString();
-        change(q => {
-            const there = new Set([...q.items, ...q.shortlist].map(i => i.path));
+        change((q, rj) => {
+            const there = new Set([...q.items, ...q.shortlist, ...rj.items].map(i => i.path));
             take.filter(p => !there.has(p)).forEach(p =>
                 where === 'queue' ? q.items.push(queueLine(p, now)) : q.shortlist.push({ id: p, path: p, added: now }));
             if (!q.span_days) q.span_days = SPAN_DEFAULT;
@@ -127,12 +173,103 @@ window.PostsQueue = (function () {
     function postNow(paths) {
         const take = new Set(paths);
         const now = new Date().toISOString();
-        change(q => {
-            const there = new Set(q.items.map(i => i.path));
+        change((q, rj) => {
+            const there = new Set([...q.items, ...rj.items].map(i => i.path));
             q.shortlist.filter(i => take.has(i.path) && !there.has(i.path)).forEach(i => q.items.push(queueLine(i.path, now)));
             q.shortlist = q.shortlist.filter(i => !take.has(i.path));
             if (!q.span_days) q.span_days = SPAN_DEFAULT;
         });
+    }
+
+    // ── the reject list ──
+    // paths → rejected with this reason: out of the queue and the shortlist; one rejected before gets the new reason
+    function reject(paths, reason) {
+        reason = (reason || '').trim().slice(0, 500);
+        paths = paths.filter(Boolean);
+        if (!reason || !paths.length) return Promise.resolve();
+        const take = new Set(paths);
+        const now = new Date().toISOString();
+        openReject = null;
+        return change((q, rj) => {
+            q.items = q.items.filter(i => !take.has(i.path) || i.status === 'posted');
+            q.shortlist = q.shortlist.filter(i => !take.has(i.path));
+            paths.forEach(p => {
+                const old = rj.items.find(i => i.path === p);
+                if (old) {
+                    if (old.reason !== reason) { old.reason = reason; old.rejected = now; delete old.noted; }
+                } else {
+                    rj.items.unshift({ id: p, path: p, reason, rejected: now });
+                }
+            });
+        });
+    }
+
+    // not rejected after all: off the list (it does not go back into the queue by itself)
+    function undoReject(path) {
+        return change((q, rj) => { rj.items = rj.items.filter(i => i.path !== path); });
+    }
+
+    // the reason box: quick reasons to tap (they toggle, several combine with ";"), his own words, Reject / Cancel
+    function reasonForm(key, onReject, onCancel, label) {
+        const f = el('div', 'pq-reason');
+        const input = el('input', 'pq-reason-text');
+        input.type = 'text';
+        input.maxLength = 500;
+        input.dataset.keep = 'reason:' + key;
+        input.placeholder = 'Why? Tap a reason, or write your own';
+        const go = el('button', 'reels-mini pq-reject-go', label || 'Reject');
+        go.type = 'button';
+        const chips = el('div', 'pq-chips');
+        const parts = () => input.value.split(';').map(x => x.trim()).filter(Boolean);
+        const paint = () => {
+            go.disabled = !input.value.trim();
+            chips.querySelectorAll('button').forEach(c => c.classList.toggle('active', parts().includes(c.textContent)));
+        };
+        QUICK_REASONS.forEach(r => {
+            const c = el('button', 'reel-chip', r);
+            c.type = 'button';
+            c.addEventListener('click', () => {
+                const ps = parts();
+                const at = ps.indexOf(r);
+                if (at >= 0) ps.splice(at, 1); else ps.push(r);
+                input.value = ps.join('; ');
+                paint();
+                input.focus();
+            });
+            chips.appendChild(c);
+        });
+        input.addEventListener('input', paint);
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && input.value.trim()) go.click();
+            if (e.key === 'Escape' && onCancel) onCancel();
+        });
+        go.addEventListener('click', () => onReject(input.value.trim()));
+        const row = el('div', 'pq-reason-row');
+        row.append(input, go);
+        if (onCancel) {
+            const no = el('button', 'reels-mini', 'Cancel');
+            no.type = 'button';
+            no.addEventListener('click', onCancel);
+            row.appendChild(no);
+        }
+        f.append(chips, row);
+        paint();
+        return f;
+    }
+
+    // "Reject…" on a row: opens the reason box under it (one at a time)
+    function rejectButton(path, after) {
+        const b = el('button', 'reels-mini pq-reject-btn', 'Reject…');
+        b.type = 'button';
+        b.title = 'Not good enough: give a reason. It leaves the queue and the shortlist, the bot never offers it, ' +
+            'and the reason goes to the reel builders';
+        b.addEventListener('click', () => { openReject = openReject === path ? null : path; (after || redraw)(); });
+        return b;
+    }
+
+    function rejectFormFor(path, after) {
+        return reasonForm(path, reason => reject([path], reason).then(() => after && after()),
+            () => { openReject = null; (after || redraw)(); });
     }
 
     // queue → shortlist: still good, just not yet (the bot drops it at the next check, like Remove)
@@ -236,8 +373,9 @@ window.PostsQueue = (function () {
                 rm.type = 'button';
                 rm.title = 'Take it out of the queue (it is not posted)';
                 rm.addEventListener('click', () => change(qq => { qq.items = qq.items.filter(x => x.path !== i.path); }));
-                btns.append(back, rm);
+                btns.append(back, rm, rejectButton(i.path));
                 row.appendChild(btns);
+                if (openReject === i.path) row.appendChild(rejectFormFor(i.path));
             }
             box.appendChild(row);
         });
@@ -271,11 +409,94 @@ window.PostsQueue = (function () {
             rm.type = 'button';
             rm.title = 'Take it off the shortlist';
             rm.addEventListener('click', () => change(qq => { qq.shortlist = qq.shortlist.filter(x => x.path !== i.path); }));
-            btns.append(go, rm);
+            btns.append(go, rm, rejectButton(i.path));
             row.appendChild(btns);
+            if (openReject === i.path) row.appendChild(rejectFormFor(i.path));
             box.appendChild(row);
         });
         return box;
+    }
+
+    function fmtDay(iso) {
+        if (!iso) return '';
+        try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); } catch (e) { return ''; }
+    }
+
+    function rejectsBlock() {
+        const all = rejects();
+        const box = el('div', 'pq-list');
+        if (!all.length) {
+            box.appendChild(el('p', 'reels-empty', 'Nothing rejected.'));
+            return box;
+        }
+        const shown = showAllRejects ? all : all.slice(0, REJECTS_SHOWN);
+        shown.forEach(i => {
+            const row = el('div', 'pq-row pq-rejected');
+            const main = el('div', 'pq-main');
+            main.appendChild(el('div', 'pq-title', fileName(i.path)));
+            const p = el('div', 'pq-path', i.path);
+            p.title = i.path;
+            main.appendChild(p);
+            main.appendChild(el('div', 'pq-status bad', `Rejected ${fmtDay(i.rejected)}: ${i.reason}`));
+            main.appendChild(el('div', 'pq-status ' + (i.noted ? 'done' : 'wait'), i.noted
+                ? 'Noted for the reel builders ' + fmtDay(i.noted)
+                : 'Waiting for the Mac to note it'));
+            row.appendChild(main);
+            const btns = el('div', 'pq-btns');
+            const un = el('button', 'reels-mini', 'Undo');
+            un.type = 'button';
+            un.title = 'Not rejected after all: take it off this list (it does not go back into the queue by itself)';
+            un.addEventListener('click', () => undoReject(i.path));
+            const re = el('button', 'reels-mini', 'Change reason');
+            re.type = 'button';
+            re.addEventListener('click', () => { openReject = openReject === i.path ? null : i.path; redraw(); });
+            btns.append(un, re);
+            row.appendChild(btns);
+            if (openReject === i.path) {
+                row.appendChild(reasonForm(i.path, reason => reject([i.path], reason),
+                    () => { openReject = null; redraw(); }, 'Save reason'));
+            }
+            box.appendChild(row);
+        });
+        if (all.length > REJECTS_SHOWN) {
+            const more = el('button', 'reels-mini pq-all', showAllRejects ? 'Show the newest only' : `Show all ${all.length}`);
+            more.type = 'button';
+            more.addEventListener('click', () => { showAllRejects = !showAllRejects; redraw(); });
+            box.appendChild(more);
+        }
+        return box;
+    }
+
+    // the Rejected box's paste: paths, one reason for all of them
+    function rejectPasteBar(sec) {
+        const ta = el('textarea', 'pq-paste');
+        ta.rows = 2;
+        ta.dataset.box = 'reject';
+        ta.dataset.keep = 'box:reject';
+        ta.placeholder = '/Volumes/Crucial X9/Short Form Content/…/2 Shoots/sxj_d12_s2_toksun_916_globe.mp4';
+        sec.appendChild(ta);
+        sec.appendChild(reasonForm('paste', reason => {
+            const lines = ta.value.split(/\r?\n/).map(cleanLine).filter(Boolean);
+            lastAdd = { where: 'reject', lines: [] };
+            const take = [];
+            lines.forEach(p => {
+                const why = !p.startsWith('/') && !p.startsWith('~') ? 'not a full path'
+                    : !/\.mp4$/i.test(p) ? 'not an .mp4 file' : null;
+                lastAdd.lines.push({ path: p, why, done: rejectOf(p) ? 'reason changed' : 'rejected' });
+                if (!why && !take.includes(p)) take.push(p);
+            });
+            if (!take.length) { redraw(); return; }
+            ta.value = '';
+            const keep = panelEl && panelEl.querySelector('[data-keep="reason:paste"]');
+            if (keep) keep.value = '';
+            reject(take, reason);
+        }, null, 'Reject these'));
+        if (lastAdd.where === 'reject' && lastAdd.lines.length) {
+            const res = el('ul', 'pq-added');
+            lastAdd.lines.forEach(a => res.appendChild(el('li', a.why ? 'bad' : 'ok',
+                (a.why ? '✗ ' : '✓ ') + fileName(a.path) + ': ' + (a.why || a.done))));
+            sec.appendChild(res);
+        }
     }
 
     function scheduleBlock(q) {
@@ -309,6 +530,7 @@ window.PostsQueue = (function () {
         const ta = el('textarea', 'pq-paste');
         ta.rows = 3;
         ta.dataset.box = where;
+        ta.dataset.keep = 'box:' + where;
         ta.placeholder = '/Users/…/day12/reels/sxj_d12_day_916.mp4';
         const add = el('button', 'reels-export-btn', label);
         add.type = 'button';
@@ -356,23 +578,37 @@ window.PostsQueue = (function () {
             sl.appendChild(all);
         }
         sl.appendChild(shortlistBlock(q));
-        out.append(sec, sl);
+
+        const rs = el('section', 'pq pq-rejects');
+        rs.appendChild(el('div', 'pq-h', `Rejected: not for posting (${rejects().length})`));
+        rs.appendChild(el('p', 'reels-how',
+            'Reels from Short Form Content that aren\'t good enough, each with why. A rejected reel leaves the queue and ' +
+            'the shortlist, can\'t be added back until Undo, and the bot never offers it. The Mac notes every reason for ' +
+            'the reel builders (Short Form Content/REJECTS.md), so the next batch learns from it. Use "Reject…" on a ' +
+            'reel above or below, or paste paths here.'));
+        rejectPasteBar(rs);
+        rs.appendChild(rejectsBlock());
+        out.append(sec, sl, rs);
         return out;
     }
 
     function redraw() {
         if (!panelEl || !panelEl.isConnected) { clearInterval(timer); timer = null; return; }
-        // keep what's typed in either box (and the focus) across the redraw
+        // keep what's typed in the boxes and the reason fields (and the focus) across the redraw
         const typed = {};
-        panelEl.querySelectorAll('.pq-paste').forEach(t => { if (t.value) typed[t.dataset.box] = t.value; });
+        panelEl.querySelectorAll('[data-keep]').forEach(t => { if (t.value) typed[t.dataset.keep] = t.value; });
         const a = document.activeElement;
-        const focus = a && panelEl.contains(a) && a.tagName === 'TEXTAREA' ? a.dataset.box : null;
+        const focus = a && panelEl.contains(a) && a.dataset && a.dataset.keep ? a.dataset.keep : null;
         const fresh = draw();
         panelEl.replaceChildren(...fresh.childNodes);
-        panelEl.querySelectorAll('.pq-paste').forEach(t => {
-            if (typed[t.dataset.box]) t.value = typed[t.dataset.box];
-            if (t.dataset.box === focus) t.focus();
+        panelEl.querySelectorAll('[data-keep]').forEach(t => {
+            if (typed[t.dataset.keep]) {
+                t.value = typed[t.dataset.keep];
+                t.dispatchEvent(new Event('input'));          // the reason form's chips and button follow the text
+            }
+            if (t.dataset.keep === focus) t.focus();
         });
+        tellRejects();
     }
 
     // The panel for the Reels tab: drawn from the last copy at once, refreshed from the server, then every 30 s
@@ -391,5 +627,26 @@ window.PostsQueue = (function () {
         return panelEl;
     }
 
-    return { panel };
+    // For posts-reels.js: a picked reel's reject control. Rejected → its reason and Undo; else "Reject…" and, when
+    // open, the reason box. after() runs once the list changed (the caller redraws its rows).
+    function rejectControl(path, after) {
+        const wrap = el('div', 'pq-reject-ctl');
+        if (!path) return wrap;
+        const rj = rejectOf(path);
+        if (rj) {
+            wrap.appendChild(el('span', 'pq-status bad', `Rejected ${fmtDay(rj.rejected)}: ${rj.reason}`));
+            const un = el('button', 'reels-mini', 'Undo');
+            un.type = 'button';
+            un.addEventListener('click', () => undoReject(path).then(() => after && after()));
+            wrap.appendChild(un);
+            return wrap;
+        }
+        wrap.appendChild(rejectButton(path, after));
+        if (openReject === path) wrap.appendChild(rejectFormFor(path, after));
+        return wrap;
+    }
+
+    function onRejects(fn) { rejectListeners.add(fn); return () => rejectListeners.delete(fn); }
+
+    return { panel, rejectOf, reject, undoReject, rejectControl, onRejects };
 })();

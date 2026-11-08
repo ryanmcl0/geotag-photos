@@ -112,11 +112,12 @@ class MirrorCarriesTheQueue(unittest.TestCase):
         def read(base, env, which='main'):
             return json.loads(json.dumps(self.docs[base]))
 
-        def write(base, env, which, posts, v, settings=None, reel_queue=None):
+        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None):
             self.writes.append(base)
             d = {'version': v + 1, 'posts': posts}
-            if reel_queue is not None and (base == 'L' or self.live_keeps):
-                d['reel_queue'] = reel_queue
+            for f, val in (('reel_queue', reel_queue), ('reel_rejects', reel_rejects)):
+                if val is not None and (base == 'L' or self.live_keeps):
+                    d[f] = val
             self.docs[base] = d
         P.read_doc, P.write_doc = read, write
         self.m = P.RemoteMirror({}, 'R', 'L')
@@ -142,6 +143,97 @@ class MirrorCarriesTheQueue(unittest.TestCase):
         self.tick()
         self.assertEqual(self.docs['R']['reel_queue'], QB)
         self.assertEqual(self.tick(), 'same')
+
+
+def rej(path, reason='song doesn\'t fit', **k):
+    return {'id': path, 'path': path, 'reason': reason, 'rejected': '2026-11-08T18:00:00Z', **k}
+
+
+RB = {'items': [rej('/a.mp4'), rej('/b.mp4', 'too slow')], 'updated': 't0'}
+
+
+class MergeRejects(unittest.TestCase):
+    """The Reels tab's reject list: merged like the queue, line by line, and never emptied by a side without one."""
+
+    def test_a_reject_here_and_the_macs_note_there_combine(self):
+        local = {'items': RB['items'] + [rej('/c.mp4', 'boring')], 'updated': 't1'}
+        remote = {'items': [dict(RB['items'][0], noted='2026-11-08T18:05:00Z'), RB['items'][1]], 'updated': 't0',
+                  'synced': 's1'}
+        out = P.merge_rejects(RB, local, remote)
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4', '/b.mp4', '/c.mp4'])
+        self.assertEqual(out['items'][0]['noted'], '2026-11-08T18:05:00Z')
+        self.assertEqual((out['updated'], out['synced']), ('t1', 's1'))
+
+    def test_an_undo_stays_undone(self):
+        out = P.merge_rejects(RB, {'items': RB['items'][1:], 'updated': 't1'}, RB)
+        self.assertEqual([i['path'] for i in out['items']], ['/b.mp4'])
+
+    def test_a_reason_changed_here_wins_over_an_unchanged_live_copy(self):
+        local = {'items': [rej('/a.mp4', 'wrong place name'), RB['items'][1]], 'updated': 't1'}
+        out = P.merge_rejects(RB, local, RB)
+        self.assertEqual(out['items'][0]['reason'], 'wrong place name')
+
+    def test_a_side_without_a_list_never_empties_the_other(self):
+        self.assertEqual(P.merge_rejects(RB, RB, None), RB)
+        self.assertEqual(P.merge_rejects(None, None, RB), RB)
+        self.assertIsNone(P.merge_rejects(None, None, None))
+
+    def test_the_queue_and_the_rejects_merge_on_their_own(self):
+        self.assertEqual(set(P.MERGE_FIELD), set(P.REEL_FIELDS))
+        self.assertNotIn('shortlist', P.merge_rejects(RB, RB, RB))
+
+
+class MirrorCarriesTheRejects(MirrorCarriesTheQueue):
+    """The same fake stores, now with a reject list on the laptop: it goes up beside the queue, an older live site that
+    drops it neither empties the laptop's nor gets it re-sent every tick, and a live undo comes down."""
+
+    def setUp(self):
+        super().setUp()
+        self.docs['L']['reel_rejects'] = RB
+
+    def test_the_rejects_go_up_and_stay_here_when_the_live_site_drops_them(self):
+        self.live_keeps = False
+        self.assertEqual(self.tick(), 'up')
+        self.assertEqual(self.tick(), 'same')
+        self.assertEqual(self.writes, ['R'])
+        self.assertEqual(self.docs['L']['reel_rejects'], RB)
+
+    def test_a_live_site_that_keeps_them_matches_and_an_undo_there_comes_down(self):
+        self.live_keeps = True
+        self.tick()
+        self.assertEqual(self.docs['R']['reel_rejects'], RB)
+        self.assertEqual(self.tick(), 'same')
+        self.docs['R'] = dict(self.docs['R'], version=self.docs['R']['version'] + 1,
+                              reel_rejects={'items': RB['items'][:1], 'updated': 't2'})
+        self.assertEqual(self.tick(), 'down')
+        self.assertEqual([i['path'] for i in self.docs['L']['reel_rejects']['items']], ['/a.mp4'])
+        self.assertEqual(self.docs['L']['reel_queue'], QB)          # the queue untouched by it
+
+
+class CopyStateCarriesBoth(unittest.TestCase):
+    """copy_state (serve.sh's copy down / up): the queue and the reject list travel with the drafts; a source without
+    them keeps the destination's."""
+
+    def setUp(self):
+        self.orig = (P.read_doc, P.write_doc)
+        self.docs = {('S', 'main'): {'version': 3, 'posts': B, 'reel_rejects': RB},
+                     ('D', 'main'): {'version': 1, 'posts': B, 'reel_queue': QB},
+                     ('S', 'auto'): {'version': 1, 'posts': []}, ('D', 'auto'): {'version': 1, 'posts': []}}
+        self.sent = []
+
+        def read(base, env, which='main'):
+            return json.loads(json.dumps(self.docs[(base, which)]))
+
+        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None):
+            self.sent.append((base, which, reel_queue, reel_rejects))
+        P.read_doc, P.write_doc = read, write
+
+    def tearDown(self):
+        P.read_doc, P.write_doc = self.orig
+
+    def test_both_fields_are_carried(self):
+        self.assertEqual(P.copy_state('S', 'D', {}, 'copied', quiet=True), 1)
+        self.assertEqual(self.sent, [('D', 'main', QB, RB)])
 
 
 class ServerUp(unittest.TestCase):

@@ -9,6 +9,9 @@
  * ticks are kept by reels-site.js (web/phone/reels/state.json through tools/reels_local.py, or this browser when that
  * helper isn't running). "Export 4K" only queues a request (web/phone/reels/export_queue.json): the render is the
  * video project's tools/vlog/reel_export.py, run by hand, one reel at a time, to the NAS export folder.
+ *
+ * Each picked reel also has "Reject…" (posts-queue.js keeps the reject list, by the reel's file path from reels.json):
+ * a reel rejected here leaves this posting list too; one rejected elsewhere shows greyed with its reason and Undo.
  */
 window.PostsReels = (function () {
     'use strict';
@@ -16,6 +19,8 @@ window.PostsReels = (function () {
     const VIEW_KEY = 'reels_profile_view';
     let selected = new Set();
     let exportQ = null;
+    let redrawRows = null;           // the latest render's rerender, for a reject list that changed elsewhere
+    let listening = false;
 
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -115,7 +120,8 @@ window.PostsReels = (function () {
     // ── one row per picked reel ──
     function row(doc, r, i, n, rerender) {
         const st = ReelsSite.state();
-        const c = el('div', 'reels-row' + (st.posted[r.id] ? ' posted' : ''));
+        const rejected = window.PostsQueue && r.path ? PostsQueue.rejectOf(r.path) : null;
+        const c = el('div', 'reels-row' + (st.posted[r.id] ? ' posted' : '') + (rejected ? ' rejected' : ''));
         c.id = `reel-row-${r.id}`;
         const side = el('div', 'reels-row-side');
         const pick = el('input');
@@ -184,6 +190,16 @@ window.PostsReels = (function () {
             acts.appendChild(badge);
         }
         body.appendChild(acts);
+        if (window.PostsQueue && r.path) {
+            // rejected from here: off this posting list as well (Undo under Rejected doesn't put it back)
+            body.appendChild(PostsQueue.rejectControl(r.path, () => {
+                if (!rejected && PostsQueue.rejectOf(r.path) && !st.posted[r.id]) {
+                    ReelsSite.toggleQueued(r.id, false);
+                    selected.delete(r.id);
+                }
+                rerender();
+            }));
+        }
         c.appendChild(body);
         return c;
     }
@@ -194,8 +210,15 @@ window.PostsReels = (function () {
         const list = st.queue.map(id => byId[id]).filter(Boolean);
         selected = new Set([...selected].filter(id => st.queue.includes(id)));
 
-        // the post queue (posts-queue.js): paste approved reels' paths, the slider, the bot's schedule
-        if (window.PostsQueue) root.appendChild(PostsQueue.panel());
+        // the post queue (posts-queue.js): paste approved reels' paths, the slider, the bot's schedule, the rejects
+        if (window.PostsQueue) {
+            redrawRows = rerender;
+            if (!listening) {
+                listening = true;
+                PostsQueue.onRejects(() => { if (redrawRows && root.isConnected) redrawRows(); });
+            }
+            root.appendChild(PostsQueue.panel());
+        }
 
         const where = ReelsSite.where() === 'disk'
             ? 'Saved on this Mac (web/phone/reels/state.json).'

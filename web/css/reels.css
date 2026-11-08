@@ -145,6 +145,11 @@
 /* ── Posts ▸ Reels ▸ Post queue (posts-queue.js) ── */
 .pq-wrap { margin: 0 0 26px; }
 .pq { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 14px 16px; color: #eee; }
+.pq + .pq { margin-top: 14px; }
+.pq-short { border-color: #3a3424; }
+.pq-short .pq-h { color: #e6c06a; }
+.pq-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
+.pq-all { margin: 10px 0 8px; }
 .pq-h { font-weight: 600; font-size: 1rem; color: #fff; margin: 0 0 8px; }
 .pq-addbar { display: flex; gap: 10px; align-items: flex-start; }
 .pq-paste {

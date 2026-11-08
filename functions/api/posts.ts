@@ -81,8 +81,10 @@ interface QueueItem {
     title?: string; kind?: string; place?: string; frame?: string; dur?: number; thumb?: string;
     when?: string; approved?: boolean; checked?: string;
 }
+// shortlist: reels he approved but isn't posting yet (only the page reads it; the bot only gets items).
+interface ShortlistItem { id?: string; path: string; added?: string }
 interface ReelQueue {
-    items: QueueItem[]; span_days?: number; span_set?: string; updated?: string;
+    items: QueueItem[]; shortlist?: ShortlistItem[]; span_days?: number; span_set?: string; updated?: string;
     schedule?: Record<string, unknown>; synced?: string;
 }
 const QUEUE_STATUSES = ['pending', 'valid', 'invalid', 'scheduled', 'posted', 'skipped'];
@@ -100,6 +102,9 @@ function validQueue(q: unknown): q is ReelQueue | undefined {
     if (!text(r.span_set, 40) || !text(r.updated, 40) || !text(r.synced, 40)) return false;
     if (r.schedule !== undefined && (!r.schedule || typeof r.schedule !== 'object' || Array.isArray(r.schedule) ||
         JSON.stringify(r.schedule).length > 200 * 1024)) return false;
+    if (r.shortlist !== undefined && !(Array.isArray(r.shortlist) && r.shortlist.length <= 500 &&
+        r.shortlist.every(i => i && typeof i === 'object' &&
+            typeof i.path === 'string' && i.path.length <= 1000 && text(i.id, 1000) && text(i.added, 40)))) return false;
     return r.items.every(i =>
         i && typeof i === 'object' &&
         typeof i.path === 'string' && i.path.length <= 1000 &&

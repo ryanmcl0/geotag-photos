@@ -83,6 +83,15 @@ class MergeQueue(unittest.TestCase):
         out = P.merge_queue(QB, {'items': QB['items'][:1], 'span_days': 14}, QB)
         self.assertEqual([i['path'] for i in out['items']], ['/a.mp4'])
 
+    def test_the_shortlist_merges_line_by_line(self):
+        sb = dict(QB, shortlist=[line('/s1.mp4')])
+        local = dict(sb, shortlist=sb['shortlist'] + [line('/s2.mp4')])
+        remote = dict(sb, shortlist=[], items=QB['items'] + [line('/s1.mp4', status='pending')])
+        out = P.merge_queue(sb, local, remote)      # moved to the queue there, another shortlisted here
+        self.assertEqual([i['path'] for i in out['shortlist']], ['/s2.mp4'])
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4', '/b.mp4', '/s1.mp4'])
+        self.assertNotIn('shortlist', P.merge_queue(QB, QB, QB))
+
     def test_a_side_without_a_queue_never_empties_the_other(self):
         # a live site still on the old functions/api/posts.ts drops the field on every save
         self.assertEqual(P.merge_queue(QB, QB, None), QB)

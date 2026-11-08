@@ -206,7 +206,8 @@ def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=N
 def merge_queue(base, local, remote):
     """The Reels tab's post queue (reel_queue: the reels he pasted for the video project's bot,
     video-editor docs/POST_QUEUE.md), both ways like the drafts: its lines by id through merge3 (a line
-    added or removed on one side, or re-checked by tools/reelbot/queue_sync.py on the other, combine),
+    added or removed on one side, or re-checked by tools/reelbot/queue_sync.py on the other, combine; the
+    shortlist's lines the same way),
     every other field (span_days, span_set, schedule, ...) taken from the side that changed it, the
     live site's when both did. None when neither side has a queue."""
     if local is None and remote is None:
@@ -216,14 +217,17 @@ def merge_queue(base, local, remote):
     b = base or {}
     l = local if local is not None else b
     r = remote if remote is not None else b
-    items, _conflicts = merge3(b.get('items') or [], l.get('items') or [], r.get('items') or [])
+    # items: the queue proper; shortlist: reels he approved but isn't posting yet (the bot never reads it)
+    lists = ('items', 'shortlist')
     out = {}
-    for k in sorted((set(l) | set(r)) - {'items'}):
+    for k in sorted((set(l) | set(r)) - set(lists)):
         lv, rv, bv = l.get(k), r.get(k), b.get(k)
         out[k] = lv if (same_posts(rv, bv) and not same_posts(lv, bv)) else rv
         if out[k] is None:
             del out[k]
-    out['items'] = items
+    for k in lists:
+        if k == 'items' or any(k in d for d in (b, l, r)):
+            out[k], _conflicts = merge3(b.get(k) or [], l.get(k) or [], r.get(k) or [])
     return out
 
 

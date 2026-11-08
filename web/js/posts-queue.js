@@ -9,6 +9,10 @@
  * State: "reel_queue" in the Posts document (/api/posts, the same document as the drafts; functions/api/posts.ts keeps
  * it when a drafts-only save leaves it out), so post.py's mirror carries it to the live site and back like the drafts.
  * Every change is a function re-applied to a fresh copy after a 409, like posts.js does.
+ *
+ * Two boxes: the post queue (reel_queue.items) is what can go out now; the shortlist (reel_queue.shortlist) holds the
+ * reels he approved but isn't posting yet. Only this page reads the shortlist: queue_sync.py hands the bot the queue's
+ * lines alone, so a shortlisted reel goes nowhere until "Post now" moves it into the queue.
  */
 window.PostsQueue = (function () {
     'use strict';
@@ -20,7 +24,7 @@ window.PostsQueue = (function () {
     let chain = Promise.resolve();
     let panelEl = null;
     let timer = null;
-    let lastAdd = [];                // the lines of the last paste and what happened to each
+    let lastAdd = { where: null, lines: [] };   // the last paste: which box, its lines and what happened to each
 
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -32,6 +36,7 @@ window.PostsQueue = (function () {
     function queue() {
         const q = (doc && doc.reel_queue) || {};
         if (!Array.isArray(q.items)) q.items = [];
+        if (!Array.isArray(q.shortlist)) q.shortlist = [];
         return q;
     }
 
@@ -49,7 +54,9 @@ window.PostsQueue = (function () {
             const apply = () => {
                 const q = Object.assign({ items: [], span_days: SPAN_DEFAULT }, doc.reel_queue || {});
                 q.items = (q.items || []).map(i => Object.assign({}, i));
+                q.shortlist = (q.shortlist || []).map(i => Object.assign({}, i));
                 fn(q);
+                if (!q.shortlist.length) delete q.shortlist;
                 q.updated = new Date().toISOString();
                 doc.reel_queue = q;
             };
@@ -82,30 +89,58 @@ window.PostsQueue = (function () {
         return t.replace(/\\ /g, ' ');
     }
 
-    function checkLine(path, have) {
+    function checkLine(path, inQueue, inShort) {
         if (!path.startsWith('/') && !path.startsWith('~')) return 'not a full path';
         if (!/\.mp4$/i.test(path)) return 'not an .mp4 file';
-        if (have.has(path)) return 'already in the queue';
+        if (inQueue.has(path)) return 'already in the queue';
+        if (inShort.has(path)) return 'already on the shortlist';
         return null;
     }
 
-    function addLines(text) {
+    function queueLine(p, now) { return { id: p, path: p, added: now, status: 'pending' }; }
+
+    // where: 'queue' (post now) or 'shortlist' (approved, not yet)
+    function addLines(text, where) {
         const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
         if (!lines.length) return;
-        const have = new Set(queue().items.map(i => i.path));
-        lastAdd = [];
+        const q0 = queue();
+        const inQueue = new Set(q0.items.map(i => i.path));
+        const inShort = new Set(q0.shortlist.map(i => i.path));
+        lastAdd = { where, lines: [] };
         const take = [];
         lines.forEach(p => {
-            const why = checkLine(p, have);
-            lastAdd.push({ path: p, why });
-            if (!why) { have.add(p); take.push(p); }
+            const why = checkLine(p, inQueue, inShort);
+            lastAdd.lines.push({ path: p, why });
+            if (!why) { (where === 'queue' ? inQueue : inShort).add(p); take.push(p); }
         });
         if (!take.length) { redraw(); return; }
         const now = new Date().toISOString();
         change(q => {
-            const there = new Set(q.items.map(i => i.path));
-            take.filter(p => !there.has(p)).forEach(p => q.items.push({ id: p, path: p, added: now, status: 'pending' }));
+            const there = new Set([...q.items, ...q.shortlist].map(i => i.path));
+            take.filter(p => !there.has(p)).forEach(p =>
+                where === 'queue' ? q.items.push(queueLine(p, now)) : q.shortlist.push({ id: p, path: p, added: now }));
             if (!q.span_days) q.span_days = SPAN_DEFAULT;
+        });
+    }
+
+    // shortlist → queue: these can go out now
+    function postNow(paths) {
+        const take = new Set(paths);
+        const now = new Date().toISOString();
+        change(q => {
+            const there = new Set(q.items.map(i => i.path));
+            q.shortlist.filter(i => take.has(i.path) && !there.has(i.path)).forEach(i => q.items.push(queueLine(i.path, now)));
+            q.shortlist = q.shortlist.filter(i => !take.has(i.path));
+            if (!q.span_days) q.span_days = SPAN_DEFAULT;
+        });
+    }
+
+    // queue → shortlist: still good, just not yet (the bot drops it at the next check, like Remove)
+    function notYet(path) {
+        const now = new Date().toISOString();
+        change(q => {
+            q.items = q.items.filter(i => i.path !== path);
+            if (!q.shortlist.some(i => i.path === path)) q.shortlist.push({ id: path, path, added: now });
         });
     }
 
@@ -192,12 +227,52 @@ window.PostsQueue = (function () {
             main.appendChild(el('div', 'pq-status ' + cls, txt));
             row.appendChild(main);
             if (i.status !== 'posted') {
+                const btns = el('div', 'pq-btns');
+                const back = el('button', 'reels-mini', 'Back to shortlist');
+                back.type = 'button';
+                back.title = 'Still good to go, just not yet: keep it on the shortlist instead (it is not posted)';
+                back.addEventListener('click', () => notYet(i.path));
                 const rm = el('button', 'reels-mini', 'Remove');
                 rm.type = 'button';
                 rm.title = 'Take it out of the queue (it is not posted)';
                 rm.addEventListener('click', () => change(qq => { qq.items = qq.items.filter(x => x.path !== i.path); }));
-                row.appendChild(rm);
+                btns.append(back, rm);
+                row.appendChild(btns);
             }
+            box.appendChild(row);
+        });
+        return box;
+    }
+
+    function shortlistBlock(q) {
+        const box = el('div', 'pq-list');
+        if (!q.shortlist.length) {
+            box.appendChild(el('p', 'reels-empty', 'Nothing on the shortlist.'));
+            return box;
+        }
+        q.shortlist.forEach((i, n) => {
+            const row = el('div', 'pq-row');
+            const main = el('div', 'pq-main');
+            main.appendChild(el('div', 'pq-title', `${n + 1}. ${fileName(i.path)}`));
+            const p = el('div', 'pq-path', i.path);
+            p.title = i.path;
+            main.appendChild(p);
+            if (i.added) {
+                main.appendChild(el('div', 'pq-status wait', 'Shortlisted ' +
+                    new Date(i.added).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })));
+            }
+            row.appendChild(main);
+            const btns = el('div', 'pq-btns');
+            const go = el('button', 'reels-mini', 'Post now');
+            go.type = 'button';
+            go.title = 'Move it into the post queue: the bot fits it into the schedule';
+            go.addEventListener('click', () => postNow([i.path]));
+            const rm = el('button', 'reels-mini', 'Remove');
+            rm.type = 'button';
+            rm.title = 'Take it off the shortlist';
+            rm.addEventListener('click', () => change(qq => { qq.shortlist = qq.shortlist.filter(x => x.path !== i.path); }));
+            btns.append(go, rm);
+            row.appendChild(btns);
             box.appendChild(row);
         });
         return box;
@@ -230,29 +305,35 @@ window.PostsQueue = (function () {
         return box;
     }
 
-    function draw() {
-        const q = queue();
-        const sec = el('section', 'pq');
-        sec.appendChild(el('div', 'pq-h', 'Post queue'));
-        sec.appendChild(el('p', 'reels-how',
-            'Paste the file path of each reel you approved, one per line (in Finder: select the file, hold Option, ' +
-            'right-click, Copy … as Pathname). Several at once is fine. The bot spreads them over the time you set ' +
-            'and each morning sends one Telegram message with that day\'s posts: Approve all, or Skip a number.'));
+    function pasteBar(sec, where, label) {
         const ta = el('textarea', 'pq-paste');
         ta.rows = 3;
+        ta.dataset.box = where;
         ta.placeholder = '/Users/…/day12/reels/sxj_d12_day_916.mp4';
-        const add = el('button', 'reels-export-btn', 'Add to queue');
+        const add = el('button', 'reels-export-btn', label);
         add.type = 'button';
-        add.addEventListener('click', () => { addLines(ta.value); ta.value = ''; });
+        add.addEventListener('click', () => { addLines(ta.value, where); ta.value = ''; });
         const bar = el('div', 'pq-addbar');
         bar.append(ta, add);
         sec.appendChild(bar);
-        if (lastAdd.length) {
+        if (lastAdd.where === where && lastAdd.lines.length) {
             const res = el('ul', 'pq-added');
-            lastAdd.forEach(a => res.appendChild(el('li', a.why ? 'bad' : 'ok',
+            lastAdd.lines.forEach(a => res.appendChild(el('li', a.why ? 'bad' : 'ok',
                 (a.why ? '✗ ' : '✓ ') + fileName(a.path) + (a.why ? ': ' + a.why : ': added'))));
             sec.appendChild(res);
         }
+    }
+
+    function draw() {
+        const q = queue();
+        const out = el('div');
+        const sec = el('section', 'pq');
+        sec.appendChild(el('div', 'pq-h', 'Post queue: post these now'));
+        sec.appendChild(el('p', 'reels-how',
+            'Paste the file path of each reel that can go out now, one per line (in Finder: select the file, hold Option, ' +
+            'right-click, Copy … as Pathname). Several at once is fine. The bot spreads them over the time you set ' +
+            'and each morning sends one Telegram message with that day\'s posts: Approve all, or Skip a number.'));
+        pasteBar(sec, 'queue', 'Add to queue');
         sec.appendChild(sliderBlock(q));
         const cols = el('div', 'pq-cols');
         cols.append(listBlock(q), scheduleBlock(q));
@@ -260,23 +341,45 @@ window.PostsQueue = (function () {
         sec.appendChild(el('p', 'reels-how', q.synced
             ? 'Last checked by the Mac: ' + new Date(q.synced).toLocaleString('en-GB', { hour12: false })
             : 'Not checked by the Mac yet (video-editor: tools/reelbot/queue_sync.py, or its launchd job).'));
-        return sec;
+
+        const sl = el('section', 'pq pq-short');
+        sl.appendChild(el('div', 'pq-h', 'Shortlist: good to go, not yet'));
+        sl.appendChild(el('p', 'reels-how',
+            'Reels you approved but aren\'t posting yet. The bot never sees these: "Post now" moves one into the ' +
+            'queue above, and "Back to shortlist" on a queued reel brings it back here.'));
+        pasteBar(sl, 'shortlist', 'Add to shortlist');
+        if (q.shortlist.length > 1) {
+            const all = el('button', 'reels-mini pq-all', `Post all ${q.shortlist.length} now`);
+            all.type = 'button';
+            all.title = 'Move the whole shortlist into the post queue';
+            all.addEventListener('click', () => postNow(q.shortlist.map(i => i.path)));
+            sl.appendChild(all);
+        }
+        sl.appendChild(shortlistBlock(q));
+        out.append(sec, sl);
+        return out;
     }
 
     function redraw() {
         if (!panelEl || !panelEl.isConnected) { clearInterval(timer); timer = null; return; }
-        const keep = document.activeElement && panelEl.contains(document.activeElement) &&
-            document.activeElement.tagName === 'TEXTAREA' ? document.activeElement.value : null;
+        // keep what's typed in either box (and the focus) across the redraw
+        const typed = {};
+        panelEl.querySelectorAll('.pq-paste').forEach(t => { if (t.value) typed[t.dataset.box] = t.value; });
+        const a = document.activeElement;
+        const focus = a && panelEl.contains(a) && a.tagName === 'TEXTAREA' ? a.dataset.box : null;
         const fresh = draw();
         panelEl.replaceChildren(...fresh.childNodes);
-        if (keep) { const ta = panelEl.querySelector('.pq-paste'); ta.value = keep; ta.focus(); }
+        panelEl.querySelectorAll('.pq-paste').forEach(t => {
+            if (typed[t.dataset.box]) t.value = typed[t.dataset.box];
+            if (t.dataset.box === focus) t.focus();
+        });
     }
 
     // The panel for the Reels tab: drawn from the last copy at once, refreshed from the server, then every 30 s
     // (the Mac's checks and the bot's schedule arrive on their own).
     function panel() {
-        panelEl = el('div', 'pq-wrap pq');
-        panelEl.append(...(doc ? draw().childNodes : [el('p', 'reels-how', 'Loading the post queue…')]));
+        panelEl = el('div', 'pq-wrap');
+        panelEl.append(...(doc ? draw().childNodes : [el('p', 'reels-how pq', 'Loading the post queue…')]));
         const refresh = () => {
             const typing = document.activeElement && panelEl.contains(document.activeElement);
             if (typing) return;

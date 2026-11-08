@@ -194,12 +194,14 @@ def read_doc(base, env, which='main'):
     return api_call(posts_url(base, which), env)
 
 
-# The Reels tab's own fields of the Posts document, beside the drafts: the post queue, and the reels he rejected
-# (each with his reason, for the video project's feedback loop). Each travels with the drafts; absent = kept.
-REEL_FIELDS = ('reel_queue', 'reel_rejects')
+# The Reels tab's own fields of the Posts document, beside the drafts: the post queue, the reels he rejected
+# (each with his reason, for the video project's feedback loop) and his music pool for reels (the songs new reels are
+# cut to). Each travels with the drafts; absent = kept.
+REEL_FIELDS = ('reel_queue', 'reel_rejects', 'reel_music_pool')
 
 
-def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=None, reel_rejects=None):
+def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=None, reel_rejects=None,
+              reel_music_pool=None):
     body = {'baseVersion': base_version, 'posts': posts}
     if settings is not None:
         body['settings'] = settings
@@ -207,6 +209,8 @@ def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=N
         body['reel_queue'] = reel_queue
     if reel_rejects is not None:    # the same for the reject list
         body['reel_rejects'] = reel_rejects
+    if reel_music_pool is not None:     # and the music pool
+        body['reel_music_pool'] = reel_music_pool
     return api_call(posts_url(base, which), env, method='PUT', body=body)
 
 
@@ -229,7 +233,14 @@ def merge_rejects(base, local, remote):
     return _merge_lists_doc(base, local, remote, ('items',))
 
 
-MERGE_FIELD = {'reel_queue': merge_queue, 'reel_rejects': merge_rejects}
+def merge_music_pool(base, local, remote):
+    """The Reels tab's music pool (reel_music_pool: songs he added, songs he took out; video-editor docs/POST_QUEUE.md
+    "Music pool"), merged like the queue: both lists line by line by id (a song added here and the Mac's "in" on
+    another line there combine), other fields from the side that changed them. None when neither side has one."""
+    return _merge_lists_doc(base, local, remote, ('items', 'removed'))
+
+
+MERGE_FIELD = {'reel_queue': merge_queue, 'reel_rejects': merge_rejects, 'reel_music_pool': merge_music_pool}
 
 
 def _merge_lists_doc(base, local, remote, lists):

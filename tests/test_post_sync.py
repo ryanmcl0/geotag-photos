@@ -112,10 +112,11 @@ class MirrorCarriesTheQueue(unittest.TestCase):
         def read(base, env, which='main'):
             return json.loads(json.dumps(self.docs[base]))
 
-        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None):
+        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None, reel_music_pool=None):
             self.writes.append(base)
             d = {'version': v + 1, 'posts': posts}
-            for f, val in (('reel_queue', reel_queue), ('reel_rejects', reel_rejects)):
+            for f, val in (('reel_queue', reel_queue), ('reel_rejects', reel_rejects),
+                           ('reel_music_pool', reel_music_pool)):
                 if val is not None and (base == 'L' or self.live_keeps):
                     d[f] = val
             self.docs[base] = d
@@ -219,13 +220,14 @@ class CopyStateCarriesBoth(unittest.TestCase):
         self.docs = {('S', 'main'): {'version': 3, 'posts': B, 'reel_rejects': RB},
                      ('D', 'main'): {'version': 1, 'posts': B, 'reel_queue': QB},
                      ('S', 'auto'): {'version': 1, 'posts': []}, ('D', 'auto'): {'version': 1, 'posts': []}}
-        self.sent = []
+        self.sent, self.pools = [], []
 
         def read(base, env, which='main'):
             return json.loads(json.dumps(self.docs[(base, which)]))
 
-        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None):
+        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None, reel_music_pool=None):
             self.sent.append((base, which, reel_queue, reel_rejects))
+            self.pools.append(reel_music_pool)
         P.read_doc, P.write_doc = read, write
 
     def tearDown(self):
@@ -234,6 +236,62 @@ class CopyStateCarriesBoth(unittest.TestCase):
     def test_both_fields_are_carried(self):
         self.assertEqual(P.copy_state('S', 'D', {}, 'copied', quiet=True), 1)
         self.assertEqual(self.sent, [('D', 'main', QB, RB)])
+
+
+def pline(i, status='in', **k):
+    return {'id': f'library/{i}', 'tid': i, 'title': i, 'status': status, **k}
+
+
+MB = {'items': [pline('Time'), pline('Mountains')], 'removed': [], 'updated': 't0'}
+
+
+class MergeMusicPool(unittest.TestCase):
+    """The Reels tab's music pool: both lists merged line by line; a side without it never empties the other."""
+
+    def test_an_add_here_and_the_macs_mark_there_combine(self):
+        local = {'items': MB['items'] + [pline('Gom', 'waiting', added='t1')], 'removed': [], 'updated': 't1'}
+        remote = {'items': [pline('Time', applied='s1'), pline('Mountains')], 'removed': [], 'updated': 't0',
+                  'synced': 's1'}
+        out = P.merge_music_pool(MB, local, remote)
+        self.assertEqual([i['tid'] for i in out['items']], ['Time', 'Mountains', 'Gom'])
+        self.assertEqual(out['items'][0]['applied'], 's1')
+        self.assertEqual((out['updated'], out['synced']), ('t1', 's1'))
+
+    def test_a_removal_here_moves_the_line(self):
+        local = {'items': [pline('Time')], 'removed': [pline('Mountains', 'waiting', removed='t1')], 'updated': 't1'}
+        out = P.merge_music_pool(MB, local, MB)
+        self.assertEqual([i['tid'] for i in out['items']], ['Time'])
+        self.assertEqual([i['tid'] for i in out['removed']], ['Mountains'])
+
+    def test_a_side_without_a_pool_never_empties_the_other(self):
+        self.assertEqual(P.merge_music_pool(MB, MB, None), MB)
+        self.assertEqual(P.merge_music_pool(None, None, MB), MB)
+        self.assertIsNone(P.merge_music_pool(None, None, None))
+
+    def test_every_reel_field_has_its_merge(self):
+        self.assertEqual(set(P.MERGE_FIELD), set(P.REEL_FIELDS))
+        self.assertIn('reel_music_pool', P.REEL_FIELDS)
+
+
+class MirrorCarriesTheMusicPool(MirrorCarriesTheQueue):
+    def setUp(self):
+        super().setUp()
+        self.docs['L']['reel_music_pool'] = MB
+
+    def test_the_pool_goes_up_and_stays_here_when_the_live_site_drops_it(self):
+        self.live_keeps = False
+        self.assertEqual(self.tick(), 'up')
+        self.assertEqual(self.tick(), 'same')
+        self.assertEqual(self.docs['L']['reel_music_pool'], MB)
+
+    def test_a_live_change_comes_down(self):
+        self.live_keeps = True
+        self.tick()
+        self.assertEqual(self.docs['R']['reel_music_pool'], MB)
+        self.docs['R'] = dict(self.docs['R'], version=self.docs['R']['version'] + 1,
+                              reel_music_pool={'items': MB['items'][:1], 'removed': [], 'updated': 't2'})
+        self.assertEqual(self.tick(), 'down')
+        self.assertEqual([i['tid'] for i in self.docs['L']['reel_music_pool']['items']], ['Time'])
 
 
 class ServerUp(unittest.TestCase):

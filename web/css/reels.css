@@ -211,3 +211,27 @@
     .pq-addbar { flex-direction: column; align-items: stretch; }
     .pq-cols { grid-template-columns: minmax(0, 1fr); }
 }
+/* ── Posts ▸ Reels ▸ Music pool (posts-music.js) ── */
+.pm-wrap { margin: 0 0 26px; }
+.pm { border-color: #24323a; }
+.pm-toggle { background: none; border: 0; padding: 0; cursor: pointer; color: #8fd0e6; text-align: left; font: inherit; font-weight: 600; font-size: 1rem; }
+.pm-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pm-head .pq-title { min-width: 0; overflow-wrap: anywhere; }
+.pm-label { font: 11px ui-monospace, Menlo, monospace; color: #8fd0e6; flex-shrink: 0; }
+.pm-label:empty { display: none; }
+.pm-play { width: 30px; flex-shrink: 0; padding-left: 0; padding-right: 0; }
+.pm-meta { font-size: 12px; color: #999; margin-top: 4px; overflow-wrap: anywhere; }
+.pm-row.pm-waiting { border-style: dashed; }
+.pm-row.pm-failed { border-color: #4a2a2a; }
+.pm-row.pm-out { opacity: 0.75; }
+.pm-sub { font-weight: 600; font-size: 14px; color: #ddd; margin: 16px 0 8px; }
+.pm-sub2 { font-weight: 600; font-size: 13px; color: #bbb; margin: 12px 0 6px; }
+.pm-addbox { border-top: 1px solid #262626; margin-top: 14px; }
+.pm-q { width: 100%; margin-bottom: 8px; }
+.pm-queued { font-size: 12px; color: #e6c06a; margin-top: 6px; }
+.pm-queued summary { cursor: pointer; }
+.pm-queued ul { margin: 4px 0 4px 18px; padding: 0; color: #ccc; }
+.pm-add:not(:disabled) { border-color: #8fd18f; color: #8fd18f; }
+@media (max-width: 768px) {
+    .pm-row .pq-btns { justify-content: flex-start; }
+}

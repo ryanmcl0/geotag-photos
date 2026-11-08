@@ -95,9 +95,42 @@ const QUEUE_TEXT = ['id', 'added', 'why', 'key', 'title', 'kind', 'place', 'fram
 interface RejectItem { id?: string; path: string; reason: string; rejected?: string; noted?: string }
 interface ReelRejects { items: RejectItem[]; updated?: string; synced?: string }
 const MAX_REJECTS = 1000;
+// reel_music_pool: the songs new reels are cut to (his active music pool, owner 2026-11-08). The page adds a line
+// ("waiting") or moves one to removed; the video project's Mac helper (queue_sync.py) applies it to the pool file and
+// marks it back: in / out / failed (why). Titles only: the song lists themselves stay in the local-only manifest
+// (web/phone/reels/music.json), never here. Absent in a PUT = unchanged.
+interface PoolLine {
+    id: string; tid?: string; title?: string; label?: string; status?: string; why?: string; added?: string;
+    removed?: string; applied?: string; source?: string;
+}
+interface ReelMusicPool { items: PoolLine[]; removed?: PoolLine[]; updated?: string; synced?: string }
+const MAX_POOL_LINES = 500;
+const POOL_STATUSES = ['waiting', 'in', 'out', 'failed'];
+const POOL_TEXT: Record<string, number> = {
+    id: 1000, tid: 200, title: 300, label: 10, why: 300, added: 40, removed: 40, applied: 40, source: 20
+};
 interface PostsDoc {
     version: number; updated: string | null; posts: Post[]; settings?: Settings; reel_queue?: ReelQueue;
-    reel_rejects?: ReelRejects;
+    reel_rejects?: ReelRejects; reel_music_pool?: ReelMusicPool;
+}
+
+function validMusicPool(m: unknown): m is ReelMusicPool | undefined {
+    if (m === undefined) return true;
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
+    const j = m as ReelMusicPool;
+    const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    const line = (i: unknown) => {
+        if (!i || typeof i !== 'object' || Array.isArray(i)) return false;
+        const l = i as Record<string, unknown>;
+        if (typeof l.id !== 'string' || !l.id.length) return false;
+        if (l.status !== undefined && !POOL_STATUSES.includes(l.status as string)) return false;
+        return Object.keys(l).every(k => k === 'status' || (k in POOL_TEXT && text(l[k], POOL_TEXT[k])));
+    };
+    if (!Array.isArray(j.items) || j.items.length > MAX_POOL_LINES) return false;
+    if (j.removed !== undefined && (!Array.isArray(j.removed) || j.removed.length > MAX_POOL_LINES)) return false;
+    if (!text(j.updated, 40) || !text(j.synced, 40)) return false;
+    if (!Object.keys(j).every(k => ['items', 'removed', 'updated', 'synced'].includes(k))) return false;
+    return j.items.every(line) && (j.removed || []).every(line);
 }
 
 function validRejects(r: unknown): r is ReelRejects | undefined {
@@ -242,7 +275,10 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
     if (context.request.method === 'PUT') {
         const raw = await context.request.text();
         if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 });
-        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown; reel_queue?: unknown; reel_rejects?: unknown };
+        let body: {
+            baseVersion?: unknown; posts?: unknown; settings?: unknown; reel_queue?: unknown; reel_rejects?: unknown;
+            reel_music_pool?: unknown;
+        };
         try {
             body = JSON.parse(raw);
         } catch {
@@ -250,7 +286,7 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         }
         if (typeof body.baseVersion !== 'number' || !validPosts(body.posts) ||
             !validSettings(body.settings) || !validQueue(body.reel_queue) ||
-            !validRejects(body.reel_rejects)) {
+            !validRejects(body.reel_rejects) || !validMusicPool(body.reel_music_pool)) {
             return new Response('Bad request', { status: 400 });
         }
         const current = await readDoc();
@@ -272,6 +308,9 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         // And the reject list: a save that leaves it out (post.py mirror, older pages) keeps it.
         const rejects = body.reel_rejects !== undefined ? body.reel_rejects as ReelRejects : current.reel_rejects;
         if (rejects) next.reel_rejects = rejects;
+        // And the music pool, the same way.
+        const pool = body.reel_music_pool !== undefined ? body.reel_music_pool as ReelMusicPool : current.reel_music_pool;
+        if (pool) next.reel_music_pool = pool;
         await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });

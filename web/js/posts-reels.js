@@ -10,6 +10,8 @@
  * helper isn't running). "Export 4K" only queues a request (web/phone/reels/export_queue.json): the render is the
  * video project's tools/vlog/reel_export.py, run by hand, one reel at a time, to the NAS export folder.
  *
+ * Under it, the music pool (posts-music.js): the songs new reels are cut to, with Add and Remove.
+ *
  * Each picked reel also has "Reject…" (posts-queue.js keeps the reject list, by the reel's file path from reels.json):
  * a reel rejected here leaves this posting list too; one rejected elsewhere shows greyed with its reason and Undo.
  */
@@ -219,6 +221,8 @@ window.PostsReels = (function () {
             }
             root.appendChild(PostsQueue.panel());
         }
+        // the music pool (posts-music.js): the songs new reels are cut to, add and remove
+        if (window.PostsMusic) root.appendChild(PostsMusic.panel());
 
         const where = ReelsSite.where() === 'disk'
             ? 'Saved on this Mac (web/phone/reels/state.json).'

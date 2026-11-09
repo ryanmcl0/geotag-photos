@@ -302,10 +302,23 @@ window.PostsQueue = (function () {
         try { return d.toLocaleString('en-GB', opt) + ' China'; } catch (e) { return iso; }
     }
 
+    // refresh on demand (video-editor docs/POST_QUEUE.md "Refresh on demand"): the Mac checks each queued reel against
+    // the reel audit first. i.refresh = refreshed (re-rendered with the current code, then queued) | waiting (to be
+    // re-rendered at a later sync) | rebuild | retire | by hand | failed (left out; i.why says why, in plain words)
+    function upFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
     function statusText(i) {
+        const fresh = i.refresh === 'refreshed' ? ' · re-rendered with the current code' +
+            (i.refreshed ? ' on ' + fmtDay(i.refreshed) : '') : '';
+        if (i.status === 'invalid' && ['rebuild', 'retire', 'by hand', 'failed'].includes(i.refresh)) {
+            return [upFirst(i.why || 'left out by the reel audit'), i.refresh === 'retire' ? 'warn' : 'bad'];
+        }
+        if (i.status === 'pending' && i.refresh === 'waiting') {
+            return [upFirst(i.why || 'waiting to be refreshed with the current code'), 'wait'];
+        }
         switch (i.status) {
-            case 'valid': return ['Ready: the bot will fit it in', 'ok'];
-            case 'scheduled': return [(i.approved ? 'Approved for ' : 'Planned for ') + fmtWhen(i.when), 'ok'];
+            case 'valid': return ['Ready: the bot will fit it in' + fresh, 'ok'];
+            case 'scheduled': return [(i.approved ? 'Approved for ' : 'Planned for ') + fmtWhen(i.when) + fresh, 'ok'];
             case 'posted': return ['Posted' + (i.when ? ' ' + fmtWhen(i.when) : ''), 'done'];
             case 'skipped': return ['Not posted: ' + (i.why || 'skipped'), 'warn'];
             case 'invalid': return ['Problem: ' + (i.why || 'not usable'), 'bad'];

@@ -331,9 +331,8 @@ window.PostsMusic = (function () {
     function splitPaste(text) {
         const out = [];
         String(text || '').split(/\r?\n/).forEach(line => {
-            const quoted = line.match(/'[^']+'|"[^"]+"/g);
-            if (quoted && quoted.length > 1) { quoted.forEach(q => out.push(q)); return; }
-            line.split(/(?<=\.mp4['"]?)\s+(?=['"]?(?:\/|~|file:\/\/))/i).forEach(x => out.push(x));
+            // a separator is: .mp4, maybe a closing quote, spaces, maybe an opening quote, then the next path
+            line.split(/(?<=\.mp4)['"]?\s+['"]?(?=\/|~|file:\/\/)/i).forEach(x => out.push(x));
         });
         return out;
     }

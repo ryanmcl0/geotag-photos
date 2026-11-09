@@ -125,6 +125,18 @@ window.PostsQueue = (function () {
     }
 
     // ── what he pastes ──
+    // several paths in one paste: one per line, or Finder's "Copy as Pathname" of many files, which puts them on ONE
+    // line as '…mp4' '…mp4' (owner 2026-11-09: seven reels became one queue line)
+    function splitPaste(text) {
+        const out = [];
+        String(text || '').split(/\r?\n/).forEach(line => {
+            const quoted = line.match(/'[^']+'|"[^"]+"/g);
+            if (quoted && quoted.length > 1) { quoted.forEach(q => out.push(q)); return; }
+            line.split(/(?<=\.mp4['"]?)\s+(?=['"]?(?:\/|~|file:\/\/))/i).forEach(x => out.push(x));
+        });
+        return out;
+    }
+
     function cleanLine(s) {
         let t = s.trim().replace(/^['"]|['"]$/g, '').trim();
         if (t.startsWith('file://')) {
@@ -147,7 +159,7 @@ window.PostsQueue = (function () {
 
     // where: 'queue' (post now) or 'shortlist' (approved, not yet)
     function addLines(text, where) {
-        const lines = text.split(/\r?\n/).map(cleanLine).filter(Boolean);
+        const lines = splitPaste(text).map(cleanLine).filter(Boolean);
         if (!lines.length) return;
         const q0 = queue();
         const inQueue = new Set(q0.items.map(i => i.path));
@@ -476,7 +488,7 @@ window.PostsQueue = (function () {
         ta.placeholder = '/Volumes/Crucial X9/Short Form Content/…/2 Shoots/sxj_d12_s2_toksun_916_globe.mp4';
         sec.appendChild(ta);
         sec.appendChild(reasonForm('paste', reason => {
-            const lines = ta.value.split(/\r?\n/).map(cleanLine).filter(Boolean);
+            const lines = splitPaste(ta.value).map(cleanLine).filter(Boolean);
             lastAdd = { where: 'reject', lines: [] };
             const take = [];
             lines.forEach(p => {

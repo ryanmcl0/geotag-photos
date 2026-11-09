@@ -326,6 +326,17 @@ window.PostsMusic = (function () {
 
     // ── Rejected music ──
     // the same paste clean-up as the reject list (Finder's "Copy as Pathname", quotes, file:// URLs, escaped spaces)
+    // several paths in one paste: one per line, or Finder's "Copy as Pathname" of many files, which puts them on ONE
+    // line as '…mp4' '…mp4' (owner 2026-11-09: seven reels became one queue line)
+    function splitPaste(text) {
+        const out = [];
+        String(text || '').split(/\r?\n/).forEach(line => {
+            const quoted = line.match(/'[^']+'|"[^"]+"/g);
+            if (quoted && quoted.length > 1) { quoted.forEach(q => out.push(q)); return; }
+            line.split(/(?<=\.mp4['"]?)\s+(?=['"]?(?:\/|~|file:\/\/))/i).forEach(x => out.push(x));
+        });
+        return out;
+    }
     function cleanLine(s) {
         let t = String(s).trim().replace(/^['"]|['"]$/g, '').trim();
         if (t.startsWith('file://')) {
@@ -468,7 +479,7 @@ window.PostsMusic = (function () {
         go.type = 'button';
         const result = el('ul', 'pq-added');
         go.addEventListener('click', () => {
-            const paths = ta.value.split(/\r?\n/).map(cleanLine).filter(Boolean);
+            const paths = splitPaste(ta.value).map(cleanLine).filter(Boolean);
             if (!paths.length) { result.replaceChildren(el('li', 'bad', 'Paste a reel\'s file path first.')); return; }
             const bad = paths.map(p => [p, pasteProblem(p)]).filter(x => x[1]);
             const good = paths.filter((p, i) => !pasteProblem(p) && paths.indexOf(p) === i);

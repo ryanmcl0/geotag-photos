@@ -235,9 +235,10 @@ def merge_rejects(base, local, remote):
 
 def merge_music_pool(base, local, remote):
     """The Reels tab's music pool (reel_music_pool: songs he added, songs he took out; video-editor docs/POST_QUEUE.md
-    "Music pool"), merged like the queue: both lists line by line by id (a song added here and the Mac's "in" on
+    "Music pool"), merged like the queue: its lists (songs in the pool, songs taken out, and the Rejected music box's lines)
+    line by line by id (a song added here and the Mac's "in" on
     another line there combine), other fields from the side that changed them. None when neither side has one."""
-    return _merge_lists_doc(base, local, remote, ('items', 'removed'))
+    return _merge_lists_doc(base, local, remote, ('items', 'removed', 'rejects'))
 
 
 MERGE_FIELD = {'reel_queue': merge_queue, 'reel_rejects': merge_rejects, 'reel_music_pool': merge_music_pool}

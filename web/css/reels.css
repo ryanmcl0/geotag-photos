@@ -235,3 +235,8 @@
 @media (max-width: 768px) {
     .pm-row .pq-btns { justify-content: flex-start; }
 }
+/* Rejected music (posts-music.js): the paste box, its lines and the rejected songs */
+.pm-rejbox .pm-rejpaste { width: 100%; margin-bottom: 6px; }
+.pm-rejbox .pm-rejwhy { width: 100%; margin-bottom: 8px; }
+.pm-row.pm-rejected { border-color: #3a2626; }
+.pm-rejbox .pq-reject-go { margin-bottom: 4px; }

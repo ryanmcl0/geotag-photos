@@ -12,6 +12,15 @@
  * video project's tools/reelbot/queue_sync.py on the Mac applies it, at the next sync (run at the start of any reels
  * request): then "in" / "out", or "failed" with a plain reason.
  *
+ * Rejected music (owner 2026-11-09: "I need to be able to also have like a rejected music section where I paste the
+ * file path of a reel with a song that I don't want to have in the pool and that's my way of rejecting it"): a box at
+ * the end of this section. He pastes reel paths (one per line) with an optional reason; each becomes a line in
+ * reel_music_pool.rejects ({id, action: "reject", reel, reason, added, status}); the Mac (queue_sync.py) finds the
+ * reel's plan and song, holds that song everywhere (out of the pool, never suggested or found by name again) and marks
+ * the line done (song, title, uses = reels already cut to it) or failed (why). The list of rejected songs, with the
+ * date, reason and the reels that still use each, comes from music.json ("rejected_songs"); Undo adds a line
+ * {action: "undo", song: key}. Undo only lifts the hold: the song is NOT put back in the pool.
+ *
  * The lists come from web/phone/reels/music.json (local-only, written by the video project's tools/vlog/music_pool.py:
  * each pool song's length, sections and how many reels use it; the library songs that may be added; the songs taken
  * out with the queued reels still cut to them) and from the local helper (tools/reels_local.py): the review folders
@@ -89,6 +98,12 @@ window.PostsMusic = (function () {
         return { items, removed: [] };
     }
     const KEEP = ['id', 'tid', 'title', 'label', 'status', 'why', 'added', 'removed', 'applied', 'source'];
+    const KEEP_REJECT = ['id', 'action', 'reel', 'reason', 'added', 'status', 'why', 'song', 'title', 'uses', 'applied'];
+    const cleanReject = l => Object.fromEntries(KEEP_REJECT.filter(k => l[k] !== undefined && l[k] !== null).map(k => [k, l[k]]));
+    const rejectLines = () => {
+        const p = doc && doc.reel_music_pool;
+        return p && Array.isArray(p.rejects) ? p.rejects : [];
+    };
     const clean = l => Object.fromEntries(KEEP.filter(k => l[k] !== undefined && l[k] !== null).map(k => [k, l[k]]));
 
     // the manifest's row for a page line (by id, then by library id)
@@ -108,8 +123,10 @@ window.PostsMusic = (function () {
                 const mp = Object.assign({}, doc.reel_music_pool || {});
                 mp.items = p.items.map(i => clean(i));
                 mp.removed = p.removed.map(i => clean(i));
+                if (Array.isArray(mp.rejects)) mp.rejects = mp.rejects.map(cleanReject);
                 fn(mp);
                 mp.removed = mp.removed.slice(0, 500);
+                if (Array.isArray(mp.rejects)) mp.rejects = mp.rejects.slice(0, 300);
                 mp.updated = new Date().toISOString();
                 doc.reel_music_pool = mp;
             };
@@ -253,8 +270,12 @@ window.PostsMusic = (function () {
         head.appendChild(el('span', 'pm-label', line.label || r.label || ''));
         head.appendChild(el('span', 'pq-title', line.title || name(r)));
         main.appendChild(head);
+        // a song he rejected (and has not undone): no Add back, the Rejected music box below holds its Undo
+        const rejected = line.status !== 'waiting' && /you rejected/i.test(line.why || '') &&
+            (!man || !Array.isArray(man.rejected_songs) || man.rejected_songs.some(x => x.tid && x.tid === line.tid));
         main.appendChild(el('div', 'pq-status ' + (line.status === 'waiting' ? 'wait' : 'done'),
-            line.status === 'waiting' ? 'Waiting for the Mac to take it out (at the next sync)'
+            rejected ? 'Rejected: never used again. Undo it under Rejected music below to be able to add it back.'
+            : line.status === 'waiting' ? 'Waiting for the Mac to take it out (at the next sync)'
                 : `Out of the pool${line.removed ? ' since ' + fmtDay(line.removed) : ''}` +
                   (line.why ? ` (${line.why})` : '') + '. Still in your music library.'));
         const q = (r.queued || []);
@@ -271,10 +292,12 @@ window.PostsMusic = (function () {
         }
         row.appendChild(main);
         const btns = el('div', 'pq-btns');
-        const back = el('button', 'reels-mini', line.status === 'waiting' ? 'Undo' : 'Add back');
-        back.type = 'button';
-        back.addEventListener('click', () => addBack(line));
-        btns.appendChild(back);
+        if (!rejected) {
+            const back = el('button', 'reels-mini', line.status === 'waiting' ? 'Undo' : 'Add back');
+            back.type = 'button';
+            back.addEventListener('click', () => addBack(line));
+            btns.appendChild(back);
+        }
         row.appendChild(btns);
         return row;
     }
@@ -300,6 +323,190 @@ window.PostsMusic = (function () {
         row.appendChild(btns);
         return row;
     }
+
+    // ── Rejected music ──
+    // the same paste clean-up as the reject list (Finder's "Copy as Pathname", quotes, file:// URLs, escaped spaces)
+    function cleanLine(s) {
+        let t = String(s).trim().replace(/^['"]|['"]$/g, '').trim();
+        if (t.startsWith('file://')) {
+            try { t = decodeURIComponent(new URL(t).pathname); } catch (e) { /* leave it */ }
+        }
+        return t.replace(/\\ /g, ' ');
+    }
+    const fileOf = p => String(p || '').split('/').pop();
+    const newId = () => `rj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+    // → the plain problem with a pasted line, or null
+    function pasteProblem(p) {
+        if (!p.startsWith('/') && !p.startsWith('~')) return 'not a full path';
+        if (!/\.(mp4|mov)$/i.test(p)) return 'not a reel file (.mp4)';
+        return null;
+    }
+
+    function rejectReels(paths, reason) {
+        note = '';
+        return change(mp => {
+            mp.rejects = mp.rejects || [];
+            paths.slice().reverse().forEach(p => {            // newest on top, in the order pasted
+                const dup = mp.rejects.some(l => l.action === 'reject' && l.reel === p && l.status !== 'failed' &&
+                    (l.status === 'waiting' || l.reason === (reason || undefined)));
+                if (dup) return;
+                mp.rejects.unshift(cleanReject({ id: newId(), action: 'reject', reel: p, reason: reason || undefined,
+                    added: now(), status: 'waiting' }));
+            });
+        });
+    }
+    function undoSong(s) {
+        note = '';
+        return change(mp => {
+            mp.rejects = mp.rejects || [];
+            if (mp.rejects.some(l => l.action === 'undo' && l.song === s.key && l.status === 'waiting')) return;
+            mp.rejects.unshift(cleanReject({ id: newId(), action: 'undo', song: s.key, title: name(s).slice(0, 300),
+                added: now(), status: 'waiting' }));
+        });
+    }
+    function retryReject(line) {
+        return change(mp => {
+            const l = (mp.rejects || []).find(x => x.id === line.id);
+            if (l) { l.status = 'waiting'; l.added = now(); delete l.why; delete l.applied; }
+        });
+    }
+    function clearReject(line) {
+        return change(mp => { mp.rejects = (mp.rejects || []).filter(x => x.id !== line.id); });
+    }
+
+    function rejectLineRow(l) {
+        const row = el('div', 'pq-row pm-row' + (l.status === 'failed' ? ' pm-failed' : l.status === 'waiting' ? ' pm-waiting' : ''));
+        const main = el('div', 'pq-main');
+        if (l.action === 'undo') {
+            main.appendChild(el('div', 'pq-title', l.title || l.song));
+            main.appendChild(el('div', 'pq-status ' + (l.status === 'waiting' ? 'wait' : 'done'),
+                l.status === 'waiting' ? 'Waiting for the Mac to lift it (at the next sync)'
+                    : 'Lifted. It is not back in the pool: add it yourself if you want it there.'));
+        } else {
+            main.appendChild(el('div', 'pq-title', fileOf(l.reel)));
+            main.appendChild(el('div', 'pq-path', l.reel));
+            if (l.reason) main.appendChild(el('div', 'pm-meta', 'Why: ' + l.reason));
+            if (l.status === 'waiting') {
+                main.appendChild(el('div', 'pq-status wait', 'Waiting for the Mac to find its song (at the next sync)'));
+            } else if (l.status === 'failed') {
+                main.appendChild(el('div', 'pq-status bad', 'Couldn\'t reject it: ' + (l.why || 'no reason given')));
+            } else {
+                main.appendChild(el('div', 'pq-status ok', `Rejected: never used again. The song is ${l.title || 'found'}.`));
+                if (l.uses) main.appendChild(el('div', 'pm-meta', l.uses === 1 ? '1 reel uses this song: it needs a new one'
+                    : `${l.uses} reels use this song: they need a new one`));
+            }
+        }
+        row.appendChild(main);
+        const btns = el('div', 'pq-btns');
+        if (l.status === 'failed') {
+            const again = el('button', 'reels-mini', 'Try again');
+            again.type = 'button';
+            again.addEventListener('click', () => retryReject(l));
+            btns.appendChild(again);
+        }
+        const rm = el('button', 'reels-mini', l.status === 'waiting' ? 'Cancel' : 'Clear');
+        rm.type = 'button';
+        rm.title = l.status === 'waiting' ? 'Don\'t reject it' : 'Take this line off the list (the song stays rejected)';
+        rm.addEventListener('click', () => clearReject(l));
+        btns.appendChild(rm);
+        row.appendChild(btns);
+        return row;
+    }
+
+    function rejectedSongRow(s, lines) {
+        const row = el('div', 'pq-row pm-row pm-rejected');
+        const main = el('div', 'pq-main');
+        main.appendChild(el('div', 'pq-title', name(s)));
+        main.appendChild(el('div', 'pm-meta', `Rejected ${fmtDay(s.rejected)}` + (s.reason ? ` · ${s.reason}` : ' · no reason given')));
+        const reels = s.reels || [];
+        if (reels.length) {
+            const w = el('details', 'pm-queued');
+            w.appendChild(el('summary', '', reels.length === 1 ? '1 reel uses this song: it needs a new one'
+                : `${s.n_reels || reels.length} reels use this song: they need a new one`));
+            const ul = el('ul');
+            reels.forEach(r => ul.appendChild(el('li', '', r)));
+            w.appendChild(ul);
+            w.appendChild(el('p', 'reels-how', 'Nothing is re-cut or re-rendered by itself: they keep this song until you say otherwise.'));
+            main.appendChild(w);
+        }
+        const waiting = lines.some(l => l.action === 'undo' && l.song === s.key && l.status === 'waiting');
+        if (waiting) main.appendChild(el('div', 'pq-status wait', 'Waiting for the Mac to lift it (at the next sync)'));
+        row.appendChild(main);
+        const btns = el('div', 'pq-btns');
+        const undo = el('button', 'reels-mini', 'Undo');
+        undo.type = 'button';
+        undo.disabled = waiting;
+        undo.title = 'Lift the rejection. The song does not go back into the pool by itself.';
+        undo.addEventListener('click', () => undoSong(s));
+        btns.appendChild(undo);
+        row.appendChild(btns);
+        return row;
+    }
+
+    function rejectedBox() {
+        const box = el('div', 'pm-rejbox');
+        const lines = rejectLines();
+        const songs = (man && man.rejected_songs) || [];
+        box.appendChild(el('div', 'pm-sub', `Rejected music (${songs.length})`));
+        box.appendChild(el('p', 'reels-how',
+            'A song you never want again. Paste the file path of a reel that has it (one per line), say why if you like, ' +
+            'then Reject the song. The Mac finds the reel\'s song at the next sync and rejects it everywhere: it leaves ' +
+            'the pool and is never suggested or picked for a new reel. Reels already made with it are listed, not changed.'));
+        const ta = el('textarea', 'pq-paste pm-rejpaste');
+        ta.rows = 2;
+        ta.dataset.keep = 'pm-rej-paste';
+        ta.placeholder = '/Volumes/Crucial X9/Short Form Content/China CNY 2026/7 Route/day01_shenzhen_loop_16x9_globe.mp4';
+        box.appendChild(ta);
+        const why = el('input', 'pq-reason-text pm-rejwhy');
+        why.type = 'text';
+        why.maxLength = 500;
+        why.placeholder = 'Why? (optional) e.g. this music is all trash';
+        why.dataset.keep = 'pm-rej-why';
+        box.appendChild(why);
+        const go = el('button', 'reels-mini pq-reject-go', 'Reject the song');
+        go.type = 'button';
+        const result = el('ul', 'pq-added');
+        go.addEventListener('click', () => {
+            const paths = ta.value.split(/\r?\n/).map(cleanLine).filter(Boolean);
+            if (!paths.length) { result.replaceChildren(el('li', 'bad', 'Paste a reel\'s file path first.')); return; }
+            const bad = paths.map(p => [p, pasteProblem(p)]).filter(x => x[1]);
+            const good = paths.filter((p, i) => !pasteProblem(p) && paths.indexOf(p) === i);
+            if (bad.length) {
+                lastBad = bad.map(([p, w]) => `✗ ${fileOf(p) || p}: ${w}`);
+            } else {
+                lastBad = [];
+            }
+            if (!good.length) { redraw(); return; }
+            ta.value = '';
+            const keep = panelEl && panelEl.querySelector('[data-keep="pm-rej-why"]');
+            const reason = (why.value || '').trim();
+            if (keep) keep.value = '';
+            rejectReels(good, reason);
+        });
+        box.appendChild(go);
+        lastBad.forEach(t => result.appendChild(el('li', 'bad', t)));
+        box.appendChild(result);
+
+        if (lines.length) {
+            const ls = el('div', 'pm-rejlines');
+            ls.appendChild(el('div', 'pm-sub2', 'Sent to the Mac'));
+            lines.slice(0, 20).forEach(l => ls.appendChild(rejectLineRow(l)));
+            if (lines.length > 20) ls.appendChild(el('p', 'reels-how', `… and ${lines.length - 20} older lines`));
+            box.appendChild(ls);
+        }
+        const list = el('div', 'pm-rejlist');
+        list.appendChild(el('div', 'pm-sub2', 'Rejected songs'));
+        if (!man || !Array.isArray(man.rejected_songs)) {
+            list.appendChild(el('p', 'reels-how', 'The list comes from the Mac at the next sync.'));
+        } else if (!songs.length) {
+            list.appendChild(el('p', 'reels-empty', 'No songs rejected.'));
+        }
+        songs.forEach(s => list.appendChild(rejectedSongRow(s, lines)));
+        box.appendChild(list);
+        return box;
+    }
+    let lastBad = [];
 
     // a song held back in the library (reserved) or deleted from it: never offered
     function held(fileName) {
@@ -404,6 +611,9 @@ window.PostsMusic = (function () {
         redrawResults();
         addBox.appendChild(sb);
         sec.appendChild(addBox);
+        const rejBox = rejectedBox();
+        rejBox.classList.add('pm-addbox');
+        sec.appendChild(rejBox);
         out.appendChild(sec);
         return out;
     }
@@ -413,7 +623,13 @@ window.PostsMusic = (function () {
         const a = document.activeElement;
         const focus = a && panelEl.contains(a) && a.dataset && a.dataset.keep ? a.dataset.keep : null;
         const pos = focus && a.selectionStart;
+        // what is typed in the paste box and the reason field (and the search) survives a redraw
+        const typed = {};
+        panelEl.querySelectorAll('[data-keep]').forEach(t => { if (t.value) typed[t.dataset.keep] = t.value; });
         panelEl.replaceChildren(draw());
+        panelEl.querySelectorAll('[data-keep]').forEach(t => {
+            if (typed[t.dataset.keep] && !t.value) t.value = typed[t.dataset.keep];
+        });
         if (focus) {
             const t = panelEl.querySelector(`[data-keep="${focus}"]`);
             if (t) { t.focus(); try { t.setSelectionRange(pos, pos); } catch (e) { /* not a text field */ } }

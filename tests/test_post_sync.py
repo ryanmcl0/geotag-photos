@@ -268,6 +268,21 @@ class MergeMusicPool(unittest.TestCase):
         self.assertEqual(P.merge_music_pool(None, None, MB), MB)
         self.assertIsNone(P.merge_music_pool(None, None, None))
 
+    def test_the_rejected_music_lines_merge_by_id_like_the_other_lists(self):
+        """Rejected music box (owner 2026-11-09): a reel pasted here and the Mac's answer on another line there combine."""
+        one = {'id': 'rj-1', 'action': 'reject', 'reel': '/x/day01_loop_globe.mp4', 'status': 'waiting', 'added': 't1'}
+        two = {'id': 'rj-2', 'action': 'reject', 'reel': '/x/day02_loop_globe.mp4', 'status': 'waiting', 'added': 't2'}
+        base = dict(MB, rejects=[one])
+        local = dict(MB, rejects=[two, one], updated='t2')
+        remote = dict(MB, rejects=[dict(one, status='done', title='Song', uses=2, applied='s1')], synced='s1')
+        out = P.merge_music_pool(base, local, remote)
+        self.assertEqual({i['id']: i['status'] for i in out['rejects']}, {'rj-1': 'done', 'rj-2': 'waiting'})
+        # a side without the list never empties the other, and an Undo line travels like a reject
+        self.assertEqual(P.merge_music_pool(base, local, MB)['rejects'][0]['id'], 'rj-2')
+        undo = {'id': 'u-1', 'action': 'undo', 'song': 'key', 'status': 'waiting'}
+        out = P.merge_music_pool(base, dict(base, rejects=[one, undo]), base)
+        self.assertEqual([i['id'] for i in out['rejects']], ['rj-1', 'u-1'])
+
     def test_every_reel_field_has_its_merge(self):
         self.assertEqual(set(P.MERGE_FIELD), set(P.REEL_FIELDS))
         self.assertIn('reel_music_pool', P.REEL_FIELDS)

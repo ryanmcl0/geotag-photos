@@ -103,7 +103,21 @@ interface PoolLine {
     id: string; tid?: string; title?: string; label?: string; status?: string; why?: string; added?: string;
     removed?: string; applied?: string; source?: string;
 }
-interface ReelMusicPool { items: PoolLine[]; removed?: PoolLine[]; updated?: string; synced?: string }
+// rejects: the "Rejected music" box (owner 2026-11-09): a reel whose SONG he never wants again, pasted as its file path
+// with an optional reason ("reject"), or a rejected song's Undo ("undo"). The Mac (queue_sync.py) finds the reel's song,
+// holds it everywhere and marks the line done / failed (why); song = its key on the Mac, title = its name, uses = the
+// reels already cut to it. Kept inside reel_music_pool: one more list beside items and removed, so the save/merge/keep
+// rules of the pool cover it with no new field.
+interface RejectLine {
+    id: string; action: 'reject' | 'undo'; reel?: string; reason?: string; added?: string; status?: string; why?: string;
+    song?: string; title?: string; uses?: number; applied?: string;
+}
+interface ReelMusicPool { items: PoolLine[]; removed?: PoolLine[]; rejects?: RejectLine[]; updated?: string; synced?: string }
+const MAX_REJECT_LINES = 300;
+const REJECT_STATUSES = ['waiting', 'done', 'failed'];
+const REJECT_TEXT: Record<string, number> = {
+    id: 1000, reel: 1000, reason: 500, added: 40, why: 300, song: 400, title: 300, applied: 40
+};
 const MAX_POOL_LINES = 500;
 const POOL_STATUSES = ['waiting', 'in', 'out', 'failed'];
 const POOL_TEXT: Record<string, number> = {
@@ -129,7 +143,21 @@ function validMusicPool(m: unknown): m is ReelMusicPool | undefined {
     if (!Array.isArray(j.items) || j.items.length > MAX_POOL_LINES) return false;
     if (j.removed !== undefined && (!Array.isArray(j.removed) || j.removed.length > MAX_POOL_LINES)) return false;
     if (!text(j.updated, 40) || !text(j.synced, 40)) return false;
-    if (!Object.keys(j).every(k => ['items', 'removed', 'updated', 'synced'].includes(k))) return false;
+    if (!Object.keys(j).every(k => ['items', 'removed', 'rejects', 'updated', 'synced'].includes(k))) return false;
+    const reject = (i: unknown) => {
+        if (!i || typeof i !== 'object' || Array.isArray(i)) return false;
+        const l = i as Record<string, unknown>;
+        if (typeof l.id !== 'string' || !l.id.length) return false;
+        if (l.action !== 'reject' && l.action !== 'undo') return false;
+        if (l.action === 'reject' && !(typeof l.reel === 'string' && l.reel.trim().length > 0)) return false;
+        if (l.action === 'undo' && !(typeof l.song === 'string' && l.song.length > 0)) return false;
+        if (l.status !== undefined && !REJECT_STATUSES.includes(l.status as string)) return false;
+        if (l.uses !== undefined && !(Number.isInteger(l.uses) && (l.uses as number) >= 0 && (l.uses as number) <= 100000)) return false;
+        return Object.keys(l).every(k => ['action', 'status', 'uses'].includes(k) ||
+            (k in REJECT_TEXT && text(l[k], REJECT_TEXT[k])));
+    };
+    if (j.rejects !== undefined && (!Array.isArray(j.rejects) || j.rejects.length > MAX_REJECT_LINES ||
+        !j.rejects.every(reject))) return false;
     return j.items.every(line) && (j.removed || []).every(line);
 }
 

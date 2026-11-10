@@ -9,8 +9,8 @@ taken and can be overridden per photo at pull time (./post.py pull N --location 
      a soft shadow carries it, and it turns near-black over bright sky
   C  "editorial": Futura caps, a hairline, the region underneath
 
-Placement: always a corner, tight to the edge (never the centre, never lowered into the frame), the top two first;
-the calmest wins, scored on edges + local contrast (busy subject), colour spread (a box straddling sky and rock) and
+Placement: always a corner, tight to the edge (never the centre, never lowered into the frame), the left two first
+and top right last (Instagram's carousel counter, "1/18", sits there); the calmest wins, scored on edges + local contrast (busy subject), colour spread (a box straddling sky and rock) and
 faces (the face index's boxes for the photo). A frame taller than 4:5 keeps the label inside its centre 4:5 band, so
 cropping it to 4:5 in the app cannot cut the label off. Sized from the frame width, small whatever the space.
 
@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 FONTS = ROOT / 'web' / 'fonts'
 BEBAS, FUT_BOOK, FUT_BOLD = (str(FONTS / f) for f in ('BebasKai.ttf', 'FuturaPT-Book.ttf', 'FuturaPT-Bold.ttf'))
 FACE_DB = ROOT / 'local_browse' / 'face_index.sqlite'
+RIGHT_BIAS = 0.5               # extra score on the right corners: the left side wins unless it is much busier
 WORK_W = 1080                  # placement is worked out on a copy this wide, then scaled to the photo
 ROSTERS = (('config/china_energy_sites.json', 'sites', 3.0), ('config/china_bridges.json', 'bridges', 3.0),
            ('config/mountains.json', 'mountains', 2.0))
@@ -129,7 +130,7 @@ def _busy(img, faces):
 
 
 def place(img, box_w, box_h, faces=()):
-    """→ (corner name, x, y): the calmest corner for the box, top corners first."""
+    """→ (corner name, x, y): the calmest corner for the box, left corners first, top right last."""
     import cv2
     b = _busy(img, faces)
     H, W = b.shape
@@ -137,9 +138,10 @@ def place(img, box_w, box_h, faces=()):
     band = max(0, int((H - W * 1.25) / 2))      # taller than 4:5: stay inside its centre 4:5
     lab = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2LAB).astype(np.float32)
     best = None
-    for name, x, y, bias in (('top-left', m, band + m, 0.0), ('top-right', W - m - box_w, band + m, 0.0),
-                             ('bottom-left', m, H - band - m - box_h, 0.15),
-                             ('bottom-right', W - m - box_w, H - band - m - box_h, 0.15)):
+    # The right side only wins on a much calmer patch, top right last: it sits under Instagram's carousel counter.
+    for name, x, y, bias in (('top-left', m, band + m, 0.0), ('bottom-left', m, H - band - m - box_h, 0.15),
+                             ('bottom-right', W - m - box_w, H - band - m - box_h, 0.15 + RIGHT_BIAS),
+                             ('top-right', W - m - box_w, band + m, 0.3 + RIGHT_BIAS)):
         x, y = max(0, x), max(0, y)
         region = b[y:y + box_h, x:x + box_w]
         if not region.size:

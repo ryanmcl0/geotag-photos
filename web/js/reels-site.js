@@ -149,8 +149,9 @@ window.ReelsSite = (function () {
 
     // ── song feedback ─────────────────────────────────────────────────────────────────────────────────────────────
     // A rejected song is only recorded here (the helper's song_feedback.json); the video project's
-    // tools/vlog/song_feedback.py acts on it, by hand like the 4K export: "pool" moves the song out of the music
-    // library, "reel" queues that reel for a new song. Item status: pending → applied (pool) / queued (reel).
+    // tools/vlog/song_feedback.py acts on it, by hand like the 4K export: "pool" ("Delete from music library") moves
+    // the song out of the music library, "reel" queues that reel for a new song. Item status: pending → applied (pool)
+    // / queued (reel).
     let feedbackP = null;
     const feedbackListeners = new Set();
     function songFeedback() {
@@ -175,7 +176,7 @@ window.ReelsSite = (function () {
         const pool = items.find(it => it.verdict === 'pool' && it.song === reel.song);
         const mine = items.filter(it => it.id === reel.id && it.verdict === 'reel').pop();
         if (pool) {
-            return { text: pool.status === 'applied' ? 'Song removed from the pool' : 'Removing from the pool',
+            return { text: pool.status === 'applied' ? 'Song deleted from the music library' : 'Deleting from the music library',
                      undo: pool.status === 'pending' && pool.id === reel.id };
         }
         if (mine) {
@@ -210,7 +211,10 @@ window.ReelsSite = (function () {
             });
             menu.appendChild(b);
         };
-        act('pool', 'Remove from pool', 'Never use this song again: moved out of the music library');
+        // "Delete from music library" (was "Remove from pool" until 2026-11-08, when the Reels tab got a Music pool whose
+        // Remove only stops new reels using a song): this one takes the file out of the library for good
+        act('pool', 'Delete from music library', 'Never use this song again: the file leaves your music library ' +
+            '(to only stop new reels using it, use Remove in Posts ▸ Reels ▸ Music pool)');
         act('reel', 'Not for this reel', 'Keep the song, give this reel a different one');
         act(null, 'Cancel');
         reject.addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; });

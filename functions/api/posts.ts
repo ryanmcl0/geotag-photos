@@ -57,11 +57,13 @@ const MAX_WAITLIST_PER_POST = 40;
 // account marks which IG account the post is for (free string, client cycles
 // through its known handles).
 // noHighlight opts a draft out of the public Highlights page (/api/highlights).
+// trial (xhs drafts, which ./post.py ig also posts to Instagram): a trial reel,
+// 'auto' = shared to followers if it performs well, 'manual' = shared by hand.
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
     num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
-    noHighlight?: boolean;
+    noHighlight?: boolean; trial?: 'auto' | 'manual';
 }
 // Doc-level owner switches. highlightsEnabled is the Highlights page's master
 // feature flag (absent/false = the page doesn't exist anywhere on the site);
@@ -70,7 +72,132 @@ interface Post {
 // gallery-less preview (absent = on; false = the original locked tile).
 interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean; bridgesPreview?: boolean }
 const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs', 'bridgesPreview'];
-interface PostsDoc { version: number; updated: string | null; posts: Post[]; settings?: Settings }
+// reel_queue: the Reels tab's post queue (localhost page): the paths of reels he
+// approved, the slider's span, and what the video project's Mac helper
+// (tools/reelbot/queue_sync.py) found for each line and the bot's schedule.
+// Absent in a PUT = unchanged, like settings.
+interface QueueItem {
+    id?: string; path: string; added?: string; status?: string; why?: string; key?: string;
+    title?: string; kind?: string; place?: string; frame?: string; dur?: number; thumb?: string;
+    when?: string; approved?: boolean; checked?: string;
+}
+// shortlist: reels he approved but isn't posting yet (only the page reads it; the bot only gets items).
+interface ShortlistItem { id?: string; path: string; added?: string }
+interface ReelQueue {
+    items: QueueItem[]; shortlist?: ShortlistItem[]; span_days?: number; span_set?: string; updated?: string;
+    schedule?: Record<string, unknown>; synced?: string;
+}
+const QUEUE_STATUSES = ['pending', 'valid', 'invalid', 'scheduled', 'posted', 'skipped'];
+const QUEUE_TEXT = ['id', 'added', 'why', 'key', 'title', 'kind', 'place', 'frame', 'thumb', 'when', 'checked'];
+// reel_rejects: reels he rejected from his Short Form Content pool on the Reels tab, each with his reason. The video
+// project's Mac helper (queue_sync.py) keeps the bot from ever offering them and logs each reason for the reel
+// builders (Short Form Content/REJECTS.jsonl); noted = when it logged that line. Absent in a PUT = unchanged.
+interface RejectItem { id?: string; path: string; reason: string; rejected?: string; noted?: string }
+interface ReelRejects { items: RejectItem[]; updated?: string; synced?: string }
+const MAX_REJECTS = 1000;
+// reel_music_pool: the songs new reels are cut to (his active music pool, owner 2026-11-08). The page adds a line
+// ("waiting") or moves one to removed; the video project's Mac helper (queue_sync.py) applies it to the pool file and
+// marks it back: in / out / failed (why). Titles only: the song lists themselves stay in the local-only manifest
+// (web/phone/reels/music.json), never here. Absent in a PUT = unchanged.
+interface PoolLine {
+    id: string; tid?: string; title?: string; label?: string; status?: string; why?: string; added?: string;
+    removed?: string; applied?: string; source?: string;
+}
+// rejects: the "Rejected music" box (owner 2026-11-09): a reel whose SONG he never wants again, pasted as its file path
+// with an optional reason ("reject"), or a rejected song's Undo ("undo"). The Mac (queue_sync.py) finds the reel's song,
+// holds it everywhere and marks the line done / failed (why); song = its key on the Mac, title = its name, uses = the
+// reels already cut to it. Kept inside reel_music_pool: one more list beside items and removed, so the save/merge/keep
+// rules of the pool cover it with no new field.
+interface RejectLine {
+    id: string; action: 'reject' | 'undo'; reel?: string; reason?: string; added?: string; status?: string; why?: string;
+    song?: string; title?: string; uses?: number; applied?: string;
+}
+interface ReelMusicPool { items: PoolLine[]; removed?: PoolLine[]; rejects?: RejectLine[]; updated?: string; synced?: string }
+const MAX_REJECT_LINES = 300;
+const REJECT_STATUSES = ['waiting', 'done', 'failed'];
+const REJECT_TEXT: Record<string, number> = {
+    id: 1000, reel: 1000, reason: 500, added: 40, why: 300, song: 400, title: 300, applied: 40
+};
+const MAX_POOL_LINES = 500;
+const POOL_STATUSES = ['waiting', 'in', 'out', 'failed'];
+const POOL_TEXT: Record<string, number> = {
+    id: 1000, tid: 200, title: 300, label: 10, why: 300, added: 40, removed: 40, applied: 40, source: 20
+};
+interface PostsDoc {
+    version: number; updated: string | null; posts: Post[]; settings?: Settings; reel_queue?: ReelQueue;
+    reel_rejects?: ReelRejects; reel_music_pool?: ReelMusicPool;
+}
+
+function validMusicPool(m: unknown): m is ReelMusicPool | undefined {
+    if (m === undefined) return true;
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
+    const j = m as ReelMusicPool;
+    const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    const line = (i: unknown) => {
+        if (!i || typeof i !== 'object' || Array.isArray(i)) return false;
+        const l = i as Record<string, unknown>;
+        if (typeof l.id !== 'string' || !l.id.length) return false;
+        if (l.status !== undefined && !POOL_STATUSES.includes(l.status as string)) return false;
+        return Object.keys(l).every(k => k === 'status' || (k in POOL_TEXT && text(l[k], POOL_TEXT[k])));
+    };
+    if (!Array.isArray(j.items) || j.items.length > MAX_POOL_LINES) return false;
+    if (j.removed !== undefined && (!Array.isArray(j.removed) || j.removed.length > MAX_POOL_LINES)) return false;
+    if (!text(j.updated, 40) || !text(j.synced, 40)) return false;
+    if (!Object.keys(j).every(k => ['items', 'removed', 'rejects', 'updated', 'synced'].includes(k))) return false;
+    const reject = (i: unknown) => {
+        if (!i || typeof i !== 'object' || Array.isArray(i)) return false;
+        const l = i as Record<string, unknown>;
+        if (typeof l.id !== 'string' || !l.id.length) return false;
+        if (l.action !== 'reject' && l.action !== 'undo') return false;
+        if (l.action === 'reject' && !(typeof l.reel === 'string' && l.reel.trim().length > 0)) return false;
+        if (l.action === 'undo' && !(typeof l.song === 'string' && l.song.length > 0)) return false;
+        if (l.status !== undefined && !REJECT_STATUSES.includes(l.status as string)) return false;
+        if (l.uses !== undefined && !(Number.isInteger(l.uses) && (l.uses as number) >= 0 && (l.uses as number) <= 100000)) return false;
+        return Object.keys(l).every(k => ['action', 'status', 'uses'].includes(k) ||
+            (k in REJECT_TEXT && text(l[k], REJECT_TEXT[k])));
+    };
+    if (j.rejects !== undefined && (!Array.isArray(j.rejects) || j.rejects.length > MAX_REJECT_LINES ||
+        !j.rejects.every(reject))) return false;
+    return j.items.every(line) && (j.removed || []).every(line);
+}
+
+function validRejects(r: unknown): r is ReelRejects | undefined {
+    if (r === undefined) return true;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return false;
+    const j = r as ReelRejects;
+    const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    if (!Array.isArray(j.items) || j.items.length > MAX_REJECTS) return false;
+    if (!text(j.updated, 40) || !text(j.synced, 40)) return false;
+    return j.items.every(i =>
+        i && typeof i === 'object' &&
+        typeof i.path === 'string' && i.path.length > 0 && i.path.length <= 1000 &&
+        typeof i.reason === 'string' && i.reason.trim().length > 0 && i.reason.length <= 500 &&
+        text(i.id, 1000) && text(i.rejected, 40) && text(i.noted, 40) &&
+        Object.keys(i).every(k => ['id', 'path', 'reason', 'rejected', 'noted'].includes(k)));
+}
+
+function validQueue(q: unknown): q is ReelQueue | undefined {
+    if (q === undefined) return true;
+    if (!q || typeof q !== 'object' || Array.isArray(q)) return false;
+    const r = q as ReelQueue;
+    const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    if (!Array.isArray(r.items) || r.items.length > 500) return false;
+    if (r.span_days !== undefined &&
+        !(Number.isInteger(r.span_days) && r.span_days >= 1 && r.span_days <= 90)) return false;
+    if (!text(r.span_set, 40) || !text(r.updated, 40) || !text(r.synced, 40)) return false;
+    if (r.schedule !== undefined && (!r.schedule || typeof r.schedule !== 'object' || Array.isArray(r.schedule) ||
+        JSON.stringify(r.schedule).length > 200 * 1024)) return false;
+    if (r.shortlist !== undefined && !(Array.isArray(r.shortlist) && r.shortlist.length <= 500 &&
+        r.shortlist.every(i => i && typeof i === 'object' &&
+            typeof i.path === 'string' && i.path.length <= 1000 && text(i.id, 1000) && text(i.added, 40)))) return false;
+    return r.items.every(i =>
+        i && typeof i === 'object' &&
+        typeof i.path === 'string' && i.path.length <= 1000 &&
+        (i.status === undefined || QUEUE_STATUSES.includes(i.status)) &&
+        QUEUE_TEXT.every(k => text((i as unknown as Record<string, unknown>)[k], k === 'id' ? 1000 : 400)) &&
+        (i.dur === undefined || (typeof i.dur === 'number' && i.dur >= 0 && i.dur < 86400)) &&
+        (i.approved === undefined || typeof i.approved === 'boolean'));
+}
 
 function validSettings(s: unknown): s is Settings | undefined {
     if (s === undefined) return true;
@@ -97,6 +224,7 @@ function validPosts(posts: unknown): posts is Post[] {
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
         ((p as Post).noHighlight === undefined || typeof (p as Post).noHighlight === 'boolean') &&
+        ((p as Post).trial === undefined || ['auto', 'manual'].includes((p as Post).trial!)) &&
         ((p as Post).caption === undefined ||
             (typeof (p as Post).caption === 'string' && (p as Post).caption!.length <= 4000)) &&
         ((p as Post).song === undefined ||
@@ -175,14 +303,18 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
     if (context.request.method === 'PUT') {
         const raw = await context.request.text();
         if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 });
-        let body: { baseVersion?: unknown; posts?: unknown; settings?: unknown };
+        let body: {
+            baseVersion?: unknown; posts?: unknown; settings?: unknown; reel_queue?: unknown; reel_rejects?: unknown;
+            reel_music_pool?: unknown;
+        };
         try {
             body = JSON.parse(raw);
         } catch {
             return new Response('Bad request', { status: 400 });
         }
         if (typeof body.baseVersion !== 'number' || !validPosts(body.posts) ||
-            !validSettings(body.settings)) {
+            !validSettings(body.settings) || !validQueue(body.reel_queue) ||
+            !validRejects(body.reel_rejects) || !validMusicPool(body.reel_music_pool)) {
             return new Response('Bad request', { status: 400 });
         }
         const current = await readDoc();
@@ -198,6 +330,15 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_POSTS_PASSWO
         // the stored switches — absent means "unchanged", not "reset".
         const settings = body.settings !== undefined ? body.settings : current.settings;
         if (settings && Object.keys(settings).length) next.settings = settings;
+        // The same for the Reels tab's post queue: a drafts-only save keeps it.
+        const queue = body.reel_queue !== undefined ? body.reel_queue as ReelQueue : current.reel_queue;
+        if (queue) next.reel_queue = queue;
+        // And the reject list: a save that leaves it out (post.py mirror, older pages) keeps it.
+        const rejects = body.reel_rejects !== undefined ? body.reel_rejects as ReelRejects : current.reel_rejects;
+        if (rejects) next.reel_rejects = rejects;
+        // And the music pool, the same way.
+        const pool = body.reel_music_pool !== undefined ? body.reel_music_pool as ReelMusicPool : current.reel_music_pool;
+        if (pool) next.reel_music_pool = pool;
         await context.env.PHOTOS_BUCKET.put(stateKey, JSON.stringify(next), {
             httpMetadata: { contentType: 'application/json' }
         });

@@ -1,0 +1,14 @@
+{
+  "publish_enabled": false,
+  "instagram": {
+    "api": "facebook",
+    "version": "v23.0",
+    "user_id": "<the Instagram account id of @ryanmcl0>"
+  },
+  "r2": {
+    "account_id": "<Cloudflare account id>",
+    "bucket": "<R2 bucket for the uploads, not the site's photo bucket>",
+    "prefix": "posts/",
+    "url_seconds": 3600
+  }
+}

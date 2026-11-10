@@ -28,6 +28,19 @@ Everything for working with post drafts. Always takes a subcommand:
                       (see reedits.py)
   ./post.py backfill  the same for re-edits not written back yet (earlier
                       pulls, or answered "not now")
+  ./post.py ig N      post Xiaohongshu draft N (its #number, name or id) to
+                      Instagram as @ryanmcl0 (the Instagram tab is the
+                      urbex account, posted by hand): a fresh pull of that one post, then the
+                      items in the draft's order, the caption exactly as it
+                      goes out and any problems (which block it), then
+                      "Post this to @ryanmcl0? [y/N]" (--yes skips the
+                      question, --dry stops before it). Once Instagram
+                      confirms, the draft is marked posted (+ its permalink),
+                      the same mark as the Posts page's Posted tick, and
+                      synced to the live site. A single video with the
+                      card's Trial reel set goes out as a trial reel
+                      (non-followers first); more than 5 hashtags is a note.
+                      Setup and limits: RUNBOOK §9, tools/instagram_post.py
   ./post.py mirror    sync a dev server started elsewhere (./serve.sh runs this)
   ./post.py sync      copy the remote state down to the local dev server
   ./post.py push      copy the local dev state up to the remote
@@ -181,11 +194,74 @@ def read_doc(base, env, which='main'):
     return api_call(posts_url(base, which), env)
 
 
-def write_doc(base, env, which, posts, base_version, settings=None):
+# The Reels tab's own fields of the Posts document, beside the drafts: the post queue, the reels he rejected
+# (each with his reason, for the video project's feedback loop) and his music pool for reels (the songs new reels are
+# cut to). Each travels with the drafts; absent = kept.
+REEL_FIELDS = ('reel_queue', 'reel_rejects', 'reel_music_pool')
+
+
+def write_doc(base, env, which, posts, base_version, settings=None, reel_queue=None, reel_rejects=None,
+              reel_music_pool=None):
     body = {'baseVersion': base_version, 'posts': posts}
     if settings is not None:
         body['settings'] = settings
+    if reel_queue is not None:      # absent = the stored queue is kept (functions/api/posts.ts)
+        body['reel_queue'] = reel_queue
+    if reel_rejects is not None:    # the same for the reject list
+        body['reel_rejects'] = reel_rejects
+    if reel_music_pool is not None:     # and the music pool
+        body['reel_music_pool'] = reel_music_pool
     return api_call(posts_url(base, which), env, method='PUT', body=body)
+
+
+def merge_queue(base, local, remote):
+    """The Reels tab's post queue (reel_queue: the reels he pasted for the video project's bot,
+    video-editor docs/POST_QUEUE.md), both ways like the drafts: its lines by id through merge3 (a line
+    added or removed on one side, or re-checked by tools/reelbot/queue_sync.py on the other, combine; the
+    shortlist's lines the same way),
+    every other field (span_days, span_set, schedule, ...) taken from the side that changed it, the
+    live site's when both did. None when neither side has a queue."""
+    # items: the queue proper; shortlist: reels he approved but isn't posting yet (the bot never reads it)
+    return _merge_lists_doc(base, local, remote, ('items', 'shortlist'))
+
+
+def merge_rejects(base, local, remote):
+    """The Reels tab's reject list (reel_rejects: the reels he rejected, each with his reason; video-editor
+    docs/POST_QUEUE.md "Reject list"), merged exactly like the queue: its lines by id through merge3 (a reject added
+    here and the Mac's "noted" on another line there combine; an undo stays undone), other fields from the side that
+    changed them. A side with no list never empties the other. None when neither side has one."""
+    return _merge_lists_doc(base, local, remote, ('items',))
+
+
+def merge_music_pool(base, local, remote):
+    """The Reels tab's music pool (reel_music_pool: songs he added, songs he took out; video-editor docs/POST_QUEUE.md
+    "Music pool"), merged like the queue: its lists (songs in the pool, songs taken out, and the Rejected music box's lines)
+    line by line by id (a song added here and the Mac's "in" on
+    another line there combine), other fields from the side that changed them. None when neither side has one."""
+    return _merge_lists_doc(base, local, remote, ('items', 'removed', 'rejects'))
+
+
+MERGE_FIELD = {'reel_queue': merge_queue, 'reel_rejects': merge_rejects, 'reel_music_pool': merge_music_pool}
+
+
+def _merge_lists_doc(base, local, remote, lists):
+    if local is None and remote is None:
+        return None
+    # A side with no such field at all has not deleted it: a live site still on an older
+    # functions/api/posts.ts drops the field, and that must never empty the laptop's.
+    b = base or {}
+    l = local if local is not None else b
+    r = remote if remote is not None else b
+    out = {}
+    for k in sorted((set(l) | set(r)) - set(lists)):
+        lv, rv, bv = l.get(k), r.get(k), b.get(k)
+        out[k] = lv if (same_posts(rv, bv) and not same_posts(lv, bv)) else rv
+        if out[k] is None:
+            del out[k]
+    for k in lists:
+        if k == 'items' or any(k in d for d in (b, l, r)):
+            out[k], _conflicts = merge3(b.get(k) or [], l.get(k) or [], r.get(k) or [])
+    return out
 
 
 def same_posts(a, b):
@@ -282,9 +358,12 @@ def copy_state(src_base, dst_base, env, label, quiet=False, keep_extra=False):
         dst = read_doc(dst_base, env, which)
         posts, kept = (merge_down(src.get('posts', []), dst.get('posts', []))
                        if keep_extra else (src.get('posts', []), []))
-        if same_posts(posts, dst.get('posts', [])):
+        # the Reels tab's post queue and reject list travel with the drafts (a source without one keeps the
+        # destination's)
+        reel = {f: src.get(f) if src.get(f) is not None else dst.get(f) for f in REEL_FIELDS}
+        if same_posts(posts, dst.get('posts', [])) and all(same_posts(reel[f], dst.get(f)) for f in REEL_FIELDS):
             continue
-        write_doc(dst_base, env, which, posts, dst.get('version', 0))
+        write_doc(dst_base, env, which, posts, dst.get('version', 0), **reel)
         changed += 1
         if not quiet:
             extra = (f" (+{len(kept)} kept from here: "
@@ -1660,6 +1739,10 @@ def cmd_pull(args):
         if not posts:
             sys.exit(f'❌ No post named "{args.post}". '
                      f'Available: {", ".join(p["name"] for p in doc.get("posts", []))or "none"}')
+    if getattr(args, 'id', None):            # ./post.py ig: exactly one draft, by its id
+        posts = [p for p in posts if p.get('id') == args.id]
+        if not posts:
+            sys.exit(f'❌ The draft {args.id} is no longer on {url}.')
     if not posts:
         print('No post drafts yet.')
         return
@@ -2255,10 +2338,16 @@ class RemoteMirror:
         R = read_doc(self.remote, self.env, which)
         lp, rp = L.get('posts', []), R.get('posts', [])
         ls, rs = L.get('settings') or {}, R.get('settings') or {}
+        lr = {f: L.get(f) for f in REEL_FIELDS}       # the Reels tab's queue and reject list
+        rr = {f: R.get(f) for f in REEL_FIELDS}
         self.status['versions'][which] = {'local': L.get('version', 0), 'live': R.get('version', 0)}
-        if same_posts(lp, rp) and same_posts(ls, rs):
-            if self.base.get(which) != {'posts': rp, 'settings': rs}:
-                self.base[which] = {'posts': rp, 'settings': rs}
+
+        def agreed_doc(posts, settings, reel):
+            return {'posts': posts, 'settings': settings, **{f: v for f, v in reel.items() if v is not None}}
+        if same_posts(lp, rp) and same_posts(ls, rs) and same_posts(lr, rr):
+            agreed = agreed_doc(rp, rs, rr)
+            if self.base.get(which) != agreed:
+                self.base[which] = agreed
                 self._save_base()
             return 'same'
         base = self.base.get(which)
@@ -2271,22 +2360,32 @@ class RemoteMirror:
             posts, conflicts = merge3(base.get('posts', []), lp, rp)
             bs = base.get('settings') or {}
             settings = rs if (same_posts(ls, rs) or same_posts(ls, bs)) else ls if same_posts(rs, bs) else rs
+        reel = {f: MERGE_FIELD[f]((base or {}).get(f), lr[f], rr[f]) if base is not None else (rr[f] or lr[f])
+                for f in REEL_FIELDS}
         if conflicts:
             f = self._backup(f'{which}_conflicts', [{'laptop': l, 'live': r} for l, r in conflicts])
             self.status['conflicts'] += len(conflicts)
             names = ', '.join(r.get('name', '?') for _l, r in conflicts[:3])
             print(f"\n⚠️  {which}: {len(conflicts)} post(s) changed on both sides ({names}). "
                   f"Kept the live site's; this laptop's copy is in {f}")
-        down = not (same_posts(posts, lp) and same_posts(settings, ls))
-        up = not (same_posts(posts, rp) and same_posts(settings, rs))
+        down = not (same_posts(posts, lp) and same_posts(settings, ls) and same_posts(reel, lr))
+        # A live site still on an older functions/api/posts.ts drops reel_queue / reel_rejects: once one has been
+        # sent, don't send it again every tick for that alone.
+        reel_up = any(not same_posts(reel[f], rr[f]) and not (
+            rr[f] is None and base is not None and same_posts(reel[f], base.get(f))) for f in REEL_FIELDS)
+        up = not (same_posts(posts, rp) and same_posts(settings, rs)) or reel_up
+        if not down and not up:
+            self.base[which] = agreed_doc(posts, settings, reel)
+            self._save_base()
+            return 'same'
         # Local first: if the page saved meanwhile (409) nothing has been written
         # anywhere, and the next tick merges again from fresh copies. Only when
         # both writes landed does the agreed state move on.
         if down:
-            write_doc(self.local, self.env, which, posts, L.get('version', 0), settings)
+            write_doc(self.local, self.env, which, posts, L.get('version', 0), settings, **reel)
         if up:
-            write_doc(self.remote, self.env, which, posts, R.get('version', 0), settings)
-        self.base[which] = {'posts': posts, 'settings': settings}
+            write_doc(self.remote, self.env, which, posts, R.get('version', 0), settings, **reel)
+        self.base[which] = agreed_doc(posts, settings, reel)
         self._save_base()
         what = 'both' if down and up else 'down' if down else 'up'
         arrow = {'down': '⇣ from', 'up': '⇡ to', 'both': '⇅ with'}[what]
@@ -2296,10 +2395,12 @@ class RemoteMirror:
     def sync(self, force_remote=False):
         """Sync both sets now (thread-safe). Returns the status dict."""
         with self.lock:
-            local_changed = any(
-                not same_posts(read_doc(self.local, self.env, w).get('posts', []),
-                               (self.base.get(w) or {}).get('posts'))
-                for w in SETS) if not force_remote else True
+            def changed_here(w):
+                d = read_doc(self.local, self.env, w)
+                b = self.base.get(w) or {}
+                return not (same_posts(d.get('posts', []), b.get('posts')) and
+                            all(same_posts(d.get(f), b.get(f)) for f in REEL_FIELDS))
+            local_changed = any(changed_here(w) for w in SETS) if not force_remote else True
             if not (force_remote or local_changed or
                     time.time() - self.last_remote >= self.REMOTE_EVERY):
                 return self.status
@@ -2553,6 +2654,233 @@ def cmd_status(args):
                       f"out of sync: {', '.join(diff)} — ./post.py push or ./post.py sync"))
 
 
+# ---------------------------------------------------------------- ig
+
+# One line per Instagram post made by `ig` (ids, name, permalink; no secrets).
+IG_LOG = ROOT / 'local_browse' / 'instagram_posts.jsonl'
+POSTS_DEST = '/Volumes/RYAN/Edits/Posts'
+
+
+def _ask_mirror():
+    """POST /sync to the running mirror (./serve.sh or ./post.py serve started it) → its status, or None
+    when none runs."""
+    try:
+        req = urllib.request.Request(f'http://127.0.0.1:{SYNC_PORT}/sync', data=b'', method='POST')
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read())
+    except (OSError, ValueError):
+        return None
+
+
+def sync_with_live(env):
+    """One two-way sync of the local dev server with the live site, the way an edit made on the localhost
+    Posts page travels: the running mirror does it when there is one, else one RemoteMirror pass from here
+    (merge3 against SYNC_BASE, conflicts kept in SYNC_BACKUPS). Returns the status dict."""
+    st = _ask_mirror()
+    if st is not None:
+        return st
+    return RemoteMirror(env, remote_base(env), LOCAL_BASE).sync(force_remote=True)
+
+
+def pick_ig_post(posts, which):
+    """The Xiaohongshu draft `which` names (its #number, its id, or its name, any case): the Xiaohongshu tab's
+    drafts go to @ryanmcl0 as well as Xiaohongshu; the Instagram tab is the urbex account, posted by hand."""
+    w = str(which).strip().lstrip('#')
+    xhs = [p for p in posts if p.get('platform') == 'xhs']
+    urbex = [p for p in posts if p.get('platform') != 'xhs']
+
+    def named(group):
+        if w.isdigit():
+            return [p for p in group if p.get('num') == int(w)]
+        return ([p for p in group if p.get('id') == w]
+                or [p for p in group if p.get('name', '').strip().lower() == w.lower()])
+    hits = named(xhs)
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        sys.exit(f'❌ {len(hits)} Xiaohongshu drafts are called "{which}"; use the number: '
+                 + ', '.join(f"#{p.get('num')}" for p in hits))
+    if named(urbex):
+        sys.exit(f'❌ "{which}" is on the Instagram tab: that is the urbex account, posted by hand. '
+                 'Only Xiaohongshu-tab drafts go to @ryanmcl0.')
+    open_ = [f"#{p.get('num')} {p['name']}" for p in xhs if not p.get('posted')]
+    sys.exit(f'❌ No Xiaohongshu draft "{which}". Not yet posted: {", ".join(open_) or "none"}')
+
+
+def mark_posted(base, env, post_id, permalink):
+    """The Posts page's own Posted tick, plus the permalink, on one draft at `base`. Written the way the page
+    writes: against the version just read, re-applied to a fresh copy if another edit landed first (409).
+    True once saved, False if the draft is gone."""
+    for _ in range(5):
+        d = read_doc(base, env)
+        posts = d.get('posts', [])
+        p = next((x for x in posts if x.get('id') == post_id), None)
+        if p is None:
+            return False
+        p['posted'] = True
+        p['permalink'] = permalink
+        try:
+            write_doc(base, env, 'main', posts, d.get('version', 0))
+            return True
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+    raise OSError('the draft kept changing while saving the Posted mark')
+
+
+def _find(doc, post_id):
+    return next((p for p in doc.get('posts', []) if p.get('id') == post_id), None)
+
+
+def print_ig_plan(IG, post, folder, plan, setup):
+    shape = {'IMAGE': 'one photo', 'REELS': 'a Reel',
+             'CAROUSEL': f"a carousel of {len(plan['items'])}"}[plan['type']]
+    tag = f"#{post['num']} " if post.get('num') else ''
+    print(f"\n📸 {tag}{post['name']} → @{plan['account']} ({shape})")
+    print(f'   {folder}')
+    trial = {'auto': 'shared to followers automatically if it performs well',
+             'manual': 'you share it to followers yourself in the app'}.get(plan.get('trial'))
+    if trial:
+        print(f'   Trial reel: shown to non-followers first; {trial}')
+    for it in plan['items']:
+        size = f"{it['bytes'] / 1e6:.1f} MB" if it.get('bytes') else '-'
+        if it['kind'] == 'image' and it.get('staged_bytes'):
+            size += f" → {it['staged_bytes'] / 1e6:.1f} MB JPEG"
+        dims = (f"  {it['width']}×{it['height']} ({IG.ratio_name(it['width'], it['height'])})"
+                if it.get('width') and it.get('height') else '')
+        dur = f"  {it['duration']:.1f} s" if it.get('duration') else ''
+        what = '' if it['what'] == 'photo' else f"  [{it['what']}]"
+        print(f"   {it['n']:>2}  {it['label']}  {size}{dims}{dur}{what}")
+        for p in it.get('problems', []):
+            print(f'        ⛔ {p}')
+    print('\n   Caption, exactly as it goes out:')
+    print('   ' + '─' * 50)
+    print(plan['caption'] or '(no caption)')
+    print('   ' + '─' * 50)
+    for n in plan['notes'] + ['no location tag (the API needs a Facebook Page permission for that)']:
+        print(f'   ℹ️  {n}')
+    if setup.missing:
+        print(f"   {'⛔' if setup.enabled else 'ℹ️ '} not set up: {', '.join(setup.missing)}")
+    for p in plan['problems']:
+        print(f'   ⛔ {p}')
+
+
+def cmd_ig(args):
+    """Post one Xiaohongshu-tab draft to Instagram (@ryanmcl0). See the module docstring and RUNBOOK §9.
+
+    Where the draft is read from: with the local dev server up, the localhost Posts page's copy, after one sync
+    with the live site (so the page's latest edits and the phone's are both in); without it, the live site.
+    The Posted mark goes back the same way: onto the local copy and up through the sync, or straight onto the
+    live copy when no dev server runs."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import instagram_post as IG
+    env = require_env()
+    remote = remote_base(env)
+    local_up = server_up(LOCAL_BASE, env)
+    if local_up:
+        print('⇅ Syncing the localhost Posts page with the live site first...')
+        print(f"   ↳ {sync_with_live(env).get('message', '')}")
+    base = LOCAL_BASE if local_up else remote
+    url = posts_url(base)
+    post = pick_ig_post(fetch_posts(url, env).get('posts', []), args.post)
+    if post.get('posted'):
+        sys.exit(f"❌ \"{post['name']}\" is already marked posted"
+                 + (f" ({post['permalink']})" if post.get('permalink') else '') + '.')
+
+    # 1. A fresh pull of this one post: his latest order and re-edits.
+    try:
+        cmd_pull(argparse.Namespace(
+            dest=args.dest, url=url, local=True, num=None, post=None, id=post['id'], list=False,
+            dry_run=False, reblur=False, waitlist=False, skip_waitlist=True))
+    except SystemExit as e:
+        if 'could not be resolved' not in str(e.code):
+            raise
+        print(e.code)                       # the folder check below names what is missing
+    doc = fetch_posts(url, env)
+    post = _find(doc, post['id'])
+    if post is None:
+        sys.exit('❌ The draft was deleted during the pull.')
+    folder = post_dir(Path(args.dest), post, doc.get('posts', []), move=False, quiet=True)
+    try:
+        manifest = json.loads((folder / 'manifest.json').read_text())
+    except (OSError, ValueError):
+        sys.exit(f'❌ No pulled folder at {folder}.')
+    seen = json.dumps(post, sort_keys=True)
+
+    # 2. What goes out, checked before anything is uploaded.
+    staging = Path(tempfile.mkdtemp(prefix='ig-post-'))
+    try:
+        plan = IG.prepare(post, manifest, folder, staging,
+                          progress=lambda n, total: print(f'\r⚙️  Preparing {n}/{total} for Instagram...',
+                                                          end='', flush=True))
+        print('\r\033[K', end='')                  # the plan below replaces the progress line
+        setup = IG.Setup()
+        problems = IG.blocking(plan) + ([f"not set up: {', '.join(setup.missing)}"]
+                                        if setup.enabled and setup.missing else [])
+        print_ig_plan(IG, post, folder, plan, setup)
+        if args.dry:
+            print(f"\n{'⛔ ' + str(len(problems)) + ' problem(s). ' if problems else ''}Dry run: nothing posted.")
+            return
+        if problems:
+            sys.exit(f'\n⛔ Not posted: {len(problems)} problem(s) above. Fix them, then run ./post.py ig again.')
+
+        # 3. The question.
+        if not args.yes:
+            try:
+                ans = input(f"\nPost this to @{plan['account']}? [y/N] ") if sys.stdin.isatty() else ''
+            except EOFError:
+                ans = ''
+            if ans.strip().lower() not in ('y', 'yes'):
+                print('Not posted.')
+                return
+        if not setup.enabled:
+            print('Posting is off (publish_enabled): nothing was posted. '
+                  f'Turn it on in {setup.folder / "config.json"}.')
+            return
+        fresh = _find(fetch_posts(url, env), post['id'])
+        if fresh is None or json.dumps(fresh, sort_keys=True) != seen:
+            sys.exit('⛔ Not posted: the draft changed since the pull. Run ./post.py ig again.')
+
+        # 4. Publish.
+        print('⇡ Posting to Instagram...')
+        try:
+            res = IG.publish_items(plan['items'], plan['caption'], setup.publisher(), setup.r2(), setup.prefix,
+                                   trial=plan['trial'])
+        except IG.LimitReached as e:
+            sys.exit(f'⛔ Not posted: {e}.')
+        except Exception as e:                                  # noqa: BLE001 — nothing went out
+            sys.exit(f'⛔ Not posted: {IG.clean(e)}\n   Nothing was marked posted.')
+        for w in res['warnings']:
+            print(f'   ⚠️  {w}')
+        IG.log_post({'time': time.strftime('%Y-%m-%dT%H:%M:%S'), 'post_id': post['id'], 'num': post.get('num'),
+                     'name': post['name'], 'account': plan['account'], 'type': plan['type'], 'trial': plan['trial'],
+                     'items': [it['label'] for it in plan['items']], 'media_id': res['media_id'],
+                     'permalink': res['permalink']}, IG_LOG)
+        if not res['permalink']:
+            sys.exit(f"⚠️  Posted (Instagram media id {res['media_id']}), but Instagram did not return its link, "
+                     'so the draft is NOT marked posted: tick Posted on the Posts page by hand.')
+        print(f"✅ Posted: {res['permalink']}  ({res['left']} posts left in Instagram's 24 h limit)")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    # 5. The Posted mark (+ permalink), where the Posts pages read it.
+    try:
+        if not mark_posted(base, env, post['id'], res['permalink']):
+            print('⚠️  The draft is gone from the Posts page, so nothing was marked.')
+            return
+        if base == LOCAL_BASE:
+            st = sync_with_live(env)
+            live = _find(read_doc(remote, env), post['id']) or {}
+            print('✓ Marked posted on the localhost Posts page'
+                  + (' and the live site.' if live.get('posted') else
+                     f"; the live site gets it with the next sync ({st.get('message', '')})."))
+        else:
+            print('✓ Marked posted on the live site; the localhost Posts page picks it up when it next syncs.')
+        print('   The next ./post.py pull renames the folder "Posted …".')
+    except Exception as e:                                      # noqa: BLE001 — the post itself is out
+        print(f'⚠️  Posted, but the Posted mark was not saved ({e}): tick Posted on the Posts page.')
+
+
 def require_env():
     env = load_env()
     if not env.get('CF_POSTS_PASSWORD'):
@@ -2628,6 +2956,14 @@ def main():
 
     t = sub.add_parser('status', help='show both sides')
     t.set_defaults(func=cmd_status)
+
+    g = sub.add_parser('ig', help='post one Xiaohongshu draft to Instagram (@ryanmcl0)')
+    g.add_argument('post', help='the draft: its number (the #N on its card), name or id')
+    g.add_argument('--yes', action='store_true', help='post without asking')
+    g.add_argument('--dry', action='store_true',
+                   help='pull and show what would go out, then stop (no question, nothing posted)')
+    g.add_argument('--dest', default=POSTS_DEST, help=f'Post folders root (default: {POSTS_DEST})')
+    g.set_defaults(func=cmd_ig)
 
     argv = sys.argv[1:]
     # `post.py pull 24 wl`: a bare word is quicker to type than the flag.

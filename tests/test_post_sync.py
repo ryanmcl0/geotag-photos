@@ -56,6 +56,259 @@ class Merge3(unittest.TestCase):
         self.assertEqual(P.merge3(B, [post('a')], [post('a')])[0], [post('a')])
 
 
+def line(path, **k):
+    return {'id': path, 'path': path, 'added': '2026-11-07', **k}
+
+
+QB = {'items': [line('/a.mp4', status='valid'), line('/b.mp4', status='pending')], 'span_days': 14}
+
+
+class MergeQueue(unittest.TestCase):
+    """The Reels tab's post queue: his new line on the laptop and queue_sync's statuses on the live site combine."""
+
+    def test_a_new_line_here_and_a_status_there_combine(self):
+        local = {'items': QB['items'] + [line('/c.mp4', status='pending')], 'span_days': 14}
+        remote = {'items': [QB['items'][0], line('/b.mp4', status='invalid', why='no plan')], 'span_days': 14,
+                  'schedule': {'per_day': 1}}
+        out = P.merge_queue(QB, local, remote)
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4', '/b.mp4', '/c.mp4'])
+        self.assertEqual(out['items'][1]['status'], 'invalid')
+        self.assertEqual(out['schedule'], {'per_day': 1})
+
+    def test_the_slider_moved_here_wins_over_an_unchanged_live_copy(self):
+        out = P.merge_queue(QB, dict(QB, span_days=7, span_set='t'), QB)
+        self.assertEqual((out['span_days'], out['span_set']), (7, 't'))
+
+    def test_a_removed_line_stays_removed(self):
+        out = P.merge_queue(QB, {'items': QB['items'][:1], 'span_days': 14}, QB)
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4'])
+
+    def test_the_shortlist_merges_line_by_line(self):
+        sb = dict(QB, shortlist=[line('/s1.mp4')])
+        local = dict(sb, shortlist=sb['shortlist'] + [line('/s2.mp4')])
+        remote = dict(sb, shortlist=[], items=QB['items'] + [line('/s1.mp4', status='pending')])
+        out = P.merge_queue(sb, local, remote)      # moved to the queue there, another shortlisted here
+        self.assertEqual([i['path'] for i in out['shortlist']], ['/s2.mp4'])
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4', '/b.mp4', '/s1.mp4'])
+        self.assertNotIn('shortlist', P.merge_queue(QB, QB, QB))
+
+    def test_a_side_without_a_queue_never_empties_the_other(self):
+        # a live site still on the old functions/api/posts.ts drops the field on every save
+        self.assertEqual(P.merge_queue(QB, QB, None), QB)
+        self.assertIsNone(P.merge_queue(None, None, None))
+
+
+class MirrorCarriesTheQueue(unittest.TestCase):
+    """RemoteMirror._sync_set with a fake local and live store: the queue goes up; a live site on the old
+    functions/api/posts.ts (it drops the field) neither empties the laptop's queue nor gets it re-sent every tick."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig = (P.read_doc, P.write_doc, P.SYNC_BASE)
+        P.SYNC_BASE = Path(self.tmp.name) / 'base.json'
+        self.docs = {'L': {'version': 1, 'posts': B, 'reel_queue': QB}, 'R': {'version': 1, 'posts': B}}
+        self.writes = []
+
+        def read(base, env, which='main'):
+            return json.loads(json.dumps(self.docs[base]))
+
+        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None, reel_music_pool=None):
+            self.writes.append(base)
+            d = {'version': v + 1, 'posts': posts}
+            for f, val in (('reel_queue', reel_queue), ('reel_rejects', reel_rejects),
+                           ('reel_music_pool', reel_music_pool)):
+                if val is not None and (base == 'L' or self.live_keeps):
+                    d[f] = val
+            self.docs[base] = d
+        P.read_doc, P.write_doc = read, write
+        self.m = P.RemoteMirror({}, 'R', 'L')
+        self.m.base = {'main': {'posts': B, 'settings': {}}}
+
+    def tearDown(self):
+        P.read_doc, P.write_doc, P.SYNC_BASE = self.orig
+        self.tmp.cleanup()
+
+    def tick(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.m._sync_set('main')
+
+    def test_the_queue_goes_up_and_stays_here_when_the_live_site_drops_it(self):
+        self.live_keeps = False
+        self.assertEqual(self.tick(), 'up')
+        self.assertEqual(self.tick(), 'same')
+        self.assertEqual(self.writes, ['R'])
+        self.assertEqual(self.docs['L']['reel_queue'], QB)
+
+    def test_a_live_site_that_keeps_it_matches(self):
+        self.live_keeps = True
+        self.tick()
+        self.assertEqual(self.docs['R']['reel_queue'], QB)
+        self.assertEqual(self.tick(), 'same')
+
+
+def rej(path, reason='song doesn\'t fit', **k):
+    return {'id': path, 'path': path, 'reason': reason, 'rejected': '2026-11-08T18:00:00Z', **k}
+
+
+RB = {'items': [rej('/a.mp4'), rej('/b.mp4', 'too slow')], 'updated': 't0'}
+
+
+class MergeRejects(unittest.TestCase):
+    """The Reels tab's reject list: merged like the queue, line by line, and never emptied by a side without one."""
+
+    def test_a_reject_here_and_the_macs_note_there_combine(self):
+        local = {'items': RB['items'] + [rej('/c.mp4', 'boring')], 'updated': 't1'}
+        remote = {'items': [dict(RB['items'][0], noted='2026-11-08T18:05:00Z'), RB['items'][1]], 'updated': 't0',
+                  'synced': 's1'}
+        out = P.merge_rejects(RB, local, remote)
+        self.assertEqual([i['path'] for i in out['items']], ['/a.mp4', '/b.mp4', '/c.mp4'])
+        self.assertEqual(out['items'][0]['noted'], '2026-11-08T18:05:00Z')
+        self.assertEqual((out['updated'], out['synced']), ('t1', 's1'))
+
+    def test_an_undo_stays_undone(self):
+        out = P.merge_rejects(RB, {'items': RB['items'][1:], 'updated': 't1'}, RB)
+        self.assertEqual([i['path'] for i in out['items']], ['/b.mp4'])
+
+    def test_a_reason_changed_here_wins_over_an_unchanged_live_copy(self):
+        local = {'items': [rej('/a.mp4', 'wrong place name'), RB['items'][1]], 'updated': 't1'}
+        out = P.merge_rejects(RB, local, RB)
+        self.assertEqual(out['items'][0]['reason'], 'wrong place name')
+
+    def test_a_side_without_a_list_never_empties_the_other(self):
+        self.assertEqual(P.merge_rejects(RB, RB, None), RB)
+        self.assertEqual(P.merge_rejects(None, None, RB), RB)
+        self.assertIsNone(P.merge_rejects(None, None, None))
+
+    def test_the_queue_and_the_rejects_merge_on_their_own(self):
+        self.assertEqual(set(P.MERGE_FIELD), set(P.REEL_FIELDS))
+        self.assertNotIn('shortlist', P.merge_rejects(RB, RB, RB))
+
+
+class MirrorCarriesTheRejects(MirrorCarriesTheQueue):
+    """The same fake stores, now with a reject list on the laptop: it goes up beside the queue, an older live site that
+    drops it neither empties the laptop's nor gets it re-sent every tick, and a live undo comes down."""
+
+    def setUp(self):
+        super().setUp()
+        self.docs['L']['reel_rejects'] = RB
+
+    def test_the_rejects_go_up_and_stay_here_when_the_live_site_drops_them(self):
+        self.live_keeps = False
+        self.assertEqual(self.tick(), 'up')
+        self.assertEqual(self.tick(), 'same')
+        self.assertEqual(self.writes, ['R'])
+        self.assertEqual(self.docs['L']['reel_rejects'], RB)
+
+    def test_a_live_site_that_keeps_them_matches_and_an_undo_there_comes_down(self):
+        self.live_keeps = True
+        self.tick()
+        self.assertEqual(self.docs['R']['reel_rejects'], RB)
+        self.assertEqual(self.tick(), 'same')
+        self.docs['R'] = dict(self.docs['R'], version=self.docs['R']['version'] + 1,
+                              reel_rejects={'items': RB['items'][:1], 'updated': 't2'})
+        self.assertEqual(self.tick(), 'down')
+        self.assertEqual([i['path'] for i in self.docs['L']['reel_rejects']['items']], ['/a.mp4'])
+        self.assertEqual(self.docs['L']['reel_queue'], QB)          # the queue untouched by it
+
+
+class CopyStateCarriesBoth(unittest.TestCase):
+    """copy_state (serve.sh's copy down / up): the queue and the reject list travel with the drafts; a source without
+    them keeps the destination's."""
+
+    def setUp(self):
+        self.orig = (P.read_doc, P.write_doc)
+        self.docs = {('S', 'main'): {'version': 3, 'posts': B, 'reel_rejects': RB},
+                     ('D', 'main'): {'version': 1, 'posts': B, 'reel_queue': QB},
+                     ('S', 'auto'): {'version': 1, 'posts': []}, ('D', 'auto'): {'version': 1, 'posts': []}}
+        self.sent, self.pools = [], []
+
+        def read(base, env, which='main'):
+            return json.loads(json.dumps(self.docs[(base, which)]))
+
+        def write(base, env, which, posts, v, settings=None, reel_queue=None, reel_rejects=None, reel_music_pool=None):
+            self.sent.append((base, which, reel_queue, reel_rejects))
+            self.pools.append(reel_music_pool)
+        P.read_doc, P.write_doc = read, write
+
+    def tearDown(self):
+        P.read_doc, P.write_doc = self.orig
+
+    def test_both_fields_are_carried(self):
+        self.assertEqual(P.copy_state('S', 'D', {}, 'copied', quiet=True), 1)
+        self.assertEqual(self.sent, [('D', 'main', QB, RB)])
+
+
+def pline(i, status='in', **k):
+    return {'id': f'library/{i}', 'tid': i, 'title': i, 'status': status, **k}
+
+
+MB = {'items': [pline('Time'), pline('Mountains')], 'removed': [], 'updated': 't0'}
+
+
+class MergeMusicPool(unittest.TestCase):
+    """The Reels tab's music pool: both lists merged line by line; a side without it never empties the other."""
+
+    def test_an_add_here_and_the_macs_mark_there_combine(self):
+        local = {'items': MB['items'] + [pline('Gom', 'waiting', added='t1')], 'removed': [], 'updated': 't1'}
+        remote = {'items': [pline('Time', applied='s1'), pline('Mountains')], 'removed': [], 'updated': 't0',
+                  'synced': 's1'}
+        out = P.merge_music_pool(MB, local, remote)
+        self.assertEqual([i['tid'] for i in out['items']], ['Time', 'Mountains', 'Gom'])
+        self.assertEqual(out['items'][0]['applied'], 's1')
+        self.assertEqual((out['updated'], out['synced']), ('t1', 's1'))
+
+    def test_a_removal_here_moves_the_line(self):
+        local = {'items': [pline('Time')], 'removed': [pline('Mountains', 'waiting', removed='t1')], 'updated': 't1'}
+        out = P.merge_music_pool(MB, local, MB)
+        self.assertEqual([i['tid'] for i in out['items']], ['Time'])
+        self.assertEqual([i['tid'] for i in out['removed']], ['Mountains'])
+
+    def test_a_side_without_a_pool_never_empties_the_other(self):
+        self.assertEqual(P.merge_music_pool(MB, MB, None), MB)
+        self.assertEqual(P.merge_music_pool(None, None, MB), MB)
+        self.assertIsNone(P.merge_music_pool(None, None, None))
+
+    def test_the_rejected_music_lines_merge_by_id_like_the_other_lists(self):
+        """Rejected music box (owner 2026-11-09): a reel pasted here and the Mac's answer on another line there combine."""
+        one = {'id': 'rj-1', 'action': 'reject', 'reel': '/x/day01_loop_globe.mp4', 'status': 'waiting', 'added': 't1'}
+        two = {'id': 'rj-2', 'action': 'reject', 'reel': '/x/day02_loop_globe.mp4', 'status': 'waiting', 'added': 't2'}
+        base = dict(MB, rejects=[one])
+        local = dict(MB, rejects=[two, one], updated='t2')
+        remote = dict(MB, rejects=[dict(one, status='done', title='Song', uses=2, applied='s1')], synced='s1')
+        out = P.merge_music_pool(base, local, remote)
+        self.assertEqual({i['id']: i['status'] for i in out['rejects']}, {'rj-1': 'done', 'rj-2': 'waiting'})
+        # a side without the list never empties the other, and an Undo line travels like a reject
+        self.assertEqual(P.merge_music_pool(base, local, MB)['rejects'][0]['id'], 'rj-2')
+        undo = {'id': 'u-1', 'action': 'undo', 'song': 'key', 'status': 'waiting'}
+        out = P.merge_music_pool(base, dict(base, rejects=[one, undo]), base)
+        self.assertEqual([i['id'] for i in out['rejects']], ['rj-1', 'u-1'])
+
+    def test_every_reel_field_has_its_merge(self):
+        self.assertEqual(set(P.MERGE_FIELD), set(P.REEL_FIELDS))
+        self.assertIn('reel_music_pool', P.REEL_FIELDS)
+
+
+class MirrorCarriesTheMusicPool(MirrorCarriesTheQueue):
+    def setUp(self):
+        super().setUp()
+        self.docs['L']['reel_music_pool'] = MB
+
+    def test_the_pool_goes_up_and_stays_here_when_the_live_site_drops_it(self):
+        self.live_keeps = False
+        self.assertEqual(self.tick(), 'up')
+        self.assertEqual(self.tick(), 'same')
+        self.assertEqual(self.docs['L']['reel_music_pool'], MB)
+
+    def test_a_live_change_comes_down(self):
+        self.live_keeps = True
+        self.tick()
+        self.assertEqual(self.docs['R']['reel_music_pool'], MB)
+        self.docs['R'] = dict(self.docs['R'], version=self.docs['R']['version'] + 1,
+                              reel_music_pool={'items': MB['items'][:1], 'removed': [], 'updated': 't2'})
+        self.assertEqual(self.tick(), 'down')
+        self.assertEqual([i['tid'] for i in self.docs['L']['reel_music_pool']['items']], ['Time'])
+
+
 class ServerUp(unittest.TestCase):
     def test_a_non_json_answer_is_down_not_a_crash(self):
         orig = P.api_call

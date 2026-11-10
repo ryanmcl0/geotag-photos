@@ -32,6 +32,16 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  whole file for every seek, which is what made the videos lag on the external SSD. Only
                                  files that resolve under one of that folder's own links are served, nothing else.
 
+    GET  /reels/music/review     the songs waiting for his review, read live from ~/Downloads/reel-song-candidates-*/
+                                 (any depth): [{"id": "review/<folder>/<file>", "folder", "name", "size", "mtime"}].
+                                 The Music pool section adds one by its id; the video project's queue_sync.py copies
+                                 it into the music library (never moves it) at the next sync.
+    GET/HEAD /reels/music/play?ref=<id>   one song, to listen to on the page (Range support, streamed): a review
+                                 file by its "review/<folder>/<file>" id, inside a review folder only; a library song
+                                 by its "library/<track id>" id, looked up in web/phone/reels/music.json (the video
+                                 project's manifest) and served only from the music library folders. Nothing is
+                                 copied into web/, and the deployed site never has this helper.
+
     tools/reels_local.py [--port 8791]          (serve.sh starts it)
 """
 import datetime as dt
@@ -50,6 +60,13 @@ SONGS = ROOT / "song_feedback.json"
 FILES = ROOT / "files"
 MAX_BODY = 2_000_000
 CHUNK = 1 << 20
+# the Music pool section: his review folders and the music library (read only: songs are only listened to here)
+DOWNLOADS = Path.home() / "Downloads"
+REVIEW_GLOB = "reel-song-candidates-*"
+MUSIC_ROOTS = [Path("/Volumes/Crucial X9/music"), Path.home() / "Downloads" / "Edit music"]
+MUSIC_MANIFEST = ROOT / "music.json"
+AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav",
+               ".flac": "audio/flac", ".ogg": "audio/ogg"}
 MEDIA_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".jpg": "image/jpeg",
                ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
@@ -162,6 +179,60 @@ def media_path(rel):
     return path
 
 
+def review_songs(root=None):
+    """The audio files in ~/Downloads/reel-song-candidates-*/ (any depth), never through a link out of the folder."""
+    root = Path(root or DOWNLOADS)
+    out = []
+    for d in sorted(root.glob(REVIEW_GLOB)):
+        if not d.is_dir():
+            continue
+        base = d.resolve()
+        for f in sorted(d.rglob("*")):
+            if not f.is_file() or f.name.startswith(".") or f.suffix.lower() not in AUDIO_TYPES:
+                continue
+            try:
+                if not f.resolve().is_relative_to(base):
+                    continue
+                st = f.stat()
+            except OSError:
+                continue
+            out.append({"id": f"review/{d.name}/{f.relative_to(d).as_posix()}", "folder": d.name, "name": f.name,
+                        "size": st.st_size, "mtime": int(st.st_mtime)})
+    return out
+
+
+def song_path(ref, root=None, roots=None, manifest=None):
+    """The audio file behind a Music pool id, or None. "review/<folder>/<file>": inside a review folder only.
+    "library/<track id>": the manifest's file name for that id, inside one of the music library folders. Never a path
+    the browser sends."""
+    if not isinstance(ref, str) or "\0" in ref or "\\" in ref:
+        return None
+    parts = ref.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    if parts[0] == "review" and len(parts) >= 3 and Path(parts[1]).match(REVIEW_GLOB):
+        base = Path(root or DOWNLOADS) / parts[1]
+        rel = "/".join(parts[2:])
+        cands = [(base, base / rel)]
+    elif parts[0] == "library" and len(parts) == 2:
+        doc = read(Path(manifest or MUSIC_MANIFEST), {})
+        rows = (doc.get("pool") or []) + (doc.get("removed") or []) + (doc.get("library") or [])
+        name = next((r.get("file_name") for r in rows if isinstance(r, dict) and r.get("id") == ref), None)
+        if not name or "/" in name or name in (".", ".."):
+            return None
+        cands = [(Path(r), Path(r) / name) for r in (roots or MUSIC_ROOTS)]
+    else:
+        return None
+    for base, p in cands:
+        try:
+            real, top = p.resolve(strict=True), base.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if real.is_file() and real.is_relative_to(top) and real.suffix.lower() in AUDIO_TYPES:
+            return real
+    return None
+
+
 def parse_range(header, size):
     """('full', 0, size-1) with no usable Range header, ('part', first, last) for one satisfiable range,
     ('bad', 0, 0) when it lies outside the file. Several ranges are answered with the whole file (allowed)."""
@@ -222,14 +293,29 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _local_host(self):
+        return self.headers.get("Host", "").rsplit(":", 1)[0] in ("127.0.0.1", "localhost")   # not a rebound name
+
     def _media(self, head):
         """A reel video/cover with Range support, streamed from disk in chunks (never read whole into memory)."""
-        host = self.headers.get("Host", "").rsplit(":", 1)[0]
         path = None
-        if host in ("127.0.0.1", "localhost"):       # not a rebound DNS name
+        if self._local_host():
             path = media_path(unquote(self.path.split("?")[0][len("/reels/files/"):]))
         if path is None:
             return self._json(404, {"error": "not found"})
+        return self._stream(path, head, MEDIA_TYPES[path.suffix.lower()])
+
+    def _song(self, head):
+        """A song for the Music pool section's play button: by its id only (song_path), streamed like a reel."""
+        from urllib.parse import parse_qs, urlsplit
+        path = None
+        if self._local_host():
+            path = song_path((parse_qs(urlsplit(self.path).query).get("ref") or [""])[0])
+        if path is None:
+            return self._json(404, {"error": "not found"})
+        return self._stream(path, head, AUDIO_TYPES[path.suffix.lower()])
+
+    def _stream(self, path, head, ctype):
         try:
             f = open(path, "rb")
             st = os.fstat(f.fileno())
@@ -247,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_response(206 if kind == "part" else 200)
             self._cors()
-            self.send_header("Content-Type", MEDIA_TYPES[path.suffix.lower()])
+            self.send_header("Content-Type", ctype)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
@@ -272,11 +358,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         if self.path.startswith("/reels/files/"):
             return self._media(True)
+        if self.path.split("?")[0] == "/reels/music/play":
+            return self._song(True)
         self._json(404, {"error": "not found"})
 
     def do_GET(self):
         if self.path.startswith("/reels/files/"):
             return self._media(False)
+        if self.path.split("?")[0] == "/reels/music/play":
+            return self._song(False)
+        if self.path.split("?")[0] == "/reels/music/review":
+            return self._json(200, {"folders": str(DOWNLOADS / REVIEW_GLOB), "files": review_songs()})
         if self.path.split("?")[0] == "/reveal":
             from urllib.parse import parse_qs, urlsplit
             q = parse_qs(urlsplit(self.path).query)

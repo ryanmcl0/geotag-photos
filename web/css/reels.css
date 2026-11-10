@@ -141,3 +141,102 @@
 /* ── place pages (china.js: China, Places, Mountains, Urbex) ── */
 /* right under the page title: room above as well as below */
 .reels-place { margin: 18px 0 28px; }
+
+/* ── Posts ▸ Reels ▸ Post queue (posts-queue.js) ── */
+.pq-wrap { margin: 0 0 26px; }
+.pq { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 14px 16px; color: #eee; }
+.pq + .pq { margin-top: 14px; }
+.pq-short { border-color: #3a3424; }
+.pq-short .pq-h { color: #e6c06a; }
+.pq-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
+.pq-all { margin: 10px 0 8px; }
+.pq-h { font-weight: 600; font-size: 1rem; color: #fff; margin: 0 0 8px; }
+.pq-addbar { display: flex; gap: 10px; align-items: flex-start; }
+.pq-paste {
+    flex: 1; min-width: 0; box-sizing: border-box; resize: vertical; min-height: 58px;
+    background: #0f0f0f; color: #ddd; border: 1px solid #333; border-radius: 6px;
+    font: 12.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px;
+}
+.pq-added { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12.5px; }
+.pq-added .ok { color: #8fd18f; }
+.pq-added .bad { color: #f08a7a; }
+.pq-slider { margin: 14px 0 10px; }
+.pq-slider-label { display: flex; align-items: center; gap: 12px; font-size: 13px; color: #ccc; }
+.pq-slider-label input { flex: 1; max-width: 420px; accent-color: #8ab4ff; }
+.pq-readout { font-size: 14px; font-weight: 600; color: #fff; margin-top: 6px; }
+.pq-bot { font-size: 12.5px; color: #aab; margin-top: 4px; }
+.pq-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.pq-row {
+    display: flex; gap: 10px; align-items: flex-start; justify-content: space-between;
+    background: #181818; border: 1px solid #262626; border-radius: 8px; padding: 8px 10px; margin: 0 0 8px;
+}
+.pq-main { min-width: 0; }
+.pq-title { font-size: 13.5px; font-weight: 600; color: #fff; }
+.pq-path { font: 11px/1.4 ui-monospace, Menlo, monospace; color: #777; overflow-wrap: anywhere; margin-top: 2px; }
+.pq-status { font-size: 12px; margin-top: 4px; }
+.pq-status.ok { color: #8fd18f; }
+.pq-status.done { color: #8ab4ff; }
+.pq-status.warn { color: #e6c06a; }
+.pq-status.bad { color: #f08a7a; }
+.pq-status.wait { color: #999; }
+.pq-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.pq-table th { text-align: left; color: #888; font-weight: 500; padding: 4px 6px; border-bottom: 1px solid #2a2a2a; }
+.pq-table td { padding: 5px 6px; border-bottom: 1px solid #1f1f1f; color: #ddd; }
+.pq-table tr.pq-posted td { color: #8ab4ff; }
+.pq-table tr.pq-approved td:last-child { color: #8fd18f; }
+.pq-table tr.pq-skipped td, .pq-table tr.pq-late td, .pq-table tr.pq-removed td { color: #777; }
+/* the reject list: the Rejected box, greyed rows with the reason, the reason form under a row */
+.pq-rejects { border-color: #3a2626; }
+.pq-rejects .pq-h { color: #f08a7a; }
+.pq-rejects .pq-paste { width: 100%; }
+.pq-row { flex-wrap: wrap; }
+.pq-row > .pq-main { flex: 1 1 200px; }
+.pq-row.pq-rejected { opacity: 0.6; }
+.pq-row.pq-rejected:hover { opacity: 0.9; }
+.reels-row.rejected { opacity: 0.55; }
+.pq-reason { flex: 1 1 100%; margin-top: 8px; }
+.pq-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.pq-chips .reel-chip { font-size: 12px; padding: 3px 10px; }
+.pq-reason-row { display: flex; gap: 6px; align-items: center; }
+.pq-reason-text {
+    flex: 1; min-width: 0; box-sizing: border-box; background: #0f0f0f; color: #ddd; border: 1px solid #333;
+    border-radius: 6px; font: inherit; font-size: 13px; padding: 6px 8px;
+}
+.pq-reject-go:not(:disabled) { border-color: #f08a7a; color: #f08a7a; }
+.pq-reject-ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.pq-reject-ctl .pq-status { margin-top: 0; }
+.pq-reject-ctl .pq-reason { margin-top: 2px; }
+@media (max-width: 768px) {
+    .pq { padding: 12px; }
+    .pq-addbar { flex-direction: column; align-items: stretch; }
+    .pq-cols { grid-template-columns: minmax(0, 1fr); }
+}
+/* ── Posts ▸ Reels ▸ Music pool (posts-music.js) ── */
+.pm-wrap { margin: 0 0 26px; }
+.pm { border-color: #24323a; }
+.pm-toggle { background: none; border: 0; padding: 0; cursor: pointer; color: #8fd0e6; text-align: left; font: inherit; font-weight: 600; font-size: 1rem; }
+.pm-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pm-head .pq-title { min-width: 0; overflow-wrap: anywhere; }
+.pm-label { font: 11px ui-monospace, Menlo, monospace; color: #8fd0e6; flex-shrink: 0; }
+.pm-label:empty { display: none; }
+.pm-play { width: 30px; flex-shrink: 0; padding-left: 0; padding-right: 0; }
+.pm-meta { font-size: 12px; color: #999; margin-top: 4px; overflow-wrap: anywhere; }
+.pm-row.pm-waiting { border-style: dashed; }
+.pm-row.pm-failed { border-color: #4a2a2a; }
+.pm-row.pm-out { opacity: 0.75; }
+.pm-sub { font-weight: 600; font-size: 14px; color: #ddd; margin: 16px 0 8px; }
+.pm-sub2 { font-weight: 600; font-size: 13px; color: #bbb; margin: 12px 0 6px; }
+.pm-addbox { border-top: 1px solid #262626; margin-top: 14px; }
+.pm-q { width: 100%; margin-bottom: 8px; }
+.pm-queued { font-size: 12px; color: #e6c06a; margin-top: 6px; }
+.pm-queued summary { cursor: pointer; }
+.pm-queued ul { margin: 4px 0 4px 18px; padding: 0; color: #ccc; }
+.pm-add:not(:disabled) { border-color: #8fd18f; color: #8fd18f; }
+@media (max-width: 768px) {
+    .pm-row .pq-btns { justify-content: flex-start; }
+}
+/* Rejected music (posts-music.js): the paste box, its lines and the rejected songs */
+.pm-rejbox .pm-rejpaste { width: 100%; margin-bottom: 6px; }
+.pm-rejbox .pm-rejwhy { width: 100%; margin-bottom: 8px; }
+.pm-row.pm-rejected { border-color: #3a2626; }
+.pm-rejbox .pq-reject-go { margin-bottom: 4px; }

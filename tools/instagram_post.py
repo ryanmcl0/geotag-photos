@@ -563,13 +563,15 @@ def clean(msg):
 CONTENT_TYPES = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.mp4': 'video/mp4'}
 
 
-def publish_items(items, caption, ig, r2, prefix='posts/', share_to_feed=True, trial=None):
+def publish_items(items, caption, ig, r2, prefix='posts/', share_to_feed=True, trial=None, progress=None):
     """The checked items → one Instagram post (trial 'auto'/'manual': a trial reel, single video only).
     Returns {'media_id', 'permalink', 'left', 'warnings'}.
 
     Raises LimitReached (nothing uploaded) when the 24 h quota is used up, and any R2/Instagram error as it
     comes; the uploaded objects are deleted in every case. A post that went out but whose link Instagram did
-    not return comes back with permalink None and a warning."""
+    not return comes back with permalink None and a warning. progress(text), when given, is called at each
+    step (uploads, Instagram's processing, publishing), so a long carousel never looks stuck."""
+    say = progress or (lambda text: None)
     if trial and not (len(items) == 1 and items[0]['kind'] == 'video'):
         raise InstagramError('a trial reel needs exactly one video')      # prepare() blocks this first
     left, total = ig.posts_left()
@@ -578,23 +580,28 @@ def publish_items(items, caption, ig, r2, prefix='posts/', share_to_feed=True, t
     keys, warnings = [], []
     try:
         urls = []
-        for it in items:
+        for n, it in enumerate(items, 1):
+            say(f'Uploading {n}/{len(items)} to R2')
             staged = Path(it['staged'])
             key = f'{prefix}{uuid.uuid4().hex}{staged.suffix.lower()}'
             keys.append(key)                     # before the upload: a half-finished one is deleted too
             r2.put(staged, key, CONTENT_TYPES.get(staged.suffix.lower()))
             urls.append(r2.get_url(key))
         if len(items) == 1:
+            say('Instagram is processing it')
             container = (ig.create_reel(urls[0], caption, share_to_feed, trial) if items[0]['kind'] == 'video'
                          else ig.create_image(urls[0], caption))
         else:
             children = []
-            for it, url in zip(items, urls):
+            for n, (it, url) in enumerate(zip(items, urls), 1):
+                say(f'Instagram is processing {n}/{len(items)}')
                 child = ig.create_carousel_item(url, it['kind'])
                 ig.wait(child)
                 children.append(child)
+            say('Instagram is building the carousel')
             container = ig.create_carousel(children, caption)
         ig.wait(container)
+        say('Publishing')
         media_id = ig.publish(container)
         link, err = None, None
         for _ in range(3):

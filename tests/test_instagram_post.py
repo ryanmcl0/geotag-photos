@@ -547,8 +547,13 @@ class SingleItems(unittest.TestCase):
             a, b = Path(d) / 'a.jpg', Path(d) / 'b.mp4'
             a.write_bytes(b'1')
             b.write_bytes(b'2')
+            steps = []
             IG.publish_items([{'staged': a, 'kind': 'image'}, {'staged': b, 'kind': 'video'}], 'cap',
-                             self.publisher(graph), IG.R2('acct', 'uploads', 'AK', 'SK', http=r2))
+                             self.publisher(graph), IG.R2('acct', 'uploads', 'AK', 'SK', http=r2),
+                             progress=steps.append)
+        self.assertEqual(steps, ['Uploading 1/2 to R2', 'Uploading 2/2 to R2', 'Instagram is processing 1/2',
+                                 'Instagram is processing 2/2',
+                                 'Instagram is building the carousel', 'Publishing'])
         m = graph.media()
         self.assertEqual((m[1]['media_type'], m[1]['is_carousel_item']), ('VIDEO', 'true'))
         self.assertIn('video_url', m[1])

@@ -2845,11 +2845,14 @@ def cmd_ig(args):
         print('⇡ Posting to Instagram...')
         try:
             res = IG.publish_items(plan['items'], plan['caption'], setup.publisher(), setup.r2(), setup.prefix,
-                                   trial=plan['trial'])
+                                   trial=plan['trial'],
+                                   progress=lambda text: print(f'\r\033[K   {text}...', end='', flush=True))
         except IG.LimitReached as e:
             sys.exit(f'⛔ Not posted: {e}.')
         except Exception as e:                                  # noqa: BLE001 — nothing went out
             sys.exit(f'⛔ Not posted: {IG.clean(e)}\n   Nothing was marked posted.')
+        finally:
+            print('\r\033[K', end='', flush=True)      # the outcome below replaces the progress line
         for w in res['warnings']:
             print(f'   ⚠️  {w}')
         IG.log_post({'time': time.strftime('%Y-%m-%dT%H:%M:%S'), 'post_id': post['id'], 'num': post.get('num'),

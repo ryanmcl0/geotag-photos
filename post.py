@@ -2810,7 +2810,10 @@ def cmd_ig(args):
     # 2. What goes out, checked before anything is uploaded.
     staging = Path(tempfile.mkdtemp(prefix='ig-post-'))
     try:
-        plan = IG.prepare(post, manifest, folder, staging)
+        plan = IG.prepare(post, manifest, folder, staging,
+                          progress=lambda n, total: print(f'\r⚙️  Preparing {n}/{total} for Instagram...',
+                                                          end='', flush=True))
+        print('\r\033[K', end='')                  # the plan below replaces the progress line
         setup = IG.Setup()
         problems = IG.blocking(plan) + ([f"not set up: {', '.join(setup.missing)}"]
                                         if setup.enabled and setup.missing else [])

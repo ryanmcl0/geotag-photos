@@ -35,6 +35,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -378,9 +379,17 @@ def stage_image(src, dst):
     from PIL import Image, ImageCms, ImageOps
     note = None
     with Image.open(src) as im:
+        size = im.size[::-1] if im.getexif().get(0x0112) in (5, 6, 7, 8) else im.size   # as it displays
+        if size[0] > 2 * MAX_WIDTH:
+            # A JPEG decodes straight at 1/2, 1/4 or 1/8 size, far faster than decoding it all; asking for at
+            # least twice the final width keeps the LANCZOS step below doing the real downscale (no visible loss).
+            k = 2 * MAX_WIDTH / size[0]
+            im.draft(im.mode, (math.ceil(im.width * k), math.ceil(im.height * k)))
         im = ImageOps.exif_transpose(im)
-        size = im.size
         icc = im.info.get('icc_profile')
+        if im.width > MAX_WIDTH and im.mode in ('RGB', 'L', 'CMYK'):
+            # Shrink before the colour conversion, so it runs on the final pixels rather than all of them.
+            im = im.resize((MAX_WIDTH, round(im.height * MAX_WIDTH / im.width)), Image.LANCZOS)
         srgb = ImageCms.createProfile('sRGB')
         if icc:
             try:
@@ -419,8 +428,9 @@ def probe_video(path):
             'width': v.get('width'), 'height': v.get('height')}
 
 
-def prepare(post, manifest, folder, staging, probe=probe_video):
-    """Everything the confirmation shows, checked before any upload.
+def prepare(post, manifest, folder, staging, probe=probe_video, progress=None):
+    """Everything the confirmation shows, checked before any upload. progress(n, total), when given, is called
+    as each item starts (staging reads every file off the drive, so a long carousel takes a while).
 
     Returns {'account', 'caption', 'type', 'items': [...], 'problems': [...], 'notes': [...]}; any problem (on
     the post or on an item) blocks posting. Images are staged as JPEG copies in `staging`."""
@@ -454,7 +464,9 @@ def prepare(post, manifest, folder, staging, probe=probe_video):
         problems.append(f'{len(items)} items; Instagram takes at most {MAX_ITEMS} in a carousel '
                         '(move some to the waitlist, location cards count too)')
     single = len(items) == 1
-    for it in items:
+    for n, it in enumerate(items, 1):
+        if progress:
+            progress(n, len(items))
         it['problems'] = []
         src = it['path']
         if not src.exists():

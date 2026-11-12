@@ -295,6 +295,8 @@ def business_doc(cfg=None):
     if folder is None:
         return {"ok": False, "reason": "not set up"}
     account = ((cfg.get("instagram") or {}).get("username") or "").lstrip("@") or None
+    if account and account.startswith("<"):           # the config's "<the account's handle>" placeholder
+        account = None
     content = read(folder / "content.json", None)
     if not isinstance(content, dict) or not isinstance(content.get("items"), list):
         why = "unreachable" if not folder.is_dir() else "no content.json"

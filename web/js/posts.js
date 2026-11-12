@@ -1093,8 +1093,10 @@ window.Posts = (function () {
         const root = document.getElementById('posts-app');
         if (!root) return;
         const reelsP = window.PostsReels ? PostsReels.load() : Promise.resolve(null);
-        Promise.all([ready, autoReady(), reelsP]).then(([ok, , reels]) => {
+        const businessP = window.PostsBusiness ? PostsBusiness.load() : Promise.resolve(null);
+        Promise.all([ready, autoReady(), reelsP, businessP]).then(([ok, , reels, business]) => {
             reelsDoc = reels;
+            businessDoc = business;
             if (!ok) {
                 // Cookie present but the API rejects it (stale after a password
                 // change): fall back to the prompt instead of a dead page.
@@ -1182,9 +1184,12 @@ window.Posts = (function () {
     // Which manager tab is showing: 'ig' / 'xhs' (hand-made drafts by
     // platform), 'auto' (suggestions from tools/auto_curate_posts.py) or
     // 'reels' (the video pipeline's reels picked for posting, with a phone
-    // profile preview and the 4K export; localhost only: posts-reels.js).
+    // profile preview and the 4K export; localhost only: posts-reels.js) or
+    // 'business' (ready-made posts for a second account and their schedule;
+    // localhost only: posts-business.js).
     let activeTab = 'ig';
     let reelsDoc = null;
+    let businessDoc = null;
     try {
         activeTab = localStorage.getItem('posts_tab') || 'ig';
         if (activeTab === 'main') activeTab = 'ig';   // pre-platform value
@@ -1203,6 +1208,7 @@ window.Posts = (function () {
         head.appendChild(h1);
         if (SYNC_URL) head.appendChild(syncControl());
         if (activeTab === 'reels' && !reelsDoc) activeTab = 'ig';   // the live site has no reels manifest
+        if (activeTab === 'business' && !businessDoc) activeTab = 'ig';
         if (activeTab === 'ig' || activeTab === 'xhs') {
             const plat = activeTab;
             const newBtn = document.createElement('button');
@@ -1237,7 +1243,8 @@ window.Posts = (function () {
         [['ig', `Instagram (${igCount})`],
          ['xhs', `Xiaohongshu (${xhsCount})`],
          ['auto', `Auto curated (${autoCount})`],
-         ...(reelsDoc ? [['reels', `Reels (${PostsReels.count()})`]] : [])
+         ...(reelsDoc ? [['reels', `Reels (${PostsReels.count()})`]] : []),
+         ...(businessDoc ? [['business', `Business (${PostsBusiness.count()})`]] : [])
         ].forEach(([id, label]) => {
             const b = document.createElement('button');
             b.type = 'button';
@@ -1258,6 +1265,10 @@ window.Posts = (function () {
         }
         if (activeTab === 'reels') {
             PostsReels.render(root, reelsDoc, () => renderManager(root));
+            return;
+        }
+        if (activeTab === 'business') {
+            PostsBusiness.render(root, null, () => renderManager(root));
             return;
         }
 

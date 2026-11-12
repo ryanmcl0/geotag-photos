@@ -42,13 +42,30 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  project's manifest) and served only from the music library folders. Nothing is
                                  copied into web/, and the deployed site never has this helper.
 
+Posts ▸ Business (localhost only): ready-made posts for a second Instagram account, kept in a content folder outside
+this repo. ~/.config/content-engine/business/config.json names it ("content_folder"; its instagram.username is shown
+on the tab). The folder holds content.json (the items, written by the tool that makes them, read only here) and
+state.json (the schedule, written here, by that tool's own post command and by the reel bot when it posts):
+    {"version": 1, "rev": n, "start": "YYYY-MM-DD", "every": days, "queue": [ids in posting order],
+     "posted": {id: {"date", "permalink"?, "media_id"?, "via"}}, "captions": {id: text}, "skipped": {id: date}, ...}
+    GET  /business               {"ok", "folder", "account", "content", "state"}; ok false with a reason when the folder
+                                 isn't set up (the tab stays hidden) or can't be read (not mounted)
+    PUT  /business/state         {"rev", "start", "every", "queue", "posted", "captions"}: only those fields change,
+                                 and only when rev is the current one (409 + the current state otherwise, so a mark the
+                                 bot wrote meanwhile is never lost); ids must be items of content.json; only from a
+                                 page on this Mac (Origin localhost)
+    GET/HEAD /business/files/<path>   a file content.json lists (a reel, its silent copy, a cover, a slide), with Range
+                                 support; nothing else in the folder
+
     tools/reels_local.py [--port 8791]          (serve.sh starts it)
 """
 import datetime as dt
 import json
 import os
+import re
 import sys
 import tempfile
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
@@ -255,6 +272,115 @@ def parse_range(header, size):
     return "part", first, last
 
 
+BUSINESS_CONFIG = (Path(os.environ.get("CONTENT_ENGINE_DIR") or Path.home() / ".config" / "content-engine")
+                   / "business" / "config.json")
+BUSINESS_LOCK = threading.Lock()
+DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def business_config():
+    cfg = read(BUSINESS_CONFIG, {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def business_folder(cfg=None):
+    f = (cfg if cfg is not None else business_config()).get("content_folder")
+    return Path(os.path.expanduser(f)) if isinstance(f, str) and f.strip() else None
+
+
+def business_doc(cfg=None):
+    """What the tab needs: the content, the state and the account, or why there is none."""
+    cfg = business_config() if cfg is None else cfg
+    folder = business_folder(cfg)
+    if folder is None:
+        return {"ok": False, "reason": "not set up"}
+    account = ((cfg.get("instagram") or {}).get("username") or "").lstrip("@") or None
+    content = read(folder / "content.json", None)
+    if not isinstance(content, dict) or not isinstance(content.get("items"), list):
+        why = "unreachable" if not folder.is_dir() else "no content.json"
+        return {"ok": False, "reason": why, "folder": str(folder), "account": account}
+    state = read(folder / "state.json", {})
+    return {"ok": True, "folder": str(folder), "account": account, "content": content,
+            "state": state if isinstance(state, dict) else {}}
+
+
+def business_ids(content):
+    return {it["id"] for it in content.get("items", []) if isinstance(it, dict) and isinstance(it.get("id"), str)}
+
+
+def clean_business_state(body, current, content):
+    """The new state.json from a PUT, or raises ValueError. The tab's fields come from the body (ids checked against
+    content.json), everything else stays as it is on disk (what the bot and the post command keep there)."""
+    if not isinstance(body, dict):
+        raise ValueError("state must be an object")
+    ids = business_ids(content)
+    out = dict(current)
+    start = body.get("start")
+    if start not in (None, "") and not (isinstance(start, str) and DAY.fullmatch(start)):
+        raise ValueError("start must be YYYY-MM-DD")
+    out["start"] = start or None
+    try:
+        every = int(body.get("every") or 1)
+    except (TypeError, ValueError):
+        raise ValueError("every must be a number of days")
+    out["every"] = min(max(every, 1), 30)
+    out["queue"] = list(dict.fromkeys(x for x in body.get("queue") or [] if x in ids))
+    posted = {}
+    for k, v in (body.get("posted") or {}).items():
+        if k not in ids or not isinstance(v, dict) or not DAY.fullmatch(str(v.get("date") or "")):
+            continue
+        posted[k] = {f: v[f] for f in ("date", "permalink", "media_id", "via") if isinstance(v.get(f), str)}
+        if posted[k].get("permalink") and not posted[k]["permalink"].startswith("https://"):
+            del posted[k]["permalink"]
+    out["posted"] = posted
+    out["captions"] = {k: v[:5000] for k, v in (body.get("captions") or {}).items() if k in ids and isinstance(v, str)}
+    out["version"] = 1
+    out["rev"] = int(current.get("rev") or 0) + 1
+    out["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+    return out
+
+
+def put_business_state(body, cfg=None):
+    """→ (code, response). 409 with the current state when the page's rev is not the one on disk."""
+    doc = business_doc(cfg)
+    if not doc["ok"]:
+        return 404, {"error": f"content folder {doc['reason']}"}
+    folder = Path(doc["folder"])
+    with BUSINESS_LOCK:
+        current = read(folder / "state.json", {})
+        current = current if isinstance(current, dict) else {}
+        if not isinstance(body, dict) or body.get("rev") != current.get("rev", 0):
+            return 409, {"error": "changed elsewhere", "state": current}
+        try:
+            new = clean_business_state(body, current, doc["content"])
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        write(folder / "state.json", new)
+    return 200, new
+
+
+def business_file(rel, cfg=None):
+    """The file behind /business/files/<rel>, or None: only a path content.json lists, inside the folder."""
+    doc = business_doc(cfg)
+    if not doc["ok"] or not rel or "\0" in rel or "\\" in rel:
+        return None
+    listed = set()
+    for it in doc["content"]["items"]:
+        if isinstance(it, dict):
+            listed.update(x for x in [it.get("file"), it.get("silent"), it.get("cover"), *(it.get("files") or [])]
+                          if isinstance(x, str))
+    if rel not in listed or Path(rel).suffix.lower() not in MEDIA_TYPES:
+        return None
+    try:
+        top = Path(doc["folder"]).resolve(strict=True)
+        path = (top / rel).resolve(strict=True)
+        if not path.is_file() or not path.is_relative_to(top):
+            return None
+    except (OSError, ValueError, RuntimeError):
+        return None
+    return path
+
+
 def reveal(path):
     import subprocess
     subprocess.Popen(["open", "-R", path])
@@ -301,6 +427,22 @@ class Handler(BaseHTTPRequestHandler):
         path = None
         if self._local_host():
             path = media_path(unquote(self.path.split("?")[0][len("/reels/files/"):]))
+        if path is None:
+            return self._json(404, {"error": "not found"})
+        return self._stream(path, head, MEDIA_TYPES[path.suffix.lower()])
+
+    def _page_on_this_mac(self):
+        """A write from the Posts page served on this Mac (or no Origin: curl, the tests), never from another site."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = origin.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0]
+        return host in ("localhost", "127.0.0.1", "[::1]")
+
+    def _business_media(self, head):
+        path = None
+        if self._local_host():
+            path = business_file(unquote(self.path.split("?")[0][len("/business/files/"):]))
         if path is None:
             return self._json(404, {"error": "not found"})
         return self._stream(path, head, MEDIA_TYPES[path.suffix.lower()])
@@ -358,6 +500,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         if self.path.startswith("/reels/files/"):
             return self._media(True)
+        if self.path.startswith("/business/files/"):
+            return self._business_media(True)
         if self.path.split("?")[0] == "/reels/music/play":
             return self._song(True)
         self._json(404, {"error": "not found"})
@@ -365,6 +509,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/reels/files/"):
             return self._media(False)
+        if self.path.startswith("/business/files/"):
+            return self._business_media(False)
+        if self.path.split("?")[0] == "/business":
+            return self._json(200, business_doc())
         if self.path.split("?")[0] == "/reels/music/play":
             return self._song(False)
         if self.path.split("?")[0] == "/reels/music/review":
@@ -386,6 +534,14 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_PUT(self):
+        if self.path.split("?")[0] == "/business/state":
+            if not self._page_on_this_mac():
+                return self._json(403, {"error": "only the Posts page on this Mac"})
+            try:
+                body = self._body()
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
+            return self._json(*put_business_state(body))
         if self.path.split("?")[0] != "/reels/state":
             return self._json(404, {"error": "not found"})
         try:

@@ -1151,6 +1151,10 @@ def main():
         # so its public half matches exactly what this deploy makes public.
         from build_search import build as build_search
         build_search(print)
+        # Work With Me page: public photos only (checked against the same rules as
+        # the /photos proxy) and a China map drawn from public route data.
+        from build_work_with_me import build as build_work_with_me
+        build_work_with_me(print)
         # Chinese sidecars last of all, from the settled data files (each is gated
         # like the file it translates), plus the language script on generated pages.
         import i18n_zh

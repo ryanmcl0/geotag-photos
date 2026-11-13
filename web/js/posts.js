@@ -2557,7 +2557,7 @@ window.Posts = (function () {
             const a = autoNames[autoKey(ref)];
             input.placeholder = !SYNC_URL ? 'automatic name (shown on the local site)'
                 : a === 'pending' || a === undefined ? 'working out the automatic name…'
-                : a === 'missing' ? 'automatic name: start the local site to see it'
+                : a === 'missing' ? 'automatic name: restart the local site (the sync) to see it'
                 : autoText(a) || 'no position on record: type a name';
             state.textContent = ref.locText ? (ref.locText.toLowerCase() === 'off' ? 'no label' : 'typed') : 'automatic';
         });

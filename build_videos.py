@@ -74,10 +74,10 @@ NAV = '''    <nav class="topnav">
             <div class="nav-more">
                 <button class="nav-more-toggle active" type="button">More</button>
                 <div class="nav-more-menu">
-                    <a href="work-with-me.html">Work With Me</a>
                     <a href="videos.html" class="active">Videos</a>
                     <a href="plans/" data-gated>Plans</a>
                     <a href="/expeditions/" data-unlocked-only>Expedition Tours</a>
+                    <a href="work-with-me.html">Work With Me</a>
                 </div>
             </div>
             <a href="about.html">About</a>

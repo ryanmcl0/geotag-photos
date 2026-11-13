@@ -70,8 +70,10 @@ interface Post {
 // highlightsIg/highlightsXhs pick which platform's drafts feed it (absent = on).
 // bridgesPreview opens the China Bridges page to locked visitors as a
 // gallery-less preview (absent = on; false = the original locked tile).
-interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean; bridgesPreview?: boolean }
-const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs', 'bridgesPreview'];
+// plansEnabled turns the gated Plans section on (absent/false = off: /plans 404s
+// and its nav links are stripped; nothing is deleted).
+interface Settings { highlightsEnabled?: boolean; highlightsIg?: boolean; highlightsXhs?: boolean; bridgesPreview?: boolean; plansEnabled?: boolean }
+const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs', 'bridgesPreview', 'plansEnabled'];
 // reel_queue: the Reels tab's post queue (localhost page): the paths of reels he
 // approved, the slider's span, and what the video project's Mac helper
 // (tools/reelbot/queue_sync.py) found for each line and the bot's schedule.

@@ -215,11 +215,23 @@ def _nav():
 
 
 def build(echo=print):
+    import re
     check = PublicCheck()
     body = TEMPLATE.read_text()
+    if body.lstrip().startswith('<!--'):    # the template's own header comment
+        body = body.split('-->', 1)[1]
+    body = body.strip()
 
-    # Every photo hard-coded in the template must be public.
-    import re
+    # Sections parked in the template (kept for later, not on the site) are cut out
+    # whole, so none of their markup or photos reach the published page.
+    body, n_hidden = re.subn(r'[ \t]*<!-- hidden:start\b.*?<!-- hidden:end -->[ \t]*\n?', '',
+                             body, flags=re.S)
+    if '<!-- hidden:' in body:
+        raise SystemExit('✗ Work With Me: unbalanced hidden:start / hidden:end markers in the template')
+    if n_hidden:
+        echo(f"    {n_hidden} hidden template block(s) left off the page")
+
+    # Every photo hard-coded in the (visible) template must be public.
     bad = [(k, r) for k in re.findall(r'data-key="([^"]+)"', body) if (r := check.why_not(k))]
     if bad:
         raise SystemExit('✗ Work With Me: template photos that are not public: ' +
@@ -236,7 +248,8 @@ def build(echo=print):
     else:
         echo(f"    ⚠️  {CONFIG.relative_to(REPO)} missing: the reel will be empty")
 
-    body = body.replace('{{CHINA_SVG}}', china_svg(check, echo))
+    if '{{CHINA_SVG}}' in body:
+        body = body.replace('{{CHINA_SVG}}', china_svg(check, echo))
     reel_json = json.dumps(picks, ensure_ascii=False).replace('</', '<\\/')
 
     page = f'''<!DOCTYPE html>
@@ -263,7 +276,7 @@ def build(echo=print):
 <body>
 {_nav()}
 
-{body.split('-->', 1)[1].strip() if body.lstrip().startswith('<!--') else body.strip()}
+{body}
 
     <footer class="site-copyright">&copy; <span class="copyright-year">2026</span> Ryan McLoughlin. All photos and content are copyrighted. Please <a href="mailto:ryanmcloughlin20@gmail.com">contact me</a> before using any content.</footer>
 

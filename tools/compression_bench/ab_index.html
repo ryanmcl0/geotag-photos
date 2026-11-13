@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="darkreader-lock">
+<title>Compression A/B</title>
+<style>
+  :root {
+    --bg: #111214; --panel: #1a1c1f; --line: #2b2e33; --text: #e8e9eb; --dim: #9a9fa8;
+    --accent: #6cb6ff; --good: #5fd08a; --bad: #ff8a7a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { max-width: 1180px; margin: 0 auto; padding: 28px 20px 8px; }
+  h1 { font-size: 22px; margin: 0 0 6px; font-weight: 650; }
+  p { color: var(--dim); margin: 0 0 12px; max-width: 78ch; }
+  .tablewrap { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 9px 14px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  td small { color: var(--dim); display: block; font-size: 12px; white-space: normal; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 14px 0 6px; }
+  button { background: #24272c; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+           padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #4a4f57; }
+  button.on { background: #1f3a55; border-color: var(--accent); }
+  kbd { background: #24272c; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px;
+        padding: 0 6px; font: 12px ui-monospace, Menlo, monospace; }
+  .keys { color: var(--dim); font-size: 13px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 8px 20px 60px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+          cursor: zoom-in; padding: 0; text-align: left; color: inherit; }
+  .card img { display: block; width: 100%; aspect-ratio: 3/2; object-fit: cover; background: #000; }
+  .card div { padding: 8px 10px; font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card b { color: var(--text); font-weight: 500; }
+  .card .v { color: var(--accent); }
+
+  #lb { position: fixed; inset: 0; background: #000; display: none; flex-direction: column; z-index: 10; }
+  #lb.open { display: flex; }
+  #top, #bottom { background: #15171a; padding: 8px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #top { border-bottom: 1px solid var(--line); } #bottom { border-top: 1px solid var(--line); }
+  #title { color: var(--dim); font-size: 13px; margin-right: auto; }
+  #stage { flex: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
+  #stage.drag { cursor: grabbing; }
+  #layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+  #layer img { position: absolute; left: 0; top: 0; visibility: hidden; user-select: none; -webkit-user-drag: none; }
+  #layer img.show { visibility: visible; }
+  #layer.px img { image-rendering: pixelated; }
+  #badge { position: absolute; left: 12px; top: 12px; background: rgba(0,0,0,.72); padding: 6px 10px; border-radius: 8px;
+           font-size: 13px; pointer-events: none; font-variant-numeric: tabular-nums; }
+  #badge b { font-size: 15px; }
+  #zoom { position: absolute; right: 12px; top: 12px; background: rgba(0,0,0,.72); padding: 6px 10px; border-radius: 8px;
+          font-size: 13px; pointer-events: none; }
+  .vbtn b { margin-right: 6px; color: var(--accent); }
+  #vote { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  #vote span { color: var(--dim); font-size: 13px; }
+  @media (max-width: 640px) { header, main { padding-left: 16px; padding-right: 16px; } .keys { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Compression A/B: current WebP against per-photo AVIF</h1>
+  <p>60 random photos from across the library. Every AVIF below was encoded from the master, with the quality
+     level searched per photo so it is not below the file the site serves today. Open a photo, zoom to 100%, and
+     flick between versions. Blind mode hides the labels so you can judge by eye first.</p>
+  <div class="tablewrap"><table id="summary"></table></div>
+  <div class="tablewrap" id="tallywrap" hidden><table id="tally"></table></div>
+  <div class="bar">
+    <button id="blindBtn">Blind mode: off</button>
+    <button id="resetBtn">Clear my votes</button>
+    <span class="keys"><kbd>1</kbd> to <kbd>4</kbd> version, <kbd>0</kbd> master, <kbd>Space</kbd> flick between the last two,
+      <kbd>Z</kbd> fit or 100%, scroll to zoom, drag to pan, <kbd>&larr;</kbd> <kbd>&rarr;</kbd> photo, <kbd>R</kbd> reveal, <kbd>Esc</kbd> close</span>
+  </div>
+</header>
+<main><div class="grid" id="grid"></div></main>
+
+<div id="lb" role="dialog" aria-modal="true">
+  <div id="top">
+    <span id="title"></span>
+    <button id="prevBtn">&larr; Previous</button>
+    <button id="nextBtn">Next &rarr;</button>
+    <button id="zoomBtn">100%</button>
+    <button id="closeBtn">Close</button>
+  </div>
+  <div id="stage"><div id="layer"></div><div id="badge"></div><div id="zoom"></div></div>
+  <div id="bottom">
+    <span id="vbtns" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+    <span id="vote"></span>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  var AB = window.AB, V = AB.variants, P = AB.photos;
+  var store = {
+    get: function (k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+  var blind = store.get('ab_blind', false), votes = store.get('ab_votes', {}), seed = store.get('ab_seed', null);
+  if (!seed) { seed = Math.floor(Math.random() * 1e9); store.set('ab_seed', seed); }
+  var $ = function (id) { return document.getElementById(id); };
+  var mb = function (b) { return (b / 1e6).toFixed(1) + ' MB'; };
+  var kb = function (b) { return Math.round(b / 1e3) + ' KB'; };
+  var pct = function (x) { return (x > 0 ? '+' : '') + (x * 100).toFixed(1) + '%'; };
+  var sgn = function (x, u) { return '<span class="' + (x >= 0 ? 'pos' : 'neg') + '">' + (x >= 0 ? '+' : '') + x.toFixed(2) + (u || '') + '</span>'; };
+
+  function summary() {
+    var cur = 0; P.forEach(function (p) { cur += p.variants[0].bytes; });
+    var h = '<tr><th>Version</th><th>Total size</th><th>Against current</th><th>Perceptual score</th><th>Luma detail</th><th>Colour detail</th><th>Quality setting</th></tr>';
+    V.forEach(function (v, i) {
+      var b = 0, ds = 0, dy = 0, dc = 0, qs = [];
+      P.forEach(function (p) { var a = p.variants[i], c = p.variants[0]; b += a.bytes; ds += a.ssimu2 - c.ssimu2; dy += a.psnr_y - c.psnr_y; dc += a.psnr_c - c.psnr_c; qs.push(a.q); });
+      qs.sort(function (a, b) { return a - b; });
+      var n = P.length;
+      h += '<tr><td>' + v.label + '<small>' + v.note + '</small></td><td>' + mb(b) + '</td><td>' + (i ? '<span class="' + (b < cur ? 'pos' : 'neg') + '">' + pct(b / cur - 1) + '</span>' : 'baseline') +
+        '</td><td>' + (i ? sgn(ds / n) : 'baseline') + '</td><td>' + (i ? sgn(dy / n, ' dB') : 'baseline') + '</td><td>' + (i ? sgn(dc / n, ' dB') : 'baseline') +
+        '</td><td>' + qs[0] + ' to ' + qs[n - 1] + ', median ' + qs[n >> 1] + '</td></tr>';
+    });
+    $('summary').innerHTML = h;
+  }
+
+  function tally() {
+    var keys = Object.keys(votes);
+    $('tallywrap').hidden = !keys.length;
+    if (!keys.length) return;
+    var c = {}, none = 0; V.forEach(function (v) { c[v.id] = 0; });
+    keys.forEach(function (k) { if (votes[k] === 'none') none++; else c[votes[k]]++; });
+    var h = '<tr><th>Your blind verdicts (' + keys.length + ' of ' + P.length + ' photos judged)</th><th>Times picked as worst</th></tr>';
+    if (blind) h += '<tr><td>Hidden while blind mode is on. Turn it off to see which versions you marked.</td><td></td></tr>';
+    else {
+      V.forEach(function (v) { h += '<tr><td>' + v.label + '</td><td>' + c[v.id] + '</td></tr>'; });
+      h += '<tr><td>Could not tell them apart</td><td>' + none + '</td></tr>';
+    }
+    $('tally').innerHTML = h;
+  }
+
+  function order(pi) {             // variant order for a photo; shuffled per photo in blind mode
+    var idx = V.map(function (_, i) { return i; });
+    if (!blind) return idx;
+    var s = (seed + pi * 7919) >>> 0;
+    var rnd = function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    for (var i = idx.length - 1; i > 0; i--) { var j = Math.floor(rnd() * (i + 1)); var t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+    return idx;
+  }
+
+  function grid() {
+    var g = $('grid'); g.innerHTML = '';
+    P.forEach(function (p, i) {
+      var b = document.createElement('button'); b.className = 'card';
+      var v = votes[p.key];
+      b.innerHTML = '<img loading="lazy" src="' + p.thumb + '" alt=""><div><b>' + (i + 1) + '.</b> ' + p.trip +
+        (v ? ' <span class="v">judged</span>' : '') + '</div>';
+      b.onclick = function () { open(i); };
+      g.appendChild(b);
+    });
+  }
+
+  // lightbox
+  var cur = -1, ord = [], slot = 0, prevSlot = 1, reveal = false, imgs = {}, s = 1, tx = 0, ty = 0, fit = 1;
+  var stage = $('stage'), layer = $('layer');
+
+  function apply() {
+    layer.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+    layer.classList.toggle('px', s >= 2);
+    $('zoom').textContent = Math.round(s * 100) + '%';
+    $('zoomBtn').textContent = Math.abs(s - 1) < 0.01 ? 'Fit' : '100%';
+  }
+  function fitView() {
+    var p = P[cur], r = stage.getBoundingClientRect();
+    fit = Math.min(r.width / p.w, r.height / p.h, 1);
+    s = fit; tx = (r.width - p.w * s) / 2; ty = (r.height - p.h * s) / 2; apply();
+  }
+  function zoomTo(ns, cx, cy) {
+    var r = stage.getBoundingClientRect();
+    if (cx == null) { cx = r.width / 2; cy = r.height / 2; }
+    ns = Math.max(fit * 0.5, Math.min(8, ns));
+    tx = cx - (cx - tx) * (ns / s); ty = cy - (cy - ty) * (ns / s); s = ns; apply();
+  }
+  function name(sl) {              // label for a slot: real name, or a letter while blind
+    if (sl === -1) return 'Master';
+    return (blind && !reveal) ? 'Version ' + 'ABCD'[sl] : V[ord[sl]].label;
+  }
+  function show(sl) {
+    if (sl !== slot) { prevSlot = slot; slot = sl; }
+    Object.keys(imgs).forEach(function (k) { imgs[k].classList.toggle('show', String(k) === String(sl)); });
+    var p = P[cur], hidden = blind && !reveal, t = '<b>' + name(sl) + '</b>';
+    if (sl === -1) t += '<br>lossless reference, resized master';
+    else if (!hidden) {
+      var a = p.variants[ord[sl]], c = p.variants[0];
+      t += '<br>' + kb(a.bytes) + (ord[sl] ? ' (' + pct(a.bytes / c.bytes - 1) + ')' : '') + ', quality ' + a.q +
+        '<br>score ' + a.ssimu2.toFixed(1) + ', luma ' + a.psnr_y.toFixed(1) + ' dB, colour ' + a.psnr_c.toFixed(1) + ' dB';
+    }
+    $('badge').innerHTML = t;
+    Array.prototype.forEach.call($('vbtns').children, function (b) { b.classList.toggle('on', b.dataset.slot === String(sl)); });
+  }
+  function bottom() {
+    var h = '';
+    ord.forEach(function (_, sl) { h += '<button class="vbtn" data-slot="' + sl + '"><b>' + (sl + 1) + '</b>' + name(sl) + '</button>'; });
+    h += '<button class="vbtn" data-slot="-1"><b>0</b>Master</button>';
+    $('vbtns').innerHTML = h;
+    Array.prototype.forEach.call($('vbtns').children, function (b) { b.onclick = function () { show(+b.dataset.slot); }; });
+    var p = P[cur], v = votes[p.key], vh = '<span>Which looks worst at zoom?</span>';
+    ord.forEach(function (vi, sl) {
+      vh += '<button data-v="' + V[vi].id + '" class="' + (v === V[vi].id ? 'on' : '') + '">' + ((blind && !reveal) ? 'ABCD'[sl] : V[vi].label) + '</button>';
+    });
+    vh += '<button data-v="none" class="' + (v === 'none' ? 'on' : '') + '">Cannot tell</button>';
+    if (blind) vh += '<button data-v="reveal">' + (reveal ? 'Hide names' : 'Reveal') + '</button>';
+    $('vote').innerHTML = vh;
+    Array.prototype.forEach.call($('vote').querySelectorAll('button'), function (b) {
+      b.onclick = function () {
+        if (b.dataset.v === 'reveal') { reveal = !reveal; }
+        else { votes[p.key] = b.dataset.v; store.set('ab_votes', votes); tally(); grid(); }
+        bottom(); show(slot);
+      };
+    });
+  }
+  function open(i) {
+    cur = (i + P.length) % P.length; ord = order(cur); reveal = false; slot = 0; prevSlot = 1;
+    var p = P[cur];
+    $('title').textContent = 'Photo ' + (cur + 1) + ' of ' + P.length + (blind ? '' : ': ' + p.trip + ' / ' + p.id);
+    layer.innerHTML = ''; imgs = {};
+    layer.style.width = p.w + 'px'; layer.style.height = p.h + 'px';
+    var add = function (sl, src) {
+      var im = new Image(); im.width = p.w; im.height = p.h; im.draggable = false; im.alt = ''; im.src = src;
+      layer.appendChild(im); imgs[sl] = im;
+    };
+    ord.forEach(function (vi, sl) { add(sl, p.variants[vi].file); });
+    add(-1, p.master);
+    $('lb').classList.add('open'); document.body.style.overflow = 'hidden';
+    bottom(); fitView(); show(0);
+  }
+  function close() { $('lb').classList.remove('open'); document.body.style.overflow = ''; layer.innerHTML = ''; cur = -1; }
+
+  stage.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = stage.getBoundingClientRect();
+    zoomTo(s * Math.exp(-e.deltaY * 0.0025), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  var drag = null;
+  stage.addEventListener('pointerdown', function (e) { drag = { x: e.clientX, y: e.clientY, tx: tx, ty: ty }; stage.setPointerCapture(e.pointerId); stage.classList.add('drag'); });
+  stage.addEventListener('pointermove', function (e) { if (!drag) return; tx = drag.tx + e.clientX - drag.x; ty = drag.ty + e.clientY - drag.y; apply(); });
+  var end = function () { drag = null; stage.classList.remove('drag'); };
+  stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
+  stage.addEventListener('dblclick', function (e) {
+    var r = stage.getBoundingClientRect();
+    if (Math.abs(s - 1) < 0.01) fitView(); else zoomTo(1, e.clientX - r.left, e.clientY - r.top);
+  });
+  function toggleZoom() { if (Math.abs(s - 1) < 0.01) fitView(); else zoomTo(1); }
+  $('zoomBtn').onclick = toggleZoom; $('closeBtn').onclick = close;
+  $('prevBtn').onclick = function () { open(cur - 1); }; $('nextBtn').onclick = function () { open(cur + 1); };
+  window.addEventListener('resize', function () { if (cur >= 0) fitView(); });
+  document.addEventListener('keydown', function (e) {
+    if (cur < 0 || e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    if (k === 'Escape') close();
+    else if (k === 'ArrowLeft') open(cur - 1);
+    else if (k === 'ArrowRight') open(cur + 1);
+    else if (k === ' ') { e.preventDefault(); show(prevSlot); }
+    else if (k === 'z' || k === 'Z') toggleZoom();
+    else if (k === 'r' || k === 'R') { if (blind) { reveal = !reveal; bottom(); show(slot); } }
+    else if (k === '0' || k === 'm' || k === 'M') show(-1);
+    else if (k >= '1' && k <= String(ord.length)) show(+k - 1);
+  });
+
+  function setBlind() {
+    $('blindBtn').textContent = 'Blind mode: ' + (blind ? 'on' : 'off');
+    $('blindBtn').classList.toggle('on', blind);
+    $('summary').parentNode.style.opacity = 1;
+    tally();
+  }
+  $('blindBtn').onclick = function () { blind = !blind; store.set('ab_blind', blind); setBlind(); };
+  $('resetBtn').onclick = function () {
+    votes = {}; store.set('ab_votes', votes);
+    seed = Math.floor(Math.random() * 1e9); store.set('ab_seed', seed);
+    tally(); grid();
+  };
+  summary(); grid(); setBlind();
+})();
+</script>
+</body>
+</html>

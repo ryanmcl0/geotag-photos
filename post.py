@@ -1215,7 +1215,17 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
             have_blur = False
         want_loc, have_loc = locs.get(src.name), located.get(src.name)
         have_shape = shaped.get(src.name)
-        if dst.exists() and have_blur == want_blur and have_loc == want_loc and have_shape == want_shape:
+        # Only the post's shape changed (e.g. a folder pulled before pulls cropped): the copy is reworked
+        # without losing what is in it, see below. A reordered one is brought into place first.
+        shape_only = have_blur == want_blur and have_loc == want_loc and have_shape != want_shape
+        if shape_only and not dst.exists() and parked.get(src.name):
+            parked[src.name].pop(0).rename(dst)
+            renamed += 1
+            print(f'   ↷ {dst.name}: reordered')
+        # A re-edit exported over the copy since the last pull goes through the re-edit path even then.
+        fresh = (shape_only and dst.exists() and hashes.get(src.name) is not None
+                 and _file_md5(dst) != hashes[src.name])
+        if dst.exists() and have_blur == want_blur and have_loc == want_loc and (have_shape == want_shape or fresh):
             rec = hashes.get(src.name)
             cur = _file_md5(dst)
             if rec is None or cur == rec:
@@ -1260,6 +1270,14 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
             fit(src, dst)
             copied += 1
             continue
+        if shape_only and dst.exists() and not want_loc and not want_blur and have_shape is None and want_shape:
+            # never cropped and nothing baked in: crop it where it is, so a re-edit in it survives
+            cut = crop_to_shape(dst, shape)
+            if cut:
+                print(f'   ✂️  {dst.name}: cropped {cut[0]} → {cut[1]} (the post\'s shape)')
+            shaped[src.name] = want_shape
+            fit(src, dst)
+            continue
         if parked.get(src.name):
             tmp = parked[src.name].pop(0)
             if have_blur == want_blur and have_loc == want_loc and have_shape == want_shape:
@@ -1270,20 +1288,28 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
             tmp.unlink()   # blur or label changed: regenerate below
         dst.unlink(missing_ok=True)
         needs.pop(src.name, None)
+        # A clean re-edit still waiting to be written back to Edits is newer than the original: build from it.
+        base = src
+        staged = dest_dir / STAGED / f'reedit_{src.name}'
         try:
-            mb = f' ({src.stat().st_size / 1e6:.1f} MB)'
+            if staged.exists() and staged.stat().st_mtime > src.stat().st_mtime:
+                base = staged
+        except OSError:
+            pass
+        try:
+            mb = f' ({base.stat().st_size / 1e6:.1f} MB)'
         except OSError:
             mb = ''
         if want_blur:
             print(f'   ⇣ {dst.name}: copying + blurring faces{mb} (the first blur '
                   'loads the face model, give it ~30s)...')
-            n = blur_faces_file(src, dst)
+            n = blur_faces_file(base, dst)
             print(f'   🙂🚫 {dst.name}: {blur_note(n)}')
             if n <= 0:
                 needs[src.name] = True
         else:
-            print(f'   ⇣ {dst.name}: copying{mb}...')
-            shutil.copy2(src, dst)
+            print(f'   ⇣ {dst.name}: copying{mb}' + (' from the re-edit waiting for Edits' if base != src else '') + '...')
+            shutil.copy2(base, dst)
         blurred[src.name] = want_blur
         label(ref, src, dst)
         fit(src, dst)

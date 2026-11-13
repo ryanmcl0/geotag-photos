@@ -12,8 +12,8 @@ taken and can be overridden per photo at pull time (./post.py pull N --location 
 Placement: always a corner, tight to the edge (never the centre, never lowered into the frame), the left two first
 and top right last (Instagram's carousel counter, "1/18", sits there), the top ones (usually sky) preferred; the calmest wins, scored on edges + local contrast (busy subject), colour spread (a box straddling sky and rock) and
 faces (the face index's boxes for the photo). A frame taller than 4:5 keeps the label inside its centre 4:5 band, so
-cropping it to 4:5 in the app cannot cut the label off. Sized from the frame's short edge (small, and a long name
-shrinks to fit), so a wide drone frame gets the same small label as a 4:3 one.
+cropping it to 4:5 in the app cannot cut the label off. Sized from the frame width (no wider than a 3:2 frame of
+the same height counts), and a long name shrinks so it never runs across the photo.
 
 The name: a site from his own rosters within its radius (energy sites, bridges, mountains: "Lenghu Oil Base
 Ruins"), else the big town around (place_names: "Kashgar"), else the nearest town or village ("Sesto"), else the
@@ -39,12 +39,13 @@ BEBAS, FUT_BOOK, FUT_BOLD = (str(FONTS / f) for f in ('BebasKai.ttf', 'FuturaPT-
 FACE_DB = ROOT / 'local_browse' / 'face_index.sqlite'
 RIGHT_BIAS = 0.5               # extra score on the right corners: the left side wins unless it is much busier
 WORK_W = 1080                  # placement is worked out on a copy this wide, then scaled to the photo
-SIZE = 0.62                    # label size unit = this x the frame's short edge (the name is ~3% of it)
-MAX_W = 0.42                   # a long name shrinks so the label never spans more than this much of the width
+MAX_ASPECT = 1.5               # label size unit = the frame width, but no more than this x its height
+MAX_W = 0.32                   # a long name shrinks so the label never spans more than this much of the width
 SKY_BIAS = 1.0                 # extra score on the bottom corners: the label goes up in the sky unless it is busy
 ROSTERS = (('config/china_energy_sites.json', 'sites', 3.0), ('config/china_bridges.json', 'bridges', 3.0),
            ('config/mountains.json', 'mountains', 2.0))
 STYLES = ('A', 'C')
+LOOK = 2                       # bump when the size or look changes: pull relabels copies made before
 
 
 # ── the name ─────────────────────────────────────────────────────────────────────────────────────
@@ -229,8 +230,9 @@ class _Layout:
 
 
 def _unit(style, head, sub, W, H):
-    """The layout unit for a W x H frame: from its short edge, shrunk when a long name would run too wide."""
-    u = min(W, H) * SIZE
+    """The layout unit for a W x H frame: its width (capped for very wide frames), shrunk when a long name would
+    run too wide."""
+    u = min(W, H * MAX_ASPECT)
     w = _Layout(style, head, sub, u).w
     return u * min(1.0, W * MAX_W / w) if w else u
 

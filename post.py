@@ -1141,7 +1141,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
         sig = locs.get(src.name)
         if want_shape:
             if sig:
-                style, head, sub = sig.split('|', 2)
+                style, head, sub = sig.split('|')[:3]
                 # cropped first (in the same step, so the face boxes line up) and the label lands inside
                 cut = shape_change(dst, shape)
                 corner = stamp_location(dst, ref, style, head, sub, shape)
@@ -1153,7 +1153,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
         else:
             shaped.pop(src.name, None)
             if sig:
-                style, head, sub = sig.split('|', 2)
+                style, head, sub = sig.split('|')[:3]
                 corner = stamp_location(dst, ref, style, head, sub)
         if sig:
             print(f'   📍 {dst.name}: {head}' + (f' / {sub}' if sub else '') + f' ({style}, {corner})')
@@ -1537,7 +1537,8 @@ def location_sigs(dest_dir, plan, overrides=()):
             notes.append(f'⚠️  📍 {i:02d}: no position on record, so no name: '
                          f'give one with --location {i} "Name"')
             continue
-        sigs[src.name] = f'{style}|{head}|{sub or ""}'
+        # the label look's version last, so a change to it relabels copies pulled before
+        sigs[src.name] = f'{style}|{head}|{sub or ""}|v{location_pin.LOOK}'
     return sigs, notes
 
 

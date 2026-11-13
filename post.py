@@ -33,8 +33,9 @@ Everything for working with post drafts. Always takes a subcommand:
                       urbex account, posted by hand): a fresh pull of that one post, then the
                       items in the draft's order, the caption exactly as it
                       goes out and any problems (which block it), then
-                      "Post this to @ryanmcl0? [y/N]" (--yes skips the
-                      question, --dry stops before it). Once Instagram
+                      stops: a dry run by default. With --post it asks
+                      "Post this to @ryanmcl0? [y/N]" (--post --yes skips
+                      the question). Once Instagram
                       confirms, the draft is marked posted (+ its permalink),
                       the same mark as the Posts page's Posted tick, and
                       synced to the live site. A single video with the
@@ -2819,11 +2820,15 @@ def cmd_ig(args):
         problems = IG.blocking(plan) + ([f"not set up: {', '.join(setup.missing)}"]
                                         if setup.enabled and setup.missing else [])
         print_ig_plan(IG, post, folder, plan, setup)
-        if args.dry:
+        if args.dry or not args.real:
             print(f"\n{'⛔ ' + str(len(problems)) + ' problem(s). ' if problems else ''}Dry run: nothing posted.")
+            ref = post.get('num') or args.post
+            ref = ref if isinstance(ref, int) or ' ' not in str(ref) else f'"{ref}"'
+            print(('Once they are fixed, post' if problems else 'To post it for real') +
+                  f': ./post.py ig {ref} --post')
             return
         if problems:
-            sys.exit(f'\n⛔ Not posted: {len(problems)} problem(s) above. Fix them, then run ./post.py ig again.')
+            sys.exit(f'\n⛔ Not posted: {len(problems)} problem(s) above. Fix them, then run ./post.py ig {post.get("num") or args.post} --post again.')
 
         # 3. The question.
         if not args.yes:
@@ -2840,7 +2845,7 @@ def cmd_ig(args):
             return
         fresh = _find(fetch_posts(url, env), post['id'])
         if fresh is None or json.dumps(fresh, sort_keys=True) != seen:
-            sys.exit('⛔ Not posted: the draft changed since the pull. Run ./post.py ig again.')
+            sys.exit(f'⛔ Not posted: the draft changed since the pull. Run ./post.py ig {post.get("num") or args.post} --post again.')
 
         # 4. Publish.
         print('⇡ Posting to Instagram...')
@@ -2963,9 +2968,10 @@ def main():
 
     g = sub.add_parser('ig', help='post one Xiaohongshu draft to Instagram (@ryanmcl0)')
     g.add_argument('post', help='the draft: its number (the #N on its card), name or id')
-    g.add_argument('--yes', action='store_true', help='post without asking')
-    g.add_argument('--dry', action='store_true',
-                   help='pull and show what would go out, then stop (no question, nothing posted)')
+    g.add_argument('--post', dest='real', action='store_true',
+                   help='post for real (without it: a dry run that pulls, shows what would go out and stops)')
+    g.add_argument('--yes', action='store_true', help='with --post: post without asking')
+    g.add_argument('--dry', action='store_true', help=argparse.SUPPRESS)   # the default now; kept for old habits
     g.add_argument('--dest', default=POSTS_DEST, help=f'Post folders root (default: {POSTS_DEST})')
     g.set_defaults(func=cmd_ig)
 

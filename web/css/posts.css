@@ -600,3 +600,15 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   .reels-side { position: static; order: -1; }
   .reels-row { grid-template-columns: 26px 96px minmax(0, 1fr); gap: 10px; }
 }
+
+/* ---------- 📍 place names pull will bake in (one field per pinned photo) ---------- */
+.posts-places { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.posts-places-head { color: #999; font-size: 12px; }
+.posts-places-row { display: flex; align-items: center; gap: 8px; }
+.posts-places-num {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: #2a2a2a; color: #ddd;
+  font-size: 12px; display: flex; align-items: center; justify-content: center;
+}
+.posts-places-input { flex: 1 1 auto; min-width: 0; }
+.posts-places-input::placeholder { color: #aaa; }
+.posts-places-state { flex: 0 0 auto; color: #666; font-size: 11px; width: 56px; }

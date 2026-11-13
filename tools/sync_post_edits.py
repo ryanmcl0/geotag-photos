@@ -149,12 +149,36 @@ def index_masters(root, posts):
     return idx
 
 
+def _pull_made(dp):
+    """{NN_ file name: md5} of the copies ./post.py pull changed itself in this post folder (cropped to the
+    post's shape, labelled with a place name or face-blurred), from its .pull_state.json. Those are post-only
+    versions, never re-edits to file back over an original."""
+    try:
+        st = json.load(open(os.path.join(dp, '.pull_state.json')))
+    except (OSError, ValueError):
+        return {}
+    changed = set(st.get('shaped') or {}) | set(st.get('located') or {}) | \
+        {k for k, v in (st.get('blurred') or {}).items() if v}
+    hashes = st.get('hashes') or {}
+    out = {}
+    for f in os.listdir(dp):
+        m = re.match(r'^\d{2,3}_(.+)$', f)
+        if m and m.group(1) in changed and m.group(1) in hashes:
+            out[f] = hashes[m.group(1)]
+    return out
+
+
 def list_posts(posts):
     out = []
     for dp, dn, fn in os.walk(posts):
+        made = _pull_made(dp)
         for f in fn:
-            if f.lower().endswith('.jpg'):
-                out.append(os.path.join(dp, f))
+            if not f.lower().endswith('.jpg'):
+                continue
+            p = os.path.join(dp, f)
+            if f in made and hashlib.md5(open(p, 'rb').read()).hexdigest() == made[f]:
+                continue   # a copy pull cropped / labelled / blurred and nobody has re-exported since
+            out.append(p)
     return out
 
 

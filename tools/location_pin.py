@@ -10,9 +10,10 @@ taken and can be overridden per photo at pull time (./post.py pull N --location 
   C  "editorial": Futura caps, a hairline, the region underneath
 
 Placement: always a corner, tight to the edge (never the centre, never lowered into the frame), the left two first
-and top right last (Instagram's carousel counter, "1/18", sits there); the calmest wins, scored on edges + local contrast (busy subject), colour spread (a box straddling sky and rock) and
+and top right last (Instagram's carousel counter, "1/18", sits there), the top ones (usually sky) preferred; the calmest wins, scored on edges + local contrast (busy subject), colour spread (a box straddling sky and rock) and
 faces (the face index's boxes for the photo). A frame taller than 4:5 keeps the label inside its centre 4:5 band, so
-cropping it to 4:5 in the app cannot cut the label off. Sized from the frame width, small whatever the space.
+cropping it to 4:5 in the app cannot cut the label off. Sized from the frame's short edge (small, and a long name
+shrinks to fit), so a wide drone frame gets the same small label as a 4:3 one.
 
 The name: a site from his own rosters within its radius (energy sites, bridges, mountains: "Lenghu Oil Base
 Ruins"), else the big town around (place_names: "Kashgar"), else the nearest town or village ("Sesto"), else the
@@ -38,6 +39,9 @@ BEBAS, FUT_BOOK, FUT_BOLD = (str(FONTS / f) for f in ('BebasKai.ttf', 'FuturaPT-
 FACE_DB = ROOT / 'local_browse' / 'face_index.sqlite'
 RIGHT_BIAS = 0.5               # extra score on the right corners: the left side wins unless it is much busier
 WORK_W = 1080                  # placement is worked out on a copy this wide, then scaled to the photo
+SIZE = 0.62                    # label size unit = this x the frame's short edge (the name is ~3% of it)
+MAX_W = 0.42                   # a long name shrinks so the label never spans more than this much of the width
+SKY_BIAS = 1.0                 # extra score on the bottom corners: the label goes up in the sky unless it is busy
 ROSTERS = (('config/china_energy_sites.json', 'sites', 3.0), ('config/china_bridges.json', 'bridges', 3.0),
            ('config/mountains.json', 'mountains', 2.0))
 STYLES = ('A', 'C')
@@ -134,13 +138,13 @@ def place(img, box_w, box_h, faces=()):
     import cv2
     b = _busy(img, faces)
     H, W = b.shape
-    m = int(W * 0.04)
+    m = int(min(W, H) * 0.045)
     band = max(0, int((H - W * 1.25) / 2))      # taller than 4:5: stay inside its centre 4:5
     lab = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2LAB).astype(np.float32)
     best = None
     # The right side only wins on a much calmer patch, top right last: it sits under Instagram's carousel counter.
-    for name, x, y, bias in (('top-left', m, band + m, 0.0), ('bottom-left', m, H - band - m - box_h, 0.15),
-                             ('bottom-right', W - m - box_w, H - band - m - box_h, 0.15 + RIGHT_BIAS),
+    for name, x, y, bias in (('top-left', m, band + m, 0.0), ('bottom-left', m, H - band - m - box_h, SKY_BIAS),
+                             ('bottom-right', W - m - box_w, H - band - m - box_h, SKY_BIAS + RIGHT_BIAS),
                              ('top-right', W - m - box_w, band + m, 0.3 + RIGHT_BIAS)):
         x, y = max(0, x), max(0, y)
         region = b[y:y + box_h, x:x + box_w]
@@ -224,6 +228,27 @@ class _Layout:
         return (self.u * (7 if self.style == 'C' else 10) / 1080, 0.5 if self.style == 'C' else 0.55)
 
 
+def _unit(style, head, sub, W, H):
+    """The layout unit for a W x H frame: from its short edge, shrunk when a long name would run too wide."""
+    u = min(W, H) * SIZE
+    w = _Layout(style, head, sub, u).w
+    return u * min(1.0, W * MAX_W / w) if w else u
+
+
+def crop_box(W, H, ratio):
+    """The centred box of shape `ratio` (width / height) inside a W x H frame, or None when it is already that
+    shape (within 1%)."""
+    if not ratio or abs(W / H - ratio) / ratio <= 0.01:
+        return None
+    if W / H > ratio:                       # too wide: trim the sides
+        w = round(H * ratio)
+        x = (W - w) // 2
+        return x, 0, x + w, H
+    h = round(W / ratio)                    # too tall: trim top and bottom
+    y = (H - h) // 2
+    return 0, y, W, y + h
+
+
 def render(img, head, sub, style='A', faces=()):
     """→ (labelled RGB image, corner name). `faces` in img's own pixels."""
     style = style if style in STYLES else 'A'
@@ -231,9 +256,9 @@ def render(img, head, sub, style='A', faces=()):
     W, H = img.size
     k = WORK_W / W
     work = img.resize((WORK_W, max(1, int(H * k))), Image.LANCZOS)
-    small = _Layout(style, head, sub, WORK_W)
+    small = _Layout(style, head, sub, _unit(style, head, sub, *work.size))
     corner, x, y = place(work, small.w, small.h, [tuple(int(v * k) for v in f) for f in faces])
-    big = _Layout(style, head, sub, W)
+    big = _Layout(style, head, sub, _unit(style, head, sub, W, H))
     X, Y = int(x / k), int(y / k)
     region = np.asarray(img.crop((X, Y, X + big.w, Y + big.h)).convert('L'), dtype=np.float32) / 255
     fg, sh = ((20, 20, 20), (255, 255, 255)) if region.size and region.mean() > 0.68 else ((255, 255, 255), (0, 0, 0))
@@ -249,13 +274,18 @@ def render(img, head, sub, style='A', faces=()):
     return base.convert('RGB'), corner
 
 
-def stamp(src, dst, head, sub, style='A', trip=None, pid=None):
-    """Label the photo at src into dst (may be the same file), keeping its EXIF and colour profile.
+def stamp(src, dst, head, sub, style='A', trip=None, pid=None, ratio=None):
+    """Label the photo at src into dst (may be the same file), keeping its EXIF and colour profile; with
+    `ratio` it is first centre-cropped to that shape, so the label lands inside what gets posted.
     → the corner it went in."""
     with Image.open(src) as im:
         exif, icc = im.info.get('exif'), im.info.get('icc_profile')
         img = ImageOps.exif_transpose(im).convert('RGB')
     faces = face_boxes(trip, pid, img.size[0]) if trip and pid else []
+    box = crop_box(*img.size, ratio)
+    if box:
+        img = img.crop(box)
+        faces = [(x - box[0], y - box[1], w, h) for x, y, w, h in faces]
     out, corner = render(img, head, sub, style, faces)
     kw = {'quality': 95, 'subsampling': 0}
     if exif:
@@ -278,14 +308,16 @@ def main(argv):
     ap.add_argument('--id', required=True)
     ap.add_argument('--style', default='A', choices=STYLES)
     ap.add_argument('--text', help='"Name" or "Name / Region" instead of the automatic one')
+    ap.add_argument('--ratio', type=float, help='centre-crop to this width/height first (e.g. 1.333)')
+    ap.add_argument('--src', help='label this file instead of the trip display image')
     ap.add_argument('--out', required=True)
     a = ap.parse_args(argv)
     head, sub = label_for(a.trip, a.id)
     if a.text:
         head, _, given = a.text.partition(' / ')
         sub = given if given else sub
-    src = ROOT / 'web' / 'trips' / a.trip / 'display' / f'{a.id}.webp'
-    corner = stamp(src, a.out, head, sub, a.style, a.trip, a.id)
+    src = a.src or ROOT / 'web' / 'trips' / a.trip / 'display' / f'{a.id}.webp'
+    corner = stamp(src, a.out, head, sub, a.style, a.trip, a.id, a.ratio)
     print(f'{head} / {sub} → {corner}: {a.out}')
 
 

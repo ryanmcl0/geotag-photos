@@ -1072,7 +1072,7 @@ def blur_note(n):
             f'could not decode, left unblurred as *{NEEDS_BLUR}, blur it by hand')
 
 
-def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
+def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=None):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
     only genuinely new photos are copied from the drive. Returns (copied,
@@ -1097,7 +1097,11 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
     locs ({source name: "style|name|region"}, from location_sigs) are the
     location labels to bake in, after any blur. Like the blur, a label that
     changed (or was turned on or off) regenerates that copy from its source,
-    and a re-edit exported over a labelled copy is labelled again in place."""
+    and a re-edit exported over a labelled copy is labelled again in place.
+
+    shape (width / height, from post_ratio) crops every copy to the post's one
+    shape, centred, before its label goes on; a changed shape regenerates the
+    copies the same way, and a re-edit exported over a copy is cropped again."""
     found = [] if found is None else found
     planned = {dst.name for _, _, _, dst in plan}
 
@@ -1127,14 +1131,31 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
     needs = state.setdefault('needs_blur', {})   # source name -> True: no face found, flagged
     shrunk = state.setdefault('compressed', {})   # md5 of copies shrunk to UPLOAD_CAP, by source name
     located = state.setdefault('located', {})   # source name -> the label baked into its copy
+    shaped = state.setdefault('shaped', {})     # source name -> the post shape its copy was cropped to
     locs = locs or {}
+    want_shape = f'{shape:.4f}' if shape else None
 
     def label(ref, src, dst):
-        """Bake the wanted location label into dst (after any blur); remember what went in."""
+        """Crop dst to the post's shape and bake the wanted location label into it (after any blur);
+        remember what went in."""
         sig = locs.get(src.name)
+        if want_shape:
+            if sig:
+                style, head, sub = sig.split('|', 2)
+                # cropped first (in the same step, so the face boxes line up) and the label lands inside
+                cut = shape_change(dst, shape)
+                corner = stamp_location(dst, ref, style, head, sub, shape)
+            else:
+                cut = crop_to_shape(dst, shape)
+            if cut:
+                print(f'   ✂️  {dst.name}: cropped {cut[0]} → {cut[1]} (the post\'s shape)')
+            shaped[src.name] = want_shape
+        else:
+            shaped.pop(src.name, None)
+            if sig:
+                style, head, sub = sig.split('|', 2)
+                corner = stamp_location(dst, ref, style, head, sub)
         if sig:
-            style, head, sub = sig.split('|', 2)
-            corner = stamp_location(dst, ref, style, head, sub)
             print(f'   📍 {dst.name}: {head}' + (f' / {sub}' if sub else '') + f' ({style}, {corner})')
             located[src.name] = sig
         else:
@@ -1173,7 +1194,8 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
         have_blur = bool(blurred.get(src.name, False))
         if src.name in adopted:
             new = adopted.pop(src.name)
-            note_reedit(found, ref, src, new, dest_dir, dst, want_blur)
+            note_reedit(found, ref, src, new, dest_dir, dst,
+                        want_blur or bool(locs.get(src.name)) or bool(want_shape))
             dst.unlink(missing_ok=True)
             new.rename(dst)
             print(f'   ⇢ {dst.name}: adopted re-edited export {new.name}')
@@ -1192,7 +1214,8 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
             dst.unlink(missing_ok=True)   # regenerate from source (missing_ok: SMB dir cache can be stale)
             have_blur = False
         want_loc, have_loc = locs.get(src.name), located.get(src.name)
-        if dst.exists() and have_blur == want_blur and have_loc == want_loc:
+        have_shape = shaped.get(src.name)
+        if dst.exists() and have_blur == want_blur and have_loc == want_loc and have_shape == want_shape:
             rec = hashes.get(src.name)
             cur = _file_md5(dst)
             if rec is None or cur == rec:
@@ -1215,9 +1238,11 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
                 hashes[src.name] = cur
                 print(f'   ✓ {dst.name}: blurred by hand')
                 continue
-            note_reedit(found, ref, src, dst, dest_dir, dst, want_blur)
+            # A re-edit exported over the copy: queued for Edits clean (staged before it is changed here),
+            # then cropped and labelled again.
+            note_reedit(found, ref, src, dst, dest_dir, dst, want_blur or bool(want_loc) or bool(want_shape))
             if not want_blur:
-                if want_loc:   # a re-edit exported over a labelled copy: label it again
+                if want_loc or want_shape:
                     label(ref, src, dst)
                 fit(src, dst)   # local re-edit kept (shrunk if over the limit), just remember it
                 continue
@@ -1230,14 +1255,14 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None):
                 needs[src.name] = True
             else:
                 needs.pop(src.name, None)
-            if want_loc:
+            if want_loc or want_shape:
                 label(ref, src, dst)
             fit(src, dst)
             copied += 1
             continue
         if parked.get(src.name):
             tmp = parked[src.name].pop(0)
-            if have_blur == want_blur and have_loc == want_loc:
+            if have_blur == want_blur and have_loc == want_loc and have_shape == want_shape:
                 tmp.rename(dst)
                 renamed += 1
                 print(f'   ↷ {dst.name}: reordered')
@@ -1383,11 +1408,62 @@ def sync_route_cards(dest_dir, plan, size):
 
 # ---------------------------------------------------------------- location pins
 
-def stamp_location(path, ref, style, head, sub):
-    """Bake the place name into the copy at path (tools/location_pin.py) → the corner it went in."""
+def stamp_location(path, ref, style, head, sub, ratio=None):
+    """Bake the place name into the copy at path (tools/location_pin.py), after cropping it to `ratio` when
+    given → the corner it went in."""
     sys.path.insert(0, str(ROOT / 'tools'))
     import location_pin
-    return location_pin.stamp(path, path, head, sub, style, ref['trip'], ref['id'])
+    return location_pin.stamp(path, path, head, sub, style, ref['trip'], ref['id'], ratio)
+
+
+def shape_change(path, ratio):
+    """(old shape, new shape) labels when the image at path needs cropping to `ratio`, else None. Reads only
+    the header."""
+    from PIL import Image, ImageOps
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    if Path(path).suffix.lower() in ('.heic', '.heif'):
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    with Image.open(path) as im:
+        w, h = im.size[::-1] if im.getexif().get(0x0112) in (5, 6, 7, 8) else im.size
+    return (ratio_label(w / h), ratio_label(ratio)) if location_pin.crop_box(w, h, ratio) else None
+
+
+def crop_to_shape(path, ratio):
+    """Centre-crop the copy at path to `ratio` (width / height) in place, keeping its EXIF and colour
+    profile → (old shape, new shape) as labels, or None when it already has that shape."""
+    from PIL import Image, ImageOps
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    heic = Path(path).suffix.lower() in ('.heic', '.heif')
+    if heic:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    with Image.open(path) as im:
+        exif, icc = im.info.get('exif'), im.info.get('icc_profile')
+        img = ImageOps.exif_transpose(im)
+        img.load()
+    box = location_pin.crop_box(*img.size, ratio)
+    if not box:
+        return None
+    before = ratio_label(img.size[0] / img.size[1])
+    out = img.crop(box).convert('RGB')
+    kw = {'quality': 95}
+    if not heic:
+        kw['subsampling'] = 0
+    if exif:
+        try:   # the pixels are upright now: drop the orientation tag so nothing rotates them again
+            ex = Image.Exif()
+            ex.load(exif)
+            ex[0x0112] = 1
+            kw['exif'] = ex.tobytes()
+        except Exception:
+            pass
+    if icc:
+        kw['icc_profile'] = icc
+    out.save(path, 'HEIF' if heic else 'JPEG', **kw)
+    return before, ratio_label(ratio)
 
 
 def location_sigs(dest_dir, plan, overrides=()):
@@ -1447,22 +1523,38 @@ MAP_LONG_EDGE = 1350
 PLATFORM_SHAPE = {'ig': (0.8, 1.91), 'xhs': (0.75, 4 / 3)}
 
 
-def post_card_size(post, plan):
-    """The one shape every map card in this post is rendered at.
+def post_ratio(post, plan):
+    """The one shape (width / height) of every slide in this post.
 
-    A carousel locks every slide to the shape of the first, so the cards follow
-    the post's first photo, clamped to what the platform allows. A 9:16 frame
-    therefore becomes a 4:5 card on Instagram, never a 9:16 one.
-    """
+    A carousel shows every slide at the shape of the first, so the post follows
+    its first photo, clamped to what Instagram allows (4:5 to 1.91:1; the same
+    folder goes to Xiaohongshu): a 9:16 frame becomes 4:5. Pull crops every carousel
+    photo to it (crop_box) and renders the map cards at it, so the post folder
+    is exactly what goes out."""
     ar = 1.5
     for _, ref, _, _ in plan:
-        photos, _ = trip_manifest_photos(ref['trip'])
-        cand = (photos.get(ref['id']) or {}).get('ar')
+        cand = ref.get('ar')
+        if not cand:
+            photos, _ = trip_manifest_photos(ref['trip'])
+            cand = (photos.get(ref['id']) or {}).get('ar')
         if cand:
             ar = float(cand)
             break
-    lo, hi = PLATFORM_SHAPE['xhs' if post.get('platform') == 'xhs' else 'ig']
-    r = min(hi, max(lo, ar))
+    lo, hi = PLATFORM_SHAPE['ig']
+    return min(hi, max(lo, ar))
+
+
+def ratio_label(r):
+    for name, v in (('1:1', 1), ('4:5', 4 / 5), ('3:4', 3 / 4), ('4:3', 4 / 3), ('3:2', 1.5), ('16:9', 16 / 9),
+                    ('1.91:1', 1.91), ('2:3', 2 / 3), ('9:16', 9 / 16)):
+        if abs(r - v) < 0.01:
+            return name
+    return f'{r:.2f}:1'
+
+
+def post_card_size(post, plan):
+    """The size every map card in this post is rendered at: the post's shape (post_ratio)."""
+    r = post_ratio(post, plan)
     if r >= 1:
         return MAP_LONG_EDGE, round(MAP_LONG_EDGE / r)
     return round(MAP_LONG_EDGE * r), MAP_LONG_EDGE
@@ -1783,8 +1875,11 @@ def cmd_pull(args):
         cap_what = ' + '.join(w for w, v in (('account', account), ('song', song),
                                              ('caption', caption)) if v)
 
+        shape = post_ratio(post, plan) if plan else None
         if args.list or args.dry_run:
             size = post_card_size(post, plan)
+            if shape:
+                print(f"   ✂️  every photo cropped to {ratio_label(shape)} (the post's shape, from its first photo)")
             if cap_what:
                 print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
             sigs, notes = location_sigs(dest_dir, plan)
@@ -1792,7 +1887,8 @@ def cmd_pull(args):
                 print(f"   {n}")
             for i, ref, src, dst in plan:
                 big = '  (over 32 MB, shrunk to fit)' if _too_big(src) else ''
-                print(f"   {i:02d} {src}  →  {dst}{big}")
+                cut = shape_change(src, shape) if shape else None
+                print(f"   {i:02d} {src}  →  {dst}{big}" + (f"  (cropped {cut[0]} → {cut[1]})" if cut else ''))
                 if src.name in sigs:
                     style, head, sub = sigs[src.name].split('|', 2)
                     print(f"      📍 {head}" + (f" / {sub}" if sub else '') + f"  ({style})")
@@ -1826,7 +1922,7 @@ def cmd_pull(args):
             print(f"   {n}")
         copied, renamed, adopted = sync_post_dir(dest_dir, plan,
                                                  reblur=getattr(args, 'reblur', False),
-                                                 found=found, locs=sigs)
+                                                 found=found, locs=sigs, shape=shape)
         if sigs:
             # every label on this post, with the fix for a wrong one
             num = post.get('num')

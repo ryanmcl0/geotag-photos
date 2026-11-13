@@ -609,6 +609,13 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: #2a2a2a; color: #ddd;
   font-size: 12px; display: flex; align-items: center; justify-content: center;
 }
-.posts-places-input { flex: 1 1 auto; min-width: 0; }
-.posts-places-input::placeholder { color: #aaa; }
+.posts-places-row { align-items: flex-start; }
+.posts-places-num { margin-top: 6px; }
+.posts-places-state { margin-top: 9px; }
+.posts-places-stack { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.posts-places-stack .posts-song { padding: 5px 10px; }
+/* like the label on the photo: the name big and bold, the line under it small and spaced out */
+.posts-places-name { font-size: 16px !important; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.posts-places-line { font-size: 11px !important; letter-spacing: .14em; text-transform: uppercase; color: #aaa !important; }
+.posts-places-name::placeholder, .posts-places-line::placeholder { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .posts-places-state { flex: 0 0 auto; color: #666; font-size: 11px; width: 56px; }

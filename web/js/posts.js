@@ -2526,42 +2526,70 @@ window.Posts = (function () {
         const head = document.createElement('div');
         head.className = 'posts-places-head';
         head.textContent = '📍 Place names on pull';
-        head.title = 'Leave a field empty for the automatic name, or type "Name" or "Name / Region" ' +
-            '("off" for no label). Saved when you leave the field.';
+        head.title = 'The name and the line under it, as they go on the photo. Edit either one; ' +
+            'type "off" as the name for no label. Saved when you leave the field.';
         box.appendChild(head);
+        // locText is "Name" (automatic line under it) or "Name / Line" ("Name /" = no line).
+        const typedOf = ref => {
+            const t = ref.locText || '';
+            const i = t.indexOf('/');
+            return i === -1 ? [t.trim(), null] : [t.slice(0, i).trim(), t.slice(i + 1).trim()];
+        };
         const fields = [];
         pinned.forEach(([ref, idx]) => {
-            const row = document.createElement('label');
+            const row = document.createElement('div');
             row.className = 'posts-places-row';
             const num = document.createElement('span');
             num.className = 'posts-places-num';
             num.textContent = idx + 1;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'posts-song posts-places-input';
-            input.maxLength = 120;
-            input.value = ref.locText || '';
-            input.addEventListener('change', () => {
-                let v = input.value.trim().replace(/\s*\/\s*/, ' / ');
-                if (v === autoText(autoNames[autoKey(ref)])) v = '';    // same as automatic: keep it automatic
-                input.value = v;
+            const stack = document.createElement('div');
+            stack.className = 'posts-places-stack';
+            const mk = (cls, label) => {
+                const i = document.createElement('input');
+                i.type = 'text';
+                i.className = 'posts-song ' + cls;
+                i.maxLength = 60;
+                i.setAttribute('aria-label', `Photo ${idx + 1}: ${label}`);
+                i.addEventListener('input', () => { i.dataset.edited = '1'; });
+                return i;
+            };
+            const nameIn = mk('posts-places-name', 'place name');
+            const lineIn = mk('posts-places-line', 'line under the name');
+            const save = () => {
+                const a = autoNames[autoKey(ref)];
+                const [an, ar] = Array.isArray(a) ? [a[0] || '', a[1] || ''] : ['', ''];
+                const n = nameIn.value.trim() || an, r = lineIn.value.trim();
+                let v;
+                if (n.toLowerCase() === 'off') v = 'off';
+                else if (!n) v = '';
+                else if (n === an && r === ar) v = '';                 // as automatic: keep it automatic
+                else if (r === ar || (!r && !Array.isArray(a))) v = n;  // only the name changed
+                else v = r ? `${n} / ${r}` : `${n} /`;
                 editPhoto(root, post.id, ref, 'main', ph => { if (v) ph.locText = v; else delete ph.locText; });
-            });
+            };
+            nameIn.addEventListener('change', save);
+            lineIn.addEventListener('change', save);
+            stack.append(nameIn, lineIn);
             const state = document.createElement('span');
             state.className = 'posts-places-state';
-            row.append(num, input, state);
+            row.append(num, stack, state);
             box.appendChild(row);
-            fields.push([ref, input, state]);
+            fields.push([ref, nameIn, lineIn, state]);
         });
-        const fill = () => fields.forEach(([ref, input, state]) => {
+        const fill = () => fields.forEach(([ref, nameIn, lineIn, state]) => {
             const a = autoNames[autoKey(ref)];
-            input.placeholder = !SYNC_URL ? 'automatic name (shown on the local site)'
-                : a === 'pending' || a === undefined ? 'working out the automatic name…'
-                : a === 'missing' ? 'automatic name: restart the local site (the sync) to see it'
-                : autoText(a) || 'no position on record: type a name';
-            // The automatic name goes in the field itself, ready to edit (left as is, it stays automatic).
-            if (!ref.locText && !input.value && document.activeElement !== input) input.value = autoText(a);
-            state.textContent = ref.locText ? (ref.locText.toLowerCase() === 'off' ? 'no label' : 'typed') : 'automatic';
+            const auto = Array.isArray(a) ? [a[0] || '', a[1] || ''] : null;
+            const [tn, tr] = typedOf(ref);
+            nameIn.placeholder = !SYNC_URL ? 'automatic name (shown on the local site)'
+                : !auto && a !== 'missing' ? 'working out the automatic name…'
+                : !auto ? 'automatic name: restart the local site (the sync) to see it'
+                : auto[0] ? auto[0] : 'no position on record: type a name';
+            lineIn.placeholder = 'line under the name';
+            // Filled in as it will print, ready to edit; a field being typed in is left alone.
+            const put = (el, v) => { if (!el.dataset.edited && document.activeElement !== el) el.value = v; };
+            put(nameIn, tn || (auto ? auto[0] : ''));
+            put(lineIn, tr !== null ? tr : (auto ? auto[1] : ''));
+            state.textContent = ref.locText ? (tn.toLowerCase() === 'off' ? 'no label' : 'edited') : 'automatic';
         });
         fill();
         fetchAutoNames(pinned.map(([ref]) => ref), fill);

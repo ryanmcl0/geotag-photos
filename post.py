@@ -1536,8 +1536,8 @@ def location_sigs(dest_dir, plan, overrides=()):
         style = style if style in location_pin.STYLES else 'A'
         head, sub = location_pin.label_for(ref['trip'], ref['id'])
         if text:
-            given, _, region = text.partition(' / ')
-            head, sub = given.strip(), (region.strip() if region else (sub or ''))
+            given, slash, region = text.partition('/')
+            head, sub = given.strip(), (region.strip() if slash else (sub or ''))   # "Name /": no line
         if not head:
             notes.append(f'⚠️  📍 {i:02d}: no position on record, so no name: '
                          f'give one with --location {i} "Name"')

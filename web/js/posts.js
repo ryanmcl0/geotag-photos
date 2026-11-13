@@ -2559,6 +2559,8 @@ window.Posts = (function () {
                 : a === 'pending' || a === undefined ? 'working out the automatic name…'
                 : a === 'missing' ? 'automatic name: restart the local site (the sync) to see it'
                 : autoText(a) || 'no position on record: type a name';
+            // The automatic name goes in the field itself, ready to edit (left as is, it stays automatic).
+            if (!ref.locText && !input.value && document.activeElement !== input) input.value = autoText(a);
             state.textContent = ref.locText ? (ref.locText.toLowerCase() === 'off' ? 'no label' : 'typed') : 'automatic';
         });
         fill();

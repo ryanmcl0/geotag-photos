@@ -80,7 +80,7 @@ function tripFlags(context: EventContext<Env, string, unknown>): Promise<Record<
 // the static HTML are stripped — so the flag is read here, cached like tripFlags
 // (an isolate may live long past a flip). Missing doc / read error = off.
 const SETTINGS_TTL_MS = 5 * 60_000;
-type OwnerSettings = { highlightsEnabled?: boolean; bridgesPreview?: boolean };
+type OwnerSettings = { highlightsEnabled?: boolean; bridgesPreview?: boolean; plansEnabled?: boolean };
 // null = the doc couldn't be read; each flag decides what that means for it.
 let settingsCache: { at: number; data: Promise<OwnerSettings | null> } | null = null;
 
@@ -104,6 +104,13 @@ function ownerSettings(context: EventContext<Env, string, unknown>): Promise<Own
 
 async function highlightsEnabled(context: EventContext<Env, string, unknown>): Promise<boolean> {
     return (await ownerSettings(context))?.highlightsEnabled === true;
+}
+
+// Plans section: settings.plansEnabled, OFF unless set to true. While off, /plans
+// 404s even with the See All cookie and its nav links are stripped. The files are
+// still deployed; turning the flag on brings it straight back.
+async function plansEnabled(context: EventContext<Env, string, unknown>): Promise<boolean> {
+    return (await ownerSettings(context))?.plansEnabled === true;
 }
 
 // Public Bridges preview (China hub): settings.bridgesPreview, ON unless set to
@@ -376,6 +383,13 @@ const handle: PagesFunction<Env> = async (context) => {
         }
     }
 
+    // Plans switch: checked after the See All gate above, so a locked visitor still
+    // gets the usual unlock prompt; with the cookie and the switch off it's a 404.
+    if ((path === '/plans' || path === '/plans.html' || path.startsWith('/plans/')) &&
+        !(await plansEnabled(context))) {
+        return new Response('Not found', { status: 404 });
+    }
+
     if (path === '/collections/china.json' && await bridgesPreviewEnabled(context)) {
         const preview = await context.env.ASSETS.fetch(new URL('/collections/china.preview.json', url));
         if (preview.ok) {
@@ -398,9 +412,11 @@ const handle: PagesFunction<Env> = async (context) => {
     const contentType = response.headers.get('Content-Type') || '';
     if (contentType.includes('text/html')) {
         const stripHighlights = !(await highlightsEnabled(context));
-        if (stripHighlights || !allAccess) {
+        const stripPlans = !(await plansEnabled(context));
+        if (stripHighlights || stripPlans || !allAccess) {
             let rewriter = new HTMLRewriter();
             if (stripHighlights) rewriter = rewriter.on('a[href$="highlights.html"]', { element(el) { el.remove(); } });
+            if (stripPlans) rewriter = rewriter.on('a[href$="plans/"]', { element(el) { el.remove(); } });
             if (!allAccess) rewriter = rewriter.on('a[data-unlocked-only]', { element(el) { el.remove(); } });
             response = rewriter.transform(response);
         }

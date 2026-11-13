@@ -1309,6 +1309,12 @@ window.Posts = (function () {
                 'Off: the page does not exist anywhere on the site. ' +
                 'Flips may take up to 5 minutes to reach every visitor.',
                 on => setSetting('highlightsEnabled', on ? true : undefined)));
+            controls.appendChild(check('Enable Plans page',
+                st.plansEnabled === true,
+                'The See All gated trip plans section. Off: /plans returns 404 and its ' +
+                'menu links are hidden; nothing is deleted. ' +
+                'Flips may take up to 5 minutes to reach every visitor.',
+                on => setSetting('plansEnabled', on ? true : undefined)));
             if (st.highlightsEnabled === true) {
                 const key = activeTab === 'xhs' ? 'highlightsXhs' : 'highlightsIg';
                 controls.appendChild(check(

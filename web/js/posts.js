@@ -429,7 +429,8 @@ window.Posts = (function () {
         // A waitlisted photo already belongs to this post, so re-adding it is a
         // duplicate, not a new photo (promote it from the waitlist instead).
         const have = new Set(post.photos.map(keyOf).concat(waitOf(post).map(keyOf)));
-        const havePhone = new Set((post.phone || []).map(keyOf));
+        // A phone photo may also have been moved into the carousel.
+        const havePhone = new Set((post.phone || []).concat(post.photos).map(keyOf));
         let added = 0, dupes = 0, hitCap = false, phoneAdded = 0;
         refs.forEach(ref => {
             // Phone-library items live in their own bucket: on IG they are
@@ -838,6 +839,13 @@ window.Posts = (function () {
         const loc = button('Location pin: the place name baked into a corner on pull (press for the next style)', cycleLoc);
         const route = button('Trip route: one map card of the whole trip\'s route on pull (needs a GPX)', toggleRoute);
         const wait = set === 'main' ? button('Move to the waitlist (keeps it on this post, out of the carousel or Phone section)', demoteToWaitlist) : null;
+        // Phone photos only: switch between the Phone section and the carousel.
+        const swap = set === 'main' ? button('Move between the Phone section and the post carousel',
+            (r, id, ref) => {
+                const where = photoState(id, ref, set).where;
+                if (where === 'phone') return moveSection(r, id, ref, 'phone', 'photos');
+                if (where === 'carousel') return moveSection(r, id, ref, 'photos', 'phone');
+            }) : null;
         const rm = button('Remove from this post', removeFromPost);
         const status = document.createElement('span');
         status.className = 'posts-manage-status';
@@ -862,9 +870,14 @@ window.Posts = (function () {
             if (wait) wait.textContent = '⇩ Waitlist';
             rm.textContent = '✕ Remove';
             // Off the carousel, the actions don't apply: show where it went instead.
-            map.hidden = !inCarousel;
-            loc.hidden = !inCarousel;
-            route.hidden = !inCarousel;
+            const phoneRef = isPhoneRef(ref);
+            map.hidden = !inCarousel || phoneRef;
+            loc.hidden = !inCarousel || phoneRef;
+            route.hidden = !inCarousel || phoneRef;
+            if (swap) {
+                swap.textContent = inPhone ? '⇧ Into post' : '📱 Back to Phone';
+                swap.hidden = !phoneRef || !(inCarousel || inPhone) || !(ref && ref.id);
+            }
             [blur, wait, rm].forEach(b => { if (b) b.hidden = !(inCarousel || inPhone); });
             status.textContent = st.where === 'waitlist' ? '⇩ On the waitlist'
                 : st.where === 'gone' ? 'Removed from this post' : '';
@@ -2167,6 +2180,18 @@ window.Posts = (function () {
                 // Same soft "take it out" as the carousel's ⇩: park the phone
                 // photo on the waitlist instead of dropping it (photos only —
                 // the waitlist renders thumbnails, which videos don't have).
+                // Promote a phone photo into the main carousel, where it is
+                // pulled and posted like the camera photos (end of the order).
+                if (set === 'main' && ref.id) {
+                    const up = document.createElement('button');
+                    up.type = 'button';
+                    up.textContent = '⇧';
+                    up.title = 'Move into the post (the carousel that gets posted)';
+                    up.style.cssText = 'position:absolute;top:3px;right:57px;background:rgba(0,0,0,.65);' +
+                        'color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px';
+                    up.addEventListener('click', () => moveSection(root, post.id, ref, 'phone', 'photos'));
+                    cell.appendChild(up);
+                }
                 if (set === 'main' && ref.id) {
                     const demote = document.createElement('button');
                     demote.type = 'button';
@@ -2557,6 +2582,61 @@ window.Posts = (function () {
         });
     }
 
+    const isPhoneRef = ref => !!(ref && ref.trip && ref.trip.startsWith('phone-'));
+
+    /** Move a phone photo between the Phone section and the carousel of the
+     *  same draft, marks kept. Into the carousel it goes on the end and counts
+     *  toward the cap (on XHS it already counted, so the total is unchanged);
+     *  the orientation lock applies as for any carousel add. Undo reverses it. */
+    function moveSection(root, postId, ref, from, to) {
+        const p0 = doc && doc.posts.find(x => x.id === postId);
+        if (!p0) return;
+        const xhs = platformOf(p0) === 'xhs';
+        if (to === 'photos') {
+            if (!xhs && countOf(p0) >= capOf(p0)) { toast(fullMsg(p0, 'photos')); return; }
+            const base = postOrientation(p0), o = orientOf(ref.ar);
+            if (base && o && base !== o && !confirm(
+                `This post is ${base} (set by its first photo) but this photo is ${o}. Move it in anyway?`)) return;
+        }
+        const result = {};
+        let at = -1;
+        return mutate(posts => {
+            const p = posts.find(x => x.id === postId);
+            if (!p || sectionOf(p, ref) !== from) return;
+            if (to === 'photos' && !xhs && countOf(p) >= capOf(p)) { result.full = true; return; }
+            const [it, i] = takeOut(p, from, ref);
+            if (!it) return;
+            at = i;
+            if (to === 'photos') {
+                const clean = cleanRef(it);
+                if (it.blur) clean.blur = true;
+                p.photos.push(clean);
+            } else {
+                const clean = cleanPhoneRef(it);
+                if (it.blur) clean.blur = true;
+                putBack(p, 'phone', clean, (p.phone || []).length);
+            }
+            result.ok = true;
+            result.name = p.name;
+            result.tally = tallyOf(p, 'photos');
+        }).then(okSave => {
+            renderManager(root);
+            if (result.full) { toast(fullMsg(p0, 'photos')); return; }
+            if (!okSave || !result.ok) return;
+            toast(to === 'photos' ? `Moved into "${result.name}"${result.tally}`
+                                  : `Moved to the Phone section of "${result.name}"`,
+                { label: 'Undo', fn: () => {
+                mutate(posts => {
+                    const p = posts.find(x => x.id === postId);
+                    if (!p || sectionOf(p, ref) !== to) return;
+                    if (from === 'photos' && !xhs && countOf(p) >= capOf(p)) return;
+                    const [it] = takeOut(p, to, ref);
+                    if (it) putBack(p, from, it, at);
+                }).then(() => renderManager(root));
+            } });
+        });
+    }
+
     /** Take the photo (or Phone video) off the post, after a confirm. Main
      *  drafts keep it in the card's History; auto suggestions are regenerated
      *  wholesale, so no History. */
@@ -2841,9 +2921,22 @@ window.Posts = (function () {
         });
 
         controls.insertBefore(blurBtn, rm);
-        controls.insertBefore(mapBtn, rm);
-        controls.insertBefore(locBtn, rm);
-        controls.insertBefore(routeBtn, rm);
+        // A phone photo moved into the carousel has no trip GPS or route on
+        // record, so the map, place-name and route marks are left off it.
+        const phoneRef = isPhoneRef(ref);
+        if (!phoneRef) {
+            controls.insertBefore(mapBtn, rm);
+            controls.insertBefore(locBtn, rm);
+            controls.insertBefore(routeBtn, rm);
+        }
+        if (phoneRef && set === 'main') {
+            const down = document.createElement('button');
+            down.type = 'button';
+            down.textContent = '📱';
+            down.title = 'Move back to the Phone section (out of the carousel)';
+            down.addEventListener('click', () => moveSection(root, post.id, ref, 'photos', 'phone'));
+            controls.insertBefore(down, rm);
+        }
         // Demote sits next to remove: the softer of the two "take it out" actions.
         if (set === 'main') controls.insertBefore(demote, rm);
         // Pull marks stack down the top-right corner (the order number owns the

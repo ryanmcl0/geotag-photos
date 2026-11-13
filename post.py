@@ -1768,7 +1768,8 @@ def cmd_pull(args):
         prev = previous_sources(dest_dir)
         plan = []
         for i, ref in enumerate(post['photos'], 1):
-            src, why = resolve_source(ref['trip'], ref['id'], prev.get((ref['trip'], ref['id'])))
+            # A phone photo moved into the carousel resolves to its phone original.
+            src, why = resolve_wait(ref, prev.get((ref['trip'], ref['id'])))
             if src is None:
                 print(f"   ⚠️  {i:02d} {ref['trip']}/{ref['id']}: {why}")
                 unresolved += 1

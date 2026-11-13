@@ -377,6 +377,9 @@ def stage_image(src, dst):
     source as it displays (EXIF rotation applied), the staged size, and a note when the colour profile could not
     be converted. Only reads src."""
     from PIL import Image, ImageCms, ImageOps
+    if Path(src).suffix.lower() in ('.heic', '.heif'):
+        from pillow_heif import register_heif_opener   # phone photos (carousel or Phone items)
+        register_heif_opener()
     note = None
     with Image.open(src) as im:
         size = im.size[::-1] if im.getexif().get(0x0112) in (5, 6, 7, 8) else im.size   # as it displays

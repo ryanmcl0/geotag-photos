@@ -1,5 +1,7 @@
 <!-- Body of web/work-with-me.html. build_work_with_me.py adds the head, the site nav,
-     the footer, the reel data and the China map ({{CHINA_SVG}}). Photos carry data-key
+     the footer, the reel data and the China map ({{CHINA_SVG}}).
+     Blocks wrapped in hidden:start / hidden:end marker comments are kept here but
+     stripped from the built page (not published, not even as a comment). Photos carry data-key
      (no src): js/work-with-me.js prefixes the host-aware base. -->
 <main class="wwm">
 <header class="wwm-hero">
@@ -17,7 +19,7 @@
 
 </header>
 
-<a class="cue" href="#trips"><span>Recent expeditions, exploring China and working together</span><svg viewBox="0 0 16 16"><path d="M3 6l5 5 5-5"/></svg></a>
+<a class="cue" href="#trips"><span>Recent expeditions and working together</span><svg viewBox="0 0 16 16"><path d="M3 6l5 5 5-5"/></svg></a>
 
 <!-- ======================= recent expeditions ======================= -->
 <section class="sec" id="trips">
@@ -96,6 +98,7 @@
         </div>
       </div>
     </article>
+<!-- hidden:start Hubei, Hunan & Guangxi tile -->
     <article class="mini">
       <div class="ph"><img data-key="2024-hubei-hunan-deepest-china/display/RM100121.webp" alt="Sandstone pillars, Hunan" loading="lazy"></div>
       <div class="t">
@@ -110,6 +113,7 @@
         </div>
       </div>
     </article>
+<!-- hidden:end -->
     <article class="mini">
       <div class="ph"><img data-key="2024-mongolia/display/RM106058.webp" alt="A Jimny under a storm in the Gobi" loading="lazy"></div>
       <div class="t">
@@ -124,6 +128,7 @@
         </div>
       </div>
     </article>
+<!-- hidden:start Road to Ladakh tile -->
     <article class="mini">
       <div class="ph"><img data-key="2024-leh-manali/display/RM100397.webp" alt="Sheep on the road to Ladakh" loading="lazy"></div>
       <div class="t">
@@ -138,6 +143,8 @@
         </div>
       </div>
     </article>
+<!-- hidden:end -->
+<!-- hidden:start Deep winter in Kyrgyzstan tile -->
     <article class="mini">
       <div class="ph"><img data-key="2024-kyrgyzstan/display/RM108307-Enhanced-NR.webp" alt="Headlights on a snowy mountain road, Kyrgyzstan" loading="lazy"></div>
       <div class="t">
@@ -151,9 +158,11 @@
         </div>
       </div>
     </article>
+<!-- hidden:end -->
   </div>
 </section>
 
+<!-- hidden:start Exploring China map section -->
 <!-- ======================= exploring China ======================= -->
 <section class="sec mapsec">
   <div class="map" id="china-map">{{CHINA_SVG}}</div>
@@ -170,6 +179,7 @@
     </div>
   </div>
 </section>
+<!-- hidden:end -->
 
 <!-- ======================= explore the site ======================= -->
 <section class="sec">

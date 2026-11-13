@@ -87,6 +87,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1497,7 +1498,8 @@ def location_sigs(dest_dir, plan, overrides=()):
     A or C), or named with --location at pull. This pull's --location overrides are remembered in the
     post folder's .pull_state.json (by source name, so they survive reorders): "Name" replaces the name
     and keeps the worked-out region line, "Name / Region" sets both, "auto" forgets the override, "off"
-    keeps that photo unlabelled. → (sigs, notes to print)."""
+    keeps that photo unlabelled. A name typed on the Posts page (ref.locText, same forms) wins over a
+    remembered --location, and one given in this pull wins over both. → (sigs, notes to print)."""
     sys.path.insert(0, str(ROOT / 'tools'))
     import location_pin
     state_path = dest_dir / '.pull_state.json'
@@ -1508,12 +1510,14 @@ def location_sigs(dest_dir, plan, overrides=()):
     texts = state.setdefault('loc_text', {})
     by_num = {i: src for i, _, src, _ in plan}
     notes = []
+    given_now = set()
     for num, text in overrides:
         num = int(num) if str(num).isdigit() else None
         src = by_num.get(num)
         if src is None:
             notes.append(f'⚠️  --location: no photo with that number in this post (its NN_ prefix)')
             continue
+        given_now.add(src.name)
         if text.strip().lower() == 'auto':
             texts.pop(src.name, None)
         else:
@@ -1522,7 +1526,8 @@ def location_sigs(dest_dir, plan, overrides=()):
         state_path.write_text(json.dumps(state, indent=1))
     sigs = {}
     for i, ref, src, _ in plan:
-        text = texts.get(src.name)
+        # --location given in this pull, then the name typed on the Posts page, then a remembered --location
+        text = texts.get(src.name) if src.name in given_now else ((ref.get('loc') and ref.get('locText')) or texts.get(src.name))
         if text and text.lower() == 'off':
             continue
         style = ref.get('loc')
@@ -1540,6 +1545,29 @@ def location_sigs(dest_dir, plan, overrides=()):
         # the label look's version last, so a change to it relabels copies pulled before
         sigs[src.name] = f'{style}|{head}|{sub or ""}|v{location_pin.LOOK}'
     return sigs, notes
+
+
+_label_cache = {}
+
+
+def place_labels(keys):
+    """{"trip/id": [name, region]} for the localhost Posts page: the place name pull would bake into each
+    photo when nothing is typed for it ([null, null] when it has no position on record)."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    out = {}
+    for key in keys:
+        trip, _, pid = key.partition('/')
+        if not re.fullmatch(r'[\w .,&()+\'-]+', trip) or not re.fullmatch(r'[\w .,&()+\'-]+', pid) \
+                or '..' in key or not (ROOT / 'web' / 'trips' / trip).is_dir():
+            continue
+        if key not in _label_cache:
+            try:
+                _label_cache[key] = list(location_pin.label_for(trip, pid))
+            except Exception:
+                _label_cache[key] = [None, None]
+        out[key] = _label_cache[key]
+    return out
 
 
 # ---------------------------------------------------------------- map cards
@@ -2547,7 +2575,7 @@ class RemoteMirror:
         print(f"   ↳ {st['message']}")
 
     def serve_control(self, port=SYNC_PORT):
-        """127.0.0.1:<port>: GET /status, POST /sync, for the localhost Posts page
+        """127.0.0.1:<port>: GET /status, POST /sync, GET /labels?r=trip/id (place_labels), for the localhost Posts page
         and the launcher. Returns the server, or None if the port is taken (another
         mirror already runs: the caller should not start a second one)."""
         mirror = self
@@ -2578,6 +2606,9 @@ class RemoteMirror:
             def do_GET(self):
                 if self.path.startswith('/status'):
                     self._send(200, mirror.status)
+                elif self.path.startswith('/labels'):
+                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    self._send(200, place_labels(q.get('r', [])[:60]))
                 else:
                     self._send(404, {'error': 'not found'})
 

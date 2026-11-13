@@ -1936,6 +1936,10 @@ window.Posts = (function () {
             strip.appendChild(hint);
         }
         card.appendChild(strip);
+        if (set === 'main') {
+            const names = placeNamesRow(root, post);
+            if (names) card.appendChild(names);
+        }
 
         // Caption + song for the post; ./post.py pull writes both into the
         // post folder as caption.txt. Saved on blur, empty clears the field.
@@ -2494,6 +2498,73 @@ window.Posts = (function () {
     // the trip's whole GPS route at the post's shape (or says the trip has no GPX).
     const toggleRoute = (root, postId, ref, set) =>
         editPhoto(root, postId, ref, set, ph => { if (ph.route) delete ph.route; else ph.route = true; });
+
+    // The place names pull will bake in, one field per 📍 photo, under the strip.
+    // Empty field = the automatic name (worked out by the local sync, ./post.py
+    // mirror, from the same rosters and place lists pull uses); anything typed is
+    // saved on the photo as locText ("Name" or "Name / Region", "off" = none).
+    const autoNames = {};          // "trip/id" -> [name, region] | 'pending' | 'missing'
+    const autoKey = ref => `${ref.trip}/${ref.id}`;
+    const autoText = v => Array.isArray(v) && v[0] ? v[0] + (v[1] ? ' / ' + v[1] : '') : '';
+    function fetchAutoNames(refs, onDone) {
+        const want = refs.map(autoKey).filter(k => !(k in autoNames));
+        if (!want.length || !SYNC_URL) return;
+        want.forEach(k => { autoNames[k] = 'pending'; });
+        fetch(SYNC_URL + '/labels?' + want.map(k => 'r=' + encodeURIComponent(k)).join('&'), { cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : {}))
+            .catch(() => ({}))
+            .then(got => {
+                want.forEach(k => { autoNames[k] = got[k] || 'missing'; });
+                onDone();
+            });
+    }
+    function placeNamesRow(root, post) {
+        const pinned = post.photos.map((ref, idx) => [ref, idx]).filter(([ref]) => ref.loc && !isPhoneRef(ref));
+        if (!pinned.length) return null;
+        const box = document.createElement('div');
+        box.className = 'posts-places';
+        const head = document.createElement('div');
+        head.className = 'posts-places-head';
+        head.textContent = '📍 Place names on pull';
+        head.title = 'Leave a field empty for the automatic name, or type "Name" or "Name / Region" ' +
+            '("off" for no label). Saved when you leave the field.';
+        box.appendChild(head);
+        const fields = [];
+        pinned.forEach(([ref, idx]) => {
+            const row = document.createElement('label');
+            row.className = 'posts-places-row';
+            const num = document.createElement('span');
+            num.className = 'posts-places-num';
+            num.textContent = idx + 1;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'posts-song posts-places-input';
+            input.maxLength = 120;
+            input.value = ref.locText || '';
+            input.addEventListener('change', () => {
+                let v = input.value.trim().replace(/\s*\/\s*/, ' / ');
+                if (v === autoText(autoNames[autoKey(ref)])) v = '';    // same as automatic: keep it automatic
+                input.value = v;
+                editPhoto(root, post.id, ref, 'main', ph => { if (v) ph.locText = v; else delete ph.locText; });
+            });
+            const state = document.createElement('span');
+            state.className = 'posts-places-state';
+            row.append(num, input, state);
+            box.appendChild(row);
+            fields.push([ref, input, state]);
+        });
+        const fill = () => fields.forEach(([ref, input, state]) => {
+            const a = autoNames[autoKey(ref)];
+            input.placeholder = !SYNC_URL ? 'automatic name (shown on the local site)'
+                : a === 'pending' || a === undefined ? 'working out the automatic name…'
+                : a === 'missing' ? 'automatic name: start the local site to see it'
+                : autoText(a) || 'no position on record: type a name';
+            state.textContent = ref.locText ? (ref.locText.toLowerCase() === 'off' ? 'no label' : 'typed') : 'automatic';
+        });
+        fill();
+        fetchAutoNames(pinned.map(([ref]) => ref), fill);
+        return box;
+    }
 
     const cycleLoc = (root, postId, ref, set) =>
         editPhoto(root, postId, ref, set, ph => {

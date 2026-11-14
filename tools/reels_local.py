@@ -46,6 +46,8 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  (any depth): [{"id": "review/<folder>/<file>", "folder", "name", "size", "mtime"}].
                                  The Music pool section adds one by its id; the video project's queue_sync.py copies
                                  it into the music library (never moves it) at the next sync.
+    GET  /reels/music/uses       the stretch of each song its source Instagram reel used (the video project's
+                                 songuse.py → editor/vlog/_music/song_uses.json), for the Music section's scrub bars
     GET/HEAD /reels/music/play?ref=<id>   one song, to listen to on the page (Range support, streamed): a review
                                  file by its "review/<folder>/<file>" id, inside a review folder only; a library song
                                  by its "library/<track id>" id, looked up in web/phone/reels/music.json (the video
@@ -95,6 +97,7 @@ DOWNLOADS = Path.home() / "Downloads"
 REVIEW_GLOB = "reel-song-candidates-*"
 MUSIC_ROOTS = [Path("/Volumes/Crucial X9/music"), Path.home() / "Downloads" / "Edit music"]
 MUSIC_MANIFEST = ROOT / "music.json"
+SONG_USES = Path("/Volumes/Crucial X9/editor/vlog/_music/song_uses.json")   # the video project's songuse.py
 AUDIO_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav",
                ".flac": "audio/flac", ".ogg": "audio/ogg"}
 MEDIA_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".jpg": "image/jpeg",
@@ -616,6 +619,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, business_doc())
         if self.path.split("?")[0] == "/reels/music/play":
             return self._song(False)
+        if self.path.split("?")[0] == "/reels/music/uses":
+            return self._json(200, read(SONG_USES, {"songs": {}}))
         if self.path.split("?")[0] == "/reels/music/review":
             return self._json(200, {"folders": str(DOWNLOADS / REVIEW_GLOB), "files": review_songs()})
         if self.path.split("?")[0] == "/reveal":

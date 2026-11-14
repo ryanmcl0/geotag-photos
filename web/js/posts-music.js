@@ -44,6 +44,7 @@ window.PostsMusic = (function () {
     let query = '';
     let showAllRemoved = false;
     let player = null;              // {audio, id}
+    let uses = {};                  // song_key → {file, duration, uses: [{start, end, reel}]} (songuse.py, via the helper)
     let note = '';
 
     function el(tag, cls, text) {
@@ -82,6 +83,20 @@ window.PostsMusic = (function () {
         } catch (e) { man = null; }
         return man;
     }
+    // the stretch of each song its source Instagram reel used (video project's songuse.py, read by the helper)
+    async function fetchUses() {
+        try {
+            const r = await fetch(`${API}/reels/music/uses`, { cache: 'no-store' });
+            if (r.ok) uses = ((await r.json()) || {}).songs || {};
+        } catch (e) { /* the helper is older or not running: no stretches */ }
+        return uses;
+    }
+    // the same key as songuse.song_key: the file's name without its extension and "(… reel)" / "(youtube)" notes
+    function songKey(file) {
+        return String(file || '').toLowerCase().replace(/\.[a-z0-9]+$/, '')
+            .replace(/\s*\((?:[^)]*\breel\b[^)]*|youtube)\)/g, '').replace(/\s+/g, ' ').trim();
+    }
+
     async function fetchReview() {
         try {
             const r = await fetch(`${API}/reels/music/review`, { cache: 'no-store' });
@@ -194,6 +209,107 @@ window.PostsMusic = (function () {
     }
 
     // ── listening ──
+    // start (or switch to) a song; then, at its metadata, jump to frac of it (a click on its scrub bar)
+    function start(id, frac) {
+        if (player && player.id === id) {
+            if (frac !== undefined && player.audio.duration) player.audio.currentTime = frac * player.audio.duration;
+            if (player.audio.paused) player.audio.play().catch(() => {});
+            return;
+        }
+        if (player) player.audio.pause();
+        const audio = new Audio(`${API}/reels/music/play?ref=${encodeURIComponent(id)}`);
+        player = { audio, id };
+        audio.addEventListener('ended', redraw);
+        audio.addEventListener('pause', redraw);
+        audio.addEventListener('timeupdate', paintScrub);
+        audio.addEventListener('loadedmetadata', () => {
+            if (frac !== undefined) audio.currentTime = frac * audio.duration;
+            paintScrub();
+        }, { once: true });
+        audio.addEventListener('error', () => {
+            note = 'Can\'t play that one: the file isn\'t there, or the local helper is older than this page ' +
+                '(restart ./serve.sh) or not running';
+            player = null;
+            redraw();
+        });
+        audio.play().then(redraw, () => {});
+    }
+
+    // the scrub bar under a song: click or drag anywhere to play from there; the stretch its source reel used is
+    // marked (owner 2026-11-14: "make these songs possible to scrub through … highlight the parts of the song that
+    // are used in the Instagram reels")
+    function scrubBar(id, file, durHint) {
+        const u = uses[songKey(file)] || null;
+        const dur = () => (player && player.id === id && player.audio.duration) || (u && u.duration) || durHint || 0;
+        const box = el('div', 'pm-scrub');
+        box.dataset.id = id;
+        const track = el('div', 'pm-track');
+        const d0 = dur();
+        ((u && u.uses) || []).forEach(x => {
+            if (!d0) return;
+            const m = el('div', 'pm-used');
+            m.style.left = `${(100 * x.start / d0).toFixed(2)}%`;
+            m.style.width = `${Math.max(0.6, 100 * (x.end - x.start) / d0).toFixed(2)}%`;
+            m.dataset.start = String(x.start);
+            m.title = `Used in its Instagram reel: ${fmtDur(x.start)}–${fmtDur(x.end)} (click to play from there)`;
+            track.appendChild(m);
+        });
+        track.appendChild(el('div', 'pm-fill'));
+        track.appendChild(el('div', 'pm-knob'));
+        box.appendChild(track);
+        box.appendChild(el('span', 'pm-time', d0 ? `0:00 / ${fmtDur(d0)}` : ''));
+        const at = e => {
+            const r = track.getBoundingClientRect();
+            return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+        };
+        let dragging = false;
+        track.addEventListener('pointerdown', e => {
+            e.preventDefault();
+            dragging = true;
+            try { track.setPointerCapture(e.pointerId); } catch (err) { /* old browser */ }
+            const s0 = e.target.dataset && e.target.dataset.start;     // a click on the marked stretch: from its start
+            start(id, s0 && d0 ? Number(s0) / d0 : at(e));
+        });
+        track.addEventListener('pointermove', e => {
+            if (dragging && player && player.id === id && player.audio.duration) {
+                player.audio.currentTime = at(e) * player.audio.duration;
+                paintScrub();
+            }
+        });
+        const stop = () => { dragging = false; };
+        track.addEventListener('pointerup', stop);
+        track.addEventListener('pointercancel', stop);
+        if (u && u.uses && u.uses.length) {
+            const line = el('div', 'pm-usedline');
+            line.appendChild(document.createTextNode('Used in its Instagram reel: '));
+            u.uses.forEach((x, k) => {
+                if (k) line.appendChild(document.createTextNode(', '));
+                const a = el('a', '', `${fmtDur(x.start)}–${fmtDur(x.end)}`);
+                a.href = x.reel;
+                a.target = '_blank';
+                a.rel = 'noopener';
+                a.title = 'Open the reel on Instagram';
+                line.appendChild(a);
+            });
+            box.appendChild(line);
+        }
+        return box;
+    }
+
+    // the playing song's bar(s): fill, knob and time, without a redraw
+    function paintScrub() {
+        if (!panelEl || !player) return;
+        const a = player.audio;
+        panelEl.querySelectorAll('.pm-scrub').forEach(b => {
+            const mine = b.dataset.id === player.id;
+            const f = mine && a.duration ? a.currentTime / a.duration : 0;
+            b.querySelector('.pm-fill').style.width = `${(100 * f).toFixed(2)}%`;
+            b.querySelector('.pm-knob').style.left = `${(100 * f).toFixed(2)}%`;
+            b.classList.toggle('on', mine);
+            if (mine && a.duration) b.querySelector('.pm-time').textContent = `${fmtDur(a.currentTime)} / ${fmtDur(a.duration)}`;
+        });
+    }
+
     function playButton(id, label) {
         const b = el('button', 'reels-mini pm-play', player && player.id === id && !player.audio.paused ? '❚❚' : '▶');
         b.type = 'button';
@@ -204,18 +320,7 @@ window.PostsMusic = (function () {
                 redraw();
                 return;
             }
-            if (player) player.audio.pause();
-            const audio = new Audio(`${API}/reels/music/play?ref=${encodeURIComponent(id)}`);
-            player = { audio, id };
-            audio.addEventListener('ended', redraw);
-            audio.addEventListener('pause', redraw);
-            audio.addEventListener('error', () => {
-                note = 'Can\'t play that one: the file isn\'t there, or the local helper is older than this page ' +
-                    '(restart ./serve.sh) or not running';
-                player = null;
-                redraw();
-            });
-            audio.play().then(redraw, () => {});
+            start(id);
         });
         return b;
     }
@@ -241,6 +346,7 @@ window.PostsMusic = (function () {
             r.a && r.a !== '—' ? `A ${r.a}` : null, r.b && r.b !== '—' ? `B ${r.b}` : null,
             r.sections_from === 'measured' ? 'sections measured by the Mac: check by ear' : null].filter(Boolean);
         if (meta.length) main.appendChild(el('div', 'pm-meta', meta.join(' · ')));
+        main.appendChild(scrubBar(line.id, r.file_name || line.file_name || '', r.duration));
         const st = statusLine(line);
         if (st) main.appendChild(st);
         row.appendChild(main);
@@ -312,6 +418,7 @@ window.PostsMusic = (function () {
         main.appendChild(head);
         const meta = [r.duration ? fmtDur(r.duration) : null, r.sung ? 'sung' : null, extra].filter(Boolean);
         if (meta.length) main.appendChild(el('div', 'pm-meta', meta.join(' · ')));
+        main.appendChild(scrubBar(r.in_library ? `library/${r.in_library}` : r.id, r.name || r.file_name || '', r.duration));
         row.appendChild(main);
         const btns = el('div', 'pq-btns');
         const b = el('button', 'reels-mini pm-add', 'Add');
@@ -647,6 +754,7 @@ window.PostsMusic = (function () {
         panelEl.querySelectorAll('[data-keep]').forEach(t => {
             if (typed[t.dataset.keep] && !t.value) t.value = typed[t.dataset.keep];
         });
+        paintScrub();
         if (focus) {
             const t = panelEl.querySelector(`[data-keep="${focus}"]`);
             if (t) { t.focus(); try { t.setSelectionRange(pos, pos); } catch (e) { /* not a text field */ } }
@@ -662,7 +770,7 @@ window.PostsMusic = (function () {
         const refresh = (first) => {
             const typing = document.activeElement && panelEl.contains(document.activeElement) && !first;
             if (typing) return;
-            Promise.all([fetchDoc().catch(() => null), fetchManifest(), fetchReview()]).then(redraw, redraw);
+            Promise.all([fetchDoc().catch(() => null), fetchManifest(), fetchReview(), fetchUses()]).then(redraw, redraw);
         };
         refresh(true);
         clearInterval(timer);

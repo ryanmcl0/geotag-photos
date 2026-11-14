@@ -482,12 +482,12 @@ window.PostsReview = (function () {
             const before = row.state;
             const d = decision(row.r);
             const changed = JSON.stringify(before) !== JSON.stringify(d);
-            const wasPlaying = !!row.video && !row.video.paused;
             row.state = d;
             paint(row);                                 // a judged reel stops playing here
             if (row.rejectSlot && !d && changed) drawReject(row);
-            // the reel being looked at was just judged: on to the next one (playing on if this one was playing)
-            if (!before && d && i === focusAt) step(1, wasPlaying);
+            // the reel being looked at was just judged: on to the next one, which starts playing (owner 2026-11-14:
+            // "when I provide feedback … and it jumps to the next reel, it doesn't start playing automatically, but I want it to")
+            if (!before && d && i === focusAt) step(1, true);
         });
         paintHead();
         paintMore();

@@ -23,6 +23,13 @@
  *              local helper (POST /reels/feedback → web/phone/reels/reel_feedback.json) for the reel builders to act
  *              on; the folded line shows it. Undo takes the reel off the shortlist and withdraws the note.
  *   Reject…    a hard reject; the reason is optional ("No reason given" when nothing is written).
+ *   ★1–★5      (owner 2026-11-14: "as well as p for post i want to be able to give a 1-5 star rating. those count as
+ *              'post'"): Post with how good it is. Keys 1–5. The stars are kept by the local helper (POST /reels/rating
+ *              → web/phone/reels/reel_ratings.json) for the reel builders to learn from; Undo withdraws them too.
+ *
+ * Posts ▸ Reels ▸ Reviewed (reviewedPanel, owner 2026-11-14: "another tab for reviewed which tracks everything that
+ * i've already reviewed and given feedback"): every reel judged, last judged first, with its verdict, stars, note or
+ * reason; filter by verdict and trip; play it; change the stars of a posted one; Undo sends it back to Review.
  *
  * Hundreds of reels: a page of 12 at a time ("Show 12 more", or moving past the last one), each video
  * preload="none" with its cover as the poster, so nothing loads until it is played. Videos stream from the local
@@ -47,6 +54,8 @@ window.PostsReview = (function () {
     let listening = false;
     let notes = {};                  // reel id → its open feedback note (reel_feedback.json's item)
     let notesP = null;
+    let ratings = {};                // reel id → {stars, time} (reel_ratings.json's item)
+    let ratingsP = null;
 
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -84,10 +93,36 @@ window.PostsReview = (function () {
         }).then(r => (r.ok ? r.json() : null)).then(doc => { if (doc) takeNotes(doc); return !!doc; }).catch(() => false);
     }
 
+    // ── stars (the local helper keeps them too) ──
+    function takeRatings(doc) {
+        ratings = {};
+        const items = (doc && doc.items) || {};
+        Object.keys(items).forEach(id => {
+            const it = items[id];
+            if (it && it.stars >= 1 && it.stars <= 5) ratings[id] = it;
+        });
+    }
+    function loadRatings() {
+        if (!ratingsP) {
+            ratingsP = fetch(api() + '/reels/ratings', { cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null)).then(takeRatings).catch(() => {});
+        }
+        return ratingsP;
+    }
+    // {id, stars} rates the reel, {id, undo: true} withdraws it → true when the helper took it
+    function sendRating(body) {
+        return fetch(api() + '/reels/rating', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        }).then(r => (r.ok ? r.json() : null)).then(doc => { if (doc) takeRatings(doc); return !!doc; }).catch(() => false);
+    }
+    const starText = n => '★'.repeat(n) + '☆'.repeat(5 - n);
+
     // what has been decided about a reel, or null
     function decision(r) {
-        const d = window.PostsQueue ? PostsQueue.decisionOf(r.path) : null;
-        if (d) return (d.kind === 'shortlist' && notes[r.id]) ? Object.assign({}, d, { note: notes[r.id].note }) : d;
+        const d0 = window.PostsQueue ? PostsQueue.decisionOf(r.path) : null;
+        const d = d0 && (d0.kind === 'queue' || d0.kind === 'posted') && ratings[r.id]
+            ? Object.assign({}, d0, { stars: ratings[r.id].stars, rated: ratings[r.id].time }) : d0;
+        if (d) return (d.kind === 'shortlist' && notes[r.id]) ? Object.assign({}, d, { note: notes[r.id].note, noted: notes[r.id].time }) : d;
         if (notes[r.id]) return { kind: 'shortlist', at: r.path, note: notes[r.id].note, noteOnly: true };
         const st = window.ReelsSite && ReelsSite.state();
         if (st && st.posted && st.posted[r.id]) return { kind: 'posted', profile: true, when: st.posted[r.id] };
@@ -191,6 +226,7 @@ window.PostsReview = (function () {
         };
         btn('Post', 'P', 'rvw-post', 'Good to go as it is: into the post queue, the bot fits it into the schedule',
             () => verdict(row, 'queue'));
+        acts.appendChild(starButtons(n => verdict(row, 'queue', n), () => setFocus(rows.indexOf(row), false)));
         btn('Shortlist…', 'S', 'rvw-short', 'Good, but something needs fixing: says what (required), then onto the ' +
             'shortlist; the reel builders act on the note', () => openFeedback(row));
         row.rejectSlot = el('div', 'rvw-reject');
@@ -268,14 +304,46 @@ window.PostsReview = (function () {
         ta.focus();
     }
 
-    function verdict(row, where) {
+    // ★1–★5: Post with stars (the same as Post, and how good it is)
+    function starButtons(onPick, before, current) {
+        const g = el('div', 'rvw-stars');
+        g.title = 'Post, and how good it is (keys 1–5)';
+        for (let n = 1; n <= 5; n++) {
+            const b = el('button', 'reels-mini rvw-act rvw-star' + (current && n <= current ? ' on' : ''), '★');
+            b.type = 'button';
+            b.title = `Post: ${n} of 5 (key ${n})`;
+            b.dataset.n = String(n);
+            b.addEventListener('click', e => { e.stopPropagation(); if (before) before(); onPick(n); });
+            b.addEventListener('mouseenter', () => g.querySelectorAll('.rvw-star').forEach(x => x.classList.toggle('hover', +x.dataset.n <= n)));
+            g.appendChild(b);
+        }
+        g.addEventListener('mouseleave', () => g.querySelectorAll('.rvw-star').forEach(x => x.classList.remove('hover')));
+        return g;
+    }
+
+    function verdict(row, where, stars) {
         if (row.state || row.busy) return;
         row.busy = where === 'queue' ? 'Adding to the post queue…' : 'Adding to the shortlist…';
         paint(row);
-        PostsQueue.addPaths([row.r.path], where, false).then(() => {
-            row.busy = null;
-            refresh();
+        const rated = stars ? sendRating({ id: row.r.id, stars }) : Promise.resolve(true);
+        rated.then(ok => {
+            if (!ok) {
+                row.busy = null;
+                row.missing = 'Not posted: the stars could not be saved (the local helper did not answer; relaunch the desktop app).';
+                refresh();
+                return null;
+            }
+            return PostsQueue.addPaths([row.r.path], where, false).then(() => { row.busy = null; refresh(); });
         });
+    }
+
+    // a decision taken back (the reel goes back to To review): off the queue / shortlist / reject list, its stars or
+    // note withdrawn → a promise
+    function undoDecision(r, d) {
+        const offList = () => (d.noteOnly ? Promise.resolve() : PostsQueue.removeFromShortlist(d.at));
+        return d.kind === 'queue' ? PostsQueue.removeFromQueue(d.at).then(() => (d.stars ? sendRating({ id: r.id, undo: true }) : null))
+            : d.kind === 'shortlist' ? offList().then(() => (d.note ? sendNote({ id: r.id, undo: true }) : null))
+                : d.kind === 'rejected' ? PostsQueue.undoReject(d.at) : Promise.resolve();
     }
 
     function undo(row) {
@@ -283,11 +351,7 @@ window.PostsReview = (function () {
         if (!d) return;
         row.busy = 'Undoing…';
         paint(row);
-        const offList = () => (d.noteOnly ? Promise.resolve() : PostsQueue.removeFromShortlist(d.at));
-        const done = d.kind === 'queue' ? PostsQueue.removeFromQueue(d.at)
-            : d.kind === 'shortlist' ? offList().then(() => (d.note ? sendNote({ id: row.r.id, undo: true }) : null))
-                : d.kind === 'rejected' ? PostsQueue.undoReject(d.at) : Promise.resolve();
-        done.then(() => { row.busy = null; refresh(); });
+        undoDecision(row.r, d).then(() => { row.busy = null; refresh(); });
     }
 
     function paint(row) {
@@ -314,8 +378,9 @@ window.PostsReview = (function () {
             : d.kind === 'shortlist' && d.note ? `On the shortlist, to fix: ${d.note}`
             : d.kind === 'posted' ? (d.profile ? `Posted ${d.when || ''} (ticked on the Profile list)` : 'Posted')
                 : SAID[d.kind];
+        const shown = d.stars ? `${what} ${starText(d.stars)}` : what;
         txt.appendChild(el('div', 'pq-status ' + (d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : 'ok'),
-            '✓ ' + what + (row.busy ? ' · ' + row.busy : '')));
+            '✓ ' + shown + (row.busy ? ' · ' + row.busy : '')));
         row.slim.appendChild(txt);
         if (d.kind !== 'posted') {
             const u = el('button', 'reels-mini', 'Undo');
@@ -454,6 +519,9 @@ window.PostsReview = (function () {
         } else if (k === 'p' || k === 'P') {
             e.preventDefault();
             verdict(row, 'queue');
+        } else if (k >= '1' && k <= '5') {
+            e.preventDefault();
+            verdict(row, 'queue', +k);
         } else if (k === 's' || k === 'S') {
             e.preventDefault();
             openFeedback(row);
@@ -473,11 +541,12 @@ window.PostsReview = (function () {
         headEl = el('div', 'pq-h', 'To review');
         rootEl.appendChild(headEl);
         rootEl.appendChild(el('p', 'reels-how',
-            'The reels you haven\'t judged yet, newest first. Post: good to go as it is, into the post queue. ' +
+            'The reels you haven\'t judged yet, newest first. Post: good to go as it is, into the post queue; ' +
+            'the stars (1–5) post it too and say how good it is. ' +
             'Shortlist…: good, but something needs fixing; it asks what, and the reel builders act on your note. ' +
             'Reject…: a hard no; saying why is optional. A judged reel folds away (with Undo) and the next one comes up.'));
         const keys = el('p', 'reels-how rvw-keys');
-        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['S', 'Shortlist…'], ['R', 'Reject…']].forEach(([k, w]) => {
+        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['1–5', 'Post with stars'], ['S', 'Shortlist…'], ['R', 'Reject…']].forEach(([k, w]) => {
             keys.append(el('kbd', '', k), document.createTextNode(' ' + w + '  '));
         });
         rootEl.appendChild(keys);
@@ -496,11 +565,198 @@ window.PostsReview = (function () {
         const go = () => drawList();
         const ready = (window.PostsQueue && !PostsQueue.counts().loaded) ? PostsQueue.ready() : Promise.resolve();
         listEl.appendChild(el('p', 'reels-how', 'Loading…'));
-        Promise.all([ready, loadNotes()]).then(go);
+        Promise.all([ready, loadNotes(), loadRatings()]).then(go);
         return rootEl;
     }
 
-    function setDoc(doc) { reelsDoc = doc; }
+    // ── Posts ▸ Reels ▸ Reviewed: everything judged ──
+    const RV_PAGE = 30;
+    const RV_KIND_KEY = 'reels_reviewed_kind';
+    const RV_TRIP_KEY = 'reels_reviewed_trip';
+    const RV_KINDS = [['all', 'All'], ['queue', 'Post'], ['shortlist', 'Shortlist'], ['rejected', 'Rejected'], ['posted', 'Posted']];
+    let rv = null;
 
-    return { panel, count, setDoc, pending, tripName, newestFirst, takeNotes, decision };
+    // when it was judged: the stars or note's time, else when it went onto the list, else the reject's time
+    function judgedAt(d) {
+        return String(d.rated || d.noted || d.added || (d.kind !== 'queue' ? d.when : '') || '');
+    }
+
+    function reviewed(doc) {
+        return ((doc && doc.reels) || []).filter(r => r.path).map(r => ({ r, d: decision(r) })).filter(x => x.d)
+            .sort((a, b) => judgedAt(b.d).localeCompare(judgedAt(a.d)) || newestFirst(a.r, b.r));
+    }
+
+    // the section button's number: reels judged, or null before the lists are loaded
+    function reviewedCount() {
+        if (!reelsDoc || !window.PostsQueue || !PostsQueue.counts().loaded) return null;
+        return reviewed(reelsDoc).length;
+    }
+
+    function verdictLine(d) {
+        const what = d.kind === 'rejected' ? `Rejected: ${d.reason || ''}`
+            : d.kind === 'shortlist' ? (d.note ? `Shortlist, to fix: ${d.note}` : 'Shortlist (no note)')
+                : d.kind === 'posted' ? (d.profile ? `Posted ${d.when || ''}` : 'Posted')
+                    : 'Post: in the post queue';
+        return el('div', 'pq-status ' + (d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : 'ok'), what);
+    }
+
+    function fmtJudged(d) {
+        const t = judgedAt(d);
+        if (!t) return null;
+        const x = new Date(t);
+        return isNaN(x) ? null : 'Judged ' + x.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function rvRow(x) {
+        const { r, d } = x;
+        const row = el('div', 'rvw-row rv-row');
+        const top = el('div', 'rv-top');
+        if (r.cover) {
+            const img = el('img', 'rv-thumb');
+            img.src = r.cover;
+            img.alt = '';
+            img.loading = 'lazy';
+            img.addEventListener('error', () => img.remove());
+            top.appendChild(img);
+        }
+        const txt = el('div', 'rvw-slim-text');
+        txt.appendChild(el('div', 'pq-title', r.title || r.id));
+        const meta = [tripName(r), r.day_name || (r.day ? `Day ${r.day}` : 'Whole trip'), r.kind_label, r.aspect,
+            r.dur ? ReelsSite.fmtDur(r.dur) : null, fmtJudged(d)].filter(Boolean);
+        txt.appendChild(el('div', 'reel-meta', meta.join(' · ')));
+        const p = el('div', 'pq-path', r.path);
+        p.title = r.path;
+        txt.appendChild(p);
+        txt.appendChild(verdictLine(d));
+        const busy = el('div', 'pq-status wait rvw-busy');
+        txt.appendChild(busy);
+        top.appendChild(txt);
+        const acts = el('div', 'rv-acts');
+        if (d.kind === 'queue' || d.kind === 'posted') {
+            acts.appendChild(starButtons(n => {
+                busy.textContent = 'Saving the stars…';
+                sendRating({ id: r.id, stars: n }).then(ok => {
+                    busy.textContent = ok ? '' : 'The stars could not be saved (the local helper did not answer).';
+                    if (ok) rvDraw(true);
+                });
+            }, null, d.stars));
+        }
+        const play = el('button', 'reels-mini', 'Play');
+        play.type = 'button';
+        let player = null;
+        play.addEventListener('click', () => {
+            if (player) { player.remove(); player = null; play.textContent = 'Play'; return; }
+            const wide = r.aspect && r.aspect !== '9:16';
+            player = el('div', 'rvw-player rv-player' + (wide ? ' wide' : ''));
+            const v = video(r, () => { busy.textContent = 'The video file isn\'t there any more.'; });
+            player.appendChild(v);
+            row.appendChild(player);
+            play.textContent = 'Close';
+            v.play().catch(() => {});
+        });
+        acts.appendChild(play);
+        if (d.kind !== 'posted') {
+            const u = el('button', 'reels-mini', 'Undo');
+            u.type = 'button';
+            u.title = 'Take the verdict back: the reel goes back to Review';
+            u.addEventListener('click', () => {
+                u.disabled = true;
+                busy.textContent = 'Undoing…';
+                undoDecision(r, d).then(() => rvDraw(true));
+            });
+            acts.appendChild(u);
+        }
+        top.appendChild(acts);
+        row.appendChild(top);
+        return row;
+    }
+
+    function rvChips(box, items, current, label, pick) {
+        box.replaceChildren();
+        items.forEach(([k, text, n]) => {
+            const c = el('button', 'reel-chip' + (k === current ? ' active' : ''), `${text} (${n})`);
+            c.type = 'button';
+            c.title = label;
+            c.addEventListener('click', () => { if (k !== current) pick(k); });
+            box.appendChild(c);
+        });
+    }
+
+    // force: redraw even when nothing judged changed (a filter picked, stars changed here)
+    function rvDraw(force) {
+        if (!rv || !rv.root.isConnected) return;
+        const all = reviewed(reelsDoc);
+        const sig = JSON.stringify(all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason]));
+        if (!force && sig === rv.sig) return;
+        rv.sig = sig;
+        const byKind = rv.kind === 'all' ? all : all.filter(x => x.d.kind === rv.kind);
+        const here = rv.trip === 'all' ? byKind : byKind.filter(x => tripName(x.r) === rv.trip);
+        const stars = all.filter(x => x.d.stars);
+        rv.head.textContent = `Reviewed (${all.length})` + (stars.length
+            ? ` · ${stars.length} rated, average ${(stars.reduce((a, x) => a + x.d.stars, 0) / stars.length).toFixed(1)} ★` : '');
+        rvChips(rv.kinds, RV_KINDS.map(([k, t]) => [k, t, k === 'all' ? all.length : all.filter(x => x.d.kind === k).length])
+            .filter(([k, , n]) => k === 'all' || n || k === rv.kind), rv.kind, 'Verdict', k => {
+            rv.kind = k; lsSet(RV_KIND_KEY, k); rvDraw(true);
+        });
+        const per = new Map();
+        byKind.forEach(x => per.set(tripName(x.r), (per.get(tripName(x.r)) || 0) + 1));
+        const trips = [...per.keys()].sort();
+        if (rv.trip !== 'all' && !per.has(rv.trip)) trips.push(rv.trip);
+        rvChips(rv.trips, [['all', 'All trips', byKind.length], ...trips.map(t => [t, t, per.get(t) || 0])], rv.trip, 'Trip', k => {
+            rv.trip = k; lsSet(RV_TRIP_KEY, k); rvDraw(true);
+        });
+        rv.items = here;
+        rv.drawn = 0;
+        rv.list.replaceChildren();
+        if (!here.length) {
+            rv.list.appendChild(el('p', 'reels-empty', all.length ? 'Nothing judged with this filter.' : 'Nothing reviewed yet.'));
+        }
+        rvMore();
+    }
+
+    function rvMore() {
+        const next = rv.items.slice(rv.drawn, rv.drawn + RV_PAGE);
+        next.forEach(x => rv.list.appendChild(rvRow(x)));
+        rv.drawn += next.length;
+        rv.more.replaceChildren();
+        const left = rv.items.length - rv.drawn;
+        if (left > 0) {
+            const b = el('button', 'reels-mini pq-all', `Show ${Math.min(RV_PAGE, left)} more (${left} left)`);
+            b.type = 'button';
+            b.addEventListener('click', rvMore);
+            rv.more.appendChild(b);
+        }
+    }
+
+    function reviewedPanel(doc) {
+        reelsDoc = doc;
+        const root = el('section', 'pq rvw rv');
+        rv = { root, sig: null, kind: lsGet(RV_KIND_KEY, 'all'), trip: lsGet(RV_TRIP_KEY, 'all'), items: [], drawn: 0 };
+        if (!RV_KINDS.some(k => k[0] === rv.kind)) rv.kind = 'all';
+        rv.head = el('div', 'pq-h', 'Reviewed');
+        root.appendChild(rv.head);
+        root.appendChild(el('p', 'reels-how',
+            'Every reel you have judged, last judged first: its verdict, stars, note or reason. Change the stars of a ' +
+            'posted one here; Undo takes the verdict back and the reel goes back to Review.'));
+        rv.kinds = el('div', 'reel-chips rvw-trips');
+        rv.trips = el('div', 'reel-chips rvw-trips');
+        rv.list = el('div', 'rvw-list');
+        rv.more = el('div', 'rvw-more');
+        root.append(rv.kinds, rv.trips, rv.list, rv.more);
+        rv.list.appendChild(el('p', 'reels-how', 'Loading…'));
+        if (!rv.listening) {
+            document.addEventListener('reels:changed', () => rvDraw(false));
+            if (window.ReelsSite) ReelsSite.onChange(() => rvDraw(false));
+            if (window.PostsQueue) PostsQueue.onRejects(() => rvDraw(false));
+        }
+        rv.listening = true;
+        const ready = (window.PostsQueue && !PostsQueue.counts().loaded) ? PostsQueue.ready() : Promise.resolve();
+        Promise.all([ready, loadNotes(), loadRatings()]).then(() => rvDraw(true));
+        return root;
+    }
+
+    function setDoc(doc) { reelsDoc = doc; loadNotes(); loadRatings(); }
+
+    return { panel, reviewedPanel, count, reviewedCount, setDoc, pending, reviewed, judgedAt, tripName, newestFirst,
+        takeNotes, takeRatings, decision };
 })();

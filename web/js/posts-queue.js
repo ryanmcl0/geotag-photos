@@ -235,19 +235,22 @@ window.PostsQueue = (function () {
     }
 
     // the reason box: quick reasons to tap (they toggle, several combine with ";"), his own words, Reject / Cancel
-    function reasonForm(key, onReject, onCancel, label) {
+    // optional (the reject form, owner 2026-11-14: "reject button is hard reject with optional feedback"): the button
+    // works with nothing written, and the reject is recorded as NO_REASON
+    const NO_REASON = 'No reason given';
+    function reasonForm(key, onReject, onCancel, label, optional) {
         const f = el('div', 'pq-reason');
         const input = el('input', 'pq-reason-text');
         input.type = 'text';
         input.maxLength = 500;
         input.dataset.keep = 'reason:' + key;
-        input.placeholder = 'Why? Tap a reason, or write your own';
+        input.placeholder = optional ? 'Why? (optional) Tap a reason, or write your own' : 'Why? Tap a reason, or write your own';
         const go = el('button', 'reels-mini pq-reject-go', label || 'Reject');
         go.type = 'button';
         const chips = el('div', 'pq-chips');
         const parts = () => input.value.split(';').map(x => x.trim()).filter(Boolean);
         const paint = () => {
-            go.disabled = !input.value.trim();
+            go.disabled = !optional && !input.value.trim();
             chips.querySelectorAll('button').forEach(c => c.classList.toggle('active', parts().includes(c.textContent)));
         };
         QUICK_REASONS.forEach(r => {
@@ -265,10 +268,10 @@ window.PostsQueue = (function () {
         });
         input.addEventListener('input', paint);
         input.addEventListener('keydown', e => {
-            if (e.key === 'Enter' && input.value.trim()) go.click();
+            if (e.key === 'Enter' && (optional || input.value.trim())) go.click();
             if (e.key === 'Escape' && onCancel) onCancel();
         });
-        go.addEventListener('click', () => onReject(input.value.trim()));
+        go.addEventListener('click', () => onReject(input.value.trim() || (optional ? NO_REASON : '')));
         const row = el('div', 'pq-reason-row');
         row.append(input, go);
         if (onCancel) {
@@ -294,7 +297,7 @@ window.PostsQueue = (function () {
 
     function rejectFormFor(path, after) {
         return reasonForm(path, reason => reject([path], reason).then(() => after && after()),
-            () => { openReject = null; (after || redraw)(); });
+            () => { openReject = null; (after || redraw)(); }, null, true);
     }
 
     // Remove on a queued reel (it is not posted) and on a shortlisted one

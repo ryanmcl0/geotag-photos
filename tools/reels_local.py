@@ -25,7 +25,7 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  withdraws that reel's rejections the pipeline hasn't acted on yet
     GET  /reels/feedback         his notes on reels from Posts ▸ Reels ▸ Review (Shortlist… = "good, but fix this",
                                  2026-11-14; the note is required there)
-    POST /reels/feedback         {"id", "note"} → the reel's open note (a new one replaces it); {"id", "undo": true}
+    POST /reels/feedback         {"id", "note", "kind": "fix"|"post"} → the reel's open note (a new one replaces it); {"id", "undo": true}
                                  withdraws it. Kept in web/phone/reels/reel_feedback.json for the video project to
                                  act on (it marks a note "handled"); the reel's path and title come from reels.json
     GET  /reels/ratings          his 1–5 stars on reels he posted from Posts ▸ Reels ▸ Review (2026-11-14: "as well as
@@ -171,6 +171,9 @@ def reel_feedback(body, now=None):
             return 400, {"error": "the note is empty"}
         items.append({"id": rid, "path": reel.get("path"), "title": reel.get("title"), "trip": reel.get("trip"),
                       "note": note.strip()[:NOTE_MAX],
+                      # "fix" (Shortlist…: fix this reel) or "post" (Post + note…: the reel stays as it is, the note
+                      # is for the next reels)
+                      "kind": "post" if body.get("kind") == "post" else "fix",
                       "time": (now or dt.datetime.now()).isoformat(timespec="seconds"), "status": "open"})
     fb["items"] = items
     fb["updated"] = (now or dt.datetime.now()).isoformat(timespec="seconds")

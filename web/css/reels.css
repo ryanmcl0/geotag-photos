@@ -309,6 +309,7 @@
 .rvw-slim-text .pq-status { margin-top: 2px; }
 .rvw-row.decided { padding: 8px 12px; opacity: .8; }
 .rvw-more { margin: 4px 0 0; }
+.rvw-fbstars { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .rvw-stars { display: flex; gap: 2px; align-items: center; }
 .rvw-acts .reels-mini.rvw-star, .rv-acts .reels-mini.rvw-star {
     font-size: 17px; line-height: 1; padding: 5px 4px; border: none; background: none; color: #555; border-radius: 6px;

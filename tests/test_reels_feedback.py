@@ -33,7 +33,8 @@ class FeedbackTest(unittest.TestCase):
         code, doc = R.reel_feedback({"id": "a", "note": "  the last shot is too slow  "}, t)
         self.assertEqual(code, 200)
         self.assertEqual(doc["items"], [{"id": "a", "path": "/sfc/2026 China Summer/5 Hooks/a.mp4", "title": "A", "trip": "t",
-                                         "note": "the last shot is too slow", "time": "2026-11-14T22:30:00", "status": "open"}])
+                                         "note": "the last shot is too slow", "kind": "fix", "time": "2026-11-14T22:30:00",
+                                         "status": "open"}])
         R.reel_feedback({"id": "a", "note": "swap the song"}, t)
         R.reel_feedback({"id": "b", "note": "pin too long"}, t)
         got = json.loads(R.FEEDBACK.read_text())["items"]
@@ -50,6 +51,11 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(json.loads(R.FEEDBACK.read_text())["items"], [{"id": "a", "note": "old", "status": "handled"}])
         long = R.reel_feedback({"id": "b", "note": "x" * 5000})[1]["items"][-1]["note"]
         self.assertEqual(len(long), R.NOTE_MAX)
+
+    def test_a_post_note_is_marked_post(self):
+        doc = R.reel_feedback({"id": "a", "note": "great pacing, more of these", "kind": "post"})[1]
+        self.assertEqual(doc["items"][-1]["kind"], "post")
+        self.assertEqual(R.reel_feedback({"id": "b", "note": "x", "kind": "weird"})[1]["items"][-1]["kind"], "fix")
 
     def test_stars_are_kept_replaced_and_withdrawn(self):
         t = dt.datetime(2026, 11, 14, 23, 30)

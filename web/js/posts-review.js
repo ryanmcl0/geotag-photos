@@ -23,6 +23,10 @@
  *              local helper (POST /reels/feedback → web/phone/reels/reel_feedback.json) for the reel builders to act
  *              on; the folded line shows it. Undo takes the reel off the shortlist and withdraws the note.
  *   Reject…    a hard reject; the reason is optional ("No reason given" when nothing is written).
+ *   Post + note  F (owner 2026-11-14: "if I type F it also counts as post and also lets me provide a star rating
+ *              but also lets me provide new feedback even if it's counted as post"): a box with stars (optional) and
+ *              a note (required). Saved = the note (kind "post": feedback for the next reels, the reel itself stays
+ *              as it is), the stars, then into the post queue. Undo takes all three back.
  *   ★1–★5      (owner 2026-11-14: "as well as p for post i want to be able to give a 1-5 star rating. those count as
  *              'post'"): Post with how good it is. Keys 1–5. The stars are kept by the local helper (POST /reels/rating
  *              → web/phone/reels/reel_ratings.json) for the reel builders to learn from; Undo withdraws them too.
@@ -122,8 +126,9 @@ window.PostsReview = (function () {
         const d0 = window.PostsQueue ? PostsQueue.decisionOf(r.path) : null;
         const d = d0 && (d0.kind === 'queue' || d0.kind === 'posted') && ratings[r.id]
             ? Object.assign({}, d0, { stars: ratings[r.id].stars, rated: ratings[r.id].time }) : d0;
-        if (d) return (d.kind === 'shortlist' && notes[r.id]) ? Object.assign({}, d, { note: notes[r.id].note, noted: notes[r.id].time }) : d;
-        if (notes[r.id]) return { kind: 'shortlist', at: r.path, note: notes[r.id].note, noteOnly: true };
+        if (d) return ((d.kind === 'shortlist' || d.kind === 'queue' || d.kind === 'posted') && notes[r.id])
+            ? Object.assign({}, d, { note: notes[r.id].note, noted: notes[r.id].time }) : d;
+        if (notes[r.id] && notes[r.id].kind !== 'post') return { kind: 'shortlist', at: r.path, note: notes[r.id].note, noteOnly: true };
         const st = window.ReelsSite && ReelsSite.state();
         if (st && st.posted && st.posted[r.id]) return { kind: 'posted', profile: true, when: st.posted[r.id] };
         return null;
@@ -227,6 +232,8 @@ window.PostsReview = (function () {
         btn('Post', 'P', 'rvw-post', 'Good to go as it is: into the post queue, the bot fits it into the schedule',
             () => verdict(row, 'queue'));
         acts.appendChild(starButtons(n => verdict(row, 'queue', n), () => setFocus(rows.indexOf(row), false)));
+        btn('Post + note…', 'F', 'rvw-post', 'Good to go as it is (into the post queue), with stars if you like and ' +
+            'a note on what to keep or change in the next reels', () => openFeedback(row, 'post'));
         btn('Shortlist…', 'S', 'rvw-short', 'Good, but something needs fixing: says what (required), then onto the ' +
             'shortlist; the reel builders act on the note', () => openFeedback(row));
         row.rejectSlot = el('div', 'rvw-reject');
@@ -261,14 +268,21 @@ window.PostsReview = (function () {
 
     // Shortlist…: the text box under the verdicts (what needs fixing: required). Enter saves, Shift+Enter a new
     // line, Esc cancels. Saved = the note to the helper, then the reel onto the shortlist.
-    function openFeedback(row) {
+    // Post + note… (mode 'post', key F): the same box with stars to pick (optional) above it; saved = the note (kind
+    // "post"), the stars, then into the post queue.
+    function openFeedback(row, mode) {
         if (row.state || row.busy) return;
+        const post = mode === 'post';
         const open = row.fbSlot.querySelector('textarea');
-        if (open) { open.focus(); return; }
+        if (open && row.fbMode === (post ? 'post' : 'shortlist')) { open.focus(); return; }
+        row.fbMode = post ? 'post' : 'shortlist';
+        let stars = 0;
         const ta = el('textarea', 'pq-reason-text rvw-fbtext');
         ta.rows = 3;
-        ta.placeholder = 'What needs fixing? (required: Enter saves, Shift+Enter a new line, Esc cancels)';
-        const save = el('button', 'reels-mini rvw-fbsave', 'Shortlist with this note');
+        ta.placeholder = post
+            ? 'Your feedback (required): what works, what to do differently next time. Enter saves, Shift+Enter a new line, Esc cancels'
+            : 'What needs fixing? (required: Enter saves, Shift+Enter a new line, Esc cancels)';
+        const save = el('button', 'reels-mini rvw-fbsave', post ? 'Post with this note' : 'Shortlist with this note');
         save.disabled = true;
         ta.addEventListener('input', () => { save.disabled = !ta.value.trim(); });
         save.type = 'button';
@@ -278,18 +292,21 @@ window.PostsReview = (function () {
         const go = () => {
             const note = ta.value.trim();
             if (!note || row.busy) return;
-            row.busy = 'Saving the note, adding to the shortlist…';
+            row.busy = post ? 'Saving the note, adding to the post queue…' : 'Saving the note, adding to the shortlist…';
             paint(row);
-            sendNote({ id: row.r.id, note }).then(ok => {
-                if (!ok) {
-                    row.busy = null;
-                    row.missing = 'Not shortlisted: the note could not be saved (the local helper did not answer; relaunch the desktop app).';
-                    refresh();
-                    return null;
-                }
-                close();
-                return PostsQueue.addPaths([row.r.path], 'shortlist', false).then(() => { row.busy = null; refresh(); });
-            });
+            sendNote(post ? { id: row.r.id, note, kind: 'post' } : { id: row.r.id, note })
+                .then(ok => (ok && post && stars ? sendRating({ id: row.r.id, stars }) : ok))
+                .then(ok => {
+                    if (!ok) {
+                        row.busy = null;
+                        row.missing = (post ? 'Not posted' : 'Not shortlisted') +
+                            ': the note could not be saved (the local helper did not answer; relaunch the desktop app).';
+                        refresh();
+                        return null;
+                    }
+                    close();
+                    return PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false).then(() => { row.busy = null; refresh(); });
+                });
         };
         save.addEventListener('click', e => { e.stopPropagation(); go(); });
         cancel.addEventListener('click', e => { e.stopPropagation(); close(); });
@@ -300,7 +317,19 @@ window.PostsReview = (function () {
         });
         const bar = el('div', 'rvw-fbbar');
         bar.append(save, cancel);
-        row.fbSlot.replaceChildren(ta, bar);
+        if (post) {
+            const pick = el('div', 'rvw-fbstars');
+            pick.appendChild(el('span', 'reel-meta', 'Stars (optional): '));
+            const g = starButtons(n => {
+                stars = stars === n ? 0 : n;            // the same star again clears it
+                g.querySelectorAll('.rvw-star').forEach(x => x.classList.toggle('on', +x.dataset.n <= stars));
+                ta.focus();
+            });
+            pick.appendChild(g);
+            row.fbSlot.replaceChildren(pick, ta, bar);
+        } else {
+            row.fbSlot.replaceChildren(ta, bar);
+        }
         ta.focus();
     }
 
@@ -341,7 +370,9 @@ window.PostsReview = (function () {
     // note withdrawn → a promise
     function undoDecision(r, d) {
         const offList = () => (d.noteOnly ? Promise.resolve() : PostsQueue.removeFromShortlist(d.at));
-        return d.kind === 'queue' ? PostsQueue.removeFromQueue(d.at).then(() => (d.stars ? sendRating({ id: r.id, undo: true }) : null))
+        return d.kind === 'queue' ? PostsQueue.removeFromQueue(d.at)
+            .then(() => (d.stars ? sendRating({ id: r.id, undo: true }) : null))
+            .then(() => (d.note ? sendNote({ id: r.id, undo: true }) : null))
             : d.kind === 'shortlist' ? offList().then(() => (d.note ? sendNote({ id: r.id, undo: true }) : null))
                 : d.kind === 'rejected' ? PostsQueue.undoReject(d.at) : Promise.resolve();
     }
@@ -376,6 +407,7 @@ window.PostsReview = (function () {
         txt.appendChild(el('div', 'pq-title', row.r.title || row.r.id));
         const what = d.kind === 'rejected' ? `Rejected: ${d.reason || ''}`
             : d.kind === 'shortlist' && d.note ? `On the shortlist, to fix: ${d.note}`
+            : d.kind === 'queue' && d.note ? `In the post queue · note: ${d.note}`
             : d.kind === 'posted' ? (d.profile ? `Posted ${d.when || ''} (ticked on the Profile list)` : 'Posted')
                 : SAID[d.kind];
         const shown = d.stars ? `${what} ${starText(d.stars)}` : what;
@@ -522,6 +554,9 @@ window.PostsReview = (function () {
         } else if (k >= '1' && k <= '5') {
             e.preventDefault();
             verdict(row, 'queue', +k);
+        } else if (k === 'f' || k === 'F') {
+            e.preventDefault();
+            openFeedback(row, 'post');
         } else if (k === 's' || k === 'S') {
             e.preventDefault();
             openFeedback(row);
@@ -546,7 +581,7 @@ window.PostsReview = (function () {
             'Shortlist…: good, but something needs fixing; it asks what, and the reel builders act on your note. ' +
             'Reject…: a hard no; saying why is optional. A judged reel folds away (with Undo) and the next one comes up.'));
         const keys = el('p', 'reels-how rvw-keys');
-        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['1–5', 'Post with stars'], ['S', 'Shortlist…'], ['R', 'Reject…']].forEach(([k, w]) => {
+        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['1–5', 'Post with stars'], ['F', 'Post + stars + note'], ['S', 'Shortlist…'], ['R', 'Reject…']].forEach(([k, w]) => {
             keys.append(el('kbd', '', k), document.createTextNode(' ' + w + '  '));
         });
         rootEl.appendChild(keys);
@@ -597,7 +632,8 @@ window.PostsReview = (function () {
             : d.kind === 'shortlist' ? (d.note ? `Shortlist, to fix: ${d.note}` : 'Shortlist (no note)')
                 : d.kind === 'posted' ? (d.profile ? `Posted ${d.when || ''}` : 'Posted')
                     : 'Post: in the post queue';
-        return el('div', 'pq-status ' + (d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : 'ok'), what);
+        const full = (d.kind === 'queue' || d.kind === 'posted') && d.note ? `${what} · note: ${d.note}` : what;
+        return el('div', 'pq-status ' + (d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : 'ok'), full);
     }
 
     function fmtJudged(d) {

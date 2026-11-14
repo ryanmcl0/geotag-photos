@@ -193,6 +193,7 @@ A set of owner-side tools lives in `tools/` and runs only on the laptop:
 - **Pickers** (small local web pages) for tile covers, gallery highlights, bridge photos and province corrections.
 - **Lightroom plugins** to import photos from a list and sync edits made for posts.
 - **Post to Instagram** (`./post.py ig N`): a finished Xiaohongshu draft from the Posts page straight to @ryanmcl0 (the Instagram tab is the urbex account, by hand), carousel and all (RUNBOOK §9).
+- **Posts ▸ Reels** (localhost only): the video project's reels, in sections, one at a time (`#reels/<section>` links one): Queue (the reel bot's post queue and shortlist), Review (reels not judged yet, with Post / Shortlist / Reject…, and the reject list), Profile (picked reels in posting order, captions, a phone preview, 4K export), Music (the music pool) and Footage (how much of each trip's footage the reels use, from `web/phone/reels/usage.json`). Header comments in `web/js/posts-reels.js` and its parts describe each (RUNBOOK §11).
 - **People index**: local face clustering across the archive.
 - **Phone library** (`tools/build_phone_site.py`): browse phone photos by trip or month, never deployed.
 - **Video browser** (`video_browse/`): search clip proxies and build Resolve projects.

@@ -21,7 +21,12 @@ window.ReelsSite = (function () {
     const HOST = location.hostname;
     const LOCAL = ['localhost', '127.0.0.1', '[::1]'].includes(HOST) || HOST.endsWith('.local') ||
         /^10\./.test(HOST) || /^192\.168\./.test(HOST) || /^172\.(1[6-9]|2\d|3[01])\./.test(HOST);
-    const API = `http://${HOST === 'localhost' ? '127.0.0.1' : HOST}:8791`;
+    // the helper's port: 8791, or another one set in this browser for a second checkout's helper
+    // (localStorage reels_helper_port; localStorage is per site origin, so it only applies to that dev server's port)
+    const PORT = (() => {
+        try { return parseInt(localStorage.getItem('reels_helper_port'), 10) || 8791; } catch (e) { return 8791; }
+    })();
+    const API = `http://${HOST === 'localhost' ? '127.0.0.1' : HOST}:${PORT}`;
     const LS_KEY = 'reels_site_state';
     const FILES_PREFIX = '/phone/reels/files/';
 
@@ -498,6 +503,6 @@ window.ReelsSite = (function () {
         load, loadState, onChange, queued, toggleQueued, moveQueued, setPosted, caption, setCaption,
         requestExport, exportQueue, where: () => stateWhere, state: () => state,
         card, grid, screen, master, sectionHead, kindChips, sortReels, stopPlaying, tripSection, forPage, forFacet,
-        fmtDur, fmtDay, isLocal: LOCAL
+        fmtDur, fmtDay, mediaUrl, isLocal: LOCAL, api: API
     };
 })();

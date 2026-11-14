@@ -20,6 +20,12 @@
  * post.py's mirror like reel_queue. A rejected reel leaves the queue and the shortlist and can't be added back until
  * "Undo". queue_sync.py on the Mac keeps the bot from ever offering it and logs the reason for the reel builders
  * (Short Form Content/REJECTS.jsonl; "noted" is when it did): the feedback loop.
+ *
+ * Where it shows (owner 2026-11-14, the Reels tab in sections, posts-reels.js): panel('queue') is the Queue section
+ * (the post queue, the slider, the bot's schedule and the shortlist); panel('rejects') is the Rejected box under To
+ * review in the Review section (posts-review.js), whose Post / Shortlist / Reject… are addPaths() and rejectControl()
+ * here, so there is still one state. decisionOf(path) tells the other parts what has been decided about a reel. Every
+ * redraw (a change saved, the 30 s refresh) fires "reels:changed" on document, for the section counts and To review.
  */
 window.PostsQueue = (function () {
     'use strict';
@@ -30,7 +36,9 @@ window.PostsQueue = (function () {
     let doc = null;                  // { version, posts, reel_queue }
     let chain = Promise.resolve();
     let panelEl = null;
+    let part = 'queue';              // what the shown panel draws: 'queue' (queue + shortlist) or 'rejects'
     let timer = null;
+    let readyP = null;
     let lastAdd = { where: null, lines: [] };   // the last paste: which box, its lines and what happened to each
     let openReject = null;           // the path whose reason form is open (kept across redraws)
     let showAllRejects = false;
@@ -158,21 +166,27 @@ window.PostsQueue = (function () {
 
     // where: 'queue' (post now) or 'shortlist' (approved, not yet)
     function addLines(text, where) {
-        const lines = splitPaste(text).map(cleanLine).filter(Boolean);
-        if (!lines.length) return;
+        addPaths(splitPaste(text).map(cleanLine).filter(Boolean), where, true);
+    }
+
+    // the same for paths already clean (To review's Post / Shortlist): report = show each line's result under the
+    // paste box, as a paste does. → a promise, settled once saved.
+    function addPaths(lines, where, report) {
+        if (!lines.length) return Promise.resolve();
         const q0 = queue();
         const inQueue = new Set(q0.items.map(i => i.path));
         const inShort = new Set(q0.shortlist.map(i => i.path));
-        lastAdd = { where, lines: [] };
+        const res = [];
         const take = [];
         lines.forEach(p => {
             const why = checkLine(p, inQueue, inShort);
-            lastAdd.lines.push({ path: p, why });
+            res.push({ path: p, why });
             if (!why) { (where === 'queue' ? inQueue : inShort).add(p); take.push(p); }
         });
-        if (!take.length) { redraw(); return; }
+        if (report) lastAdd = { where, lines: res };
+        if (!take.length) { redraw(); return Promise.resolve(); }
         const now = new Date().toISOString();
-        change((q, rj) => {
+        return change((q, rj) => {
             const there = new Set([...q.items, ...q.shortlist, ...rj.items].map(i => i.path));
             take.filter(p => !there.has(p)).forEach(p =>
                 where === 'queue' ? q.items.push(queueLine(p, now)) : q.shortlist.push({ id: p, path: p, added: now }));
@@ -281,6 +295,30 @@ window.PostsQueue = (function () {
     function rejectFormFor(path, after) {
         return reasonForm(path, reason => reject([path], reason).then(() => after && after()),
             () => { openReject = null; (after || redraw)(); });
+    }
+
+    // Remove on a queued reel (it is not posted) and on a shortlisted one
+    function removeFromQueue(path) {
+        return change(qq => { qq.items = qq.items.filter(x => x.path !== path); });
+    }
+    function removeFromShortlist(path) {
+        return change(qq => { qq.shortlist = qq.shortlist.filter(x => x.path !== path); });
+    }
+
+    // What has been decided about a reel: {kind: 'rejected' | 'posted' | 'queue' | 'shortlist', at: the stored path,
+    // reason?} or null. Matched by its path, else by its file name (a line pasted from another copy of the same file).
+    function decisionOf(path) {
+        if (!path) return null;
+        const name = fileName(path);
+        const same = i => i.path === path || (!!name && fileName(i.path) === name);
+        const rj = rejects().find(same);
+        if (rj) return { kind: 'rejected', at: rj.path, reason: rj.reason, when: rj.rejected };
+        const q = queue();
+        const it = q.items.find(same);
+        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when };
+        const sl = q.shortlist.find(same);
+        if (sl) return { kind: 'shortlist', at: sl.path };
+        return null;
     }
 
     // queue → shortlist: still good, just not yet (the bot drops it at the next check, like Remove)
@@ -396,7 +434,7 @@ window.PostsQueue = (function () {
                 const rm = el('button', 'reels-mini', 'Remove');
                 rm.type = 'button';
                 rm.title = 'Take it out of the queue (it is not posted)';
-                rm.addEventListener('click', () => change(qq => { qq.items = qq.items.filter(x => x.path !== i.path); }));
+                rm.addEventListener('click', () => removeFromQueue(i.path));
                 btns.append(back, rm, rejectButton(i.path));
                 row.appendChild(btns);
                 if (openReject === i.path) row.appendChild(rejectFormFor(i.path));
@@ -432,7 +470,7 @@ window.PostsQueue = (function () {
             const rm = el('button', 'reels-mini', 'Remove');
             rm.type = 'button';
             rm.title = 'Take it off the shortlist';
-            rm.addEventListener('click', () => change(qq => { qq.shortlist = qq.shortlist.filter(x => x.path !== i.path); }));
+            rm.addEventListener('click', () => removeFromShortlist(i.path));
             btns.append(go, rm, rejectButton(i.path));
             row.appendChild(btns);
             if (openReject === i.path) row.appendChild(rejectFormFor(i.path));
@@ -571,8 +609,15 @@ window.PostsQueue = (function () {
     }
 
     function draw() {
-        const q = queue();
         const out = el('div');
+        if (part === 'rejects') out.appendChild(rejectsSection());
+        else out.append(...queueSections());
+        return out;
+    }
+
+    // the Queue section: the post queue (paste, slider, lines, the bot's schedule) and the shortlist
+    function queueSections() {
+        const q = queue();
         const sec = el('section', 'pq');
         sec.appendChild(el('div', 'pq-h', 'Post queue: post these now'));
         sec.appendChild(el('p', 'reels-how',
@@ -602,22 +647,36 @@ window.PostsQueue = (function () {
             sl.appendChild(all);
         }
         sl.appendChild(shortlistBlock(q));
+        return [sec, sl];
+    }
 
+    // the Rejected box (the Review section, under To review)
+    function rejectsSection() {
         const rs = el('section', 'pq pq-rejects');
         rs.appendChild(el('div', 'pq-h', `Rejected: not for posting (${rejects().length})`));
         rs.appendChild(el('p', 'reels-how',
             'Reels from Short Form Content that aren\'t good enough, each with why. A rejected reel leaves the queue and ' +
             'the shortlist, can\'t be added back until Undo, and the bot never offers it. The Mac notes every reason for ' +
             'the reel builders (Short Form Content/REJECTS.md), so the next batch learns from it. Use "Reject…" on a ' +
-            'reel above or below, or paste paths here.'));
+            'reel under To review, in the Queue or on the Profile list, or paste paths here.'));
         rejectPasteBar(rs);
         rs.appendChild(rejectsBlock());
-        out.append(sec, sl, rs);
-        return out;
+        return rs;
+    }
+
+    // the section counts and To review follow every redraw, whether or not a panel is showing
+    function tellChanged() {
+        try { document.dispatchEvent(new CustomEvent('reels:changed', { detail: 'queue' })); } catch (e) { /* no DOM */ }
     }
 
     function redraw() {
-        if (!panelEl || !panelEl.isConnected) { clearInterval(timer); timer = null; return; }
+        if (!panelEl || !panelEl.isConnected) {
+            clearInterval(timer);
+            timer = null;
+            tellRejects();
+            tellChanged();
+            return;
+        }
         // keep what's typed in the boxes and the reason fields (and the focus) across the redraw
         const typed = {};
         panelEl.querySelectorAll('[data-keep]').forEach(t => { if (t.value) typed[t.dataset.keep] = t.value; });
@@ -633,13 +692,17 @@ window.PostsQueue = (function () {
             if (t.dataset.keep === focus) t.focus();
         });
         tellRejects();
+        tellChanged();
     }
 
-    // The panel for the Reels tab: drawn from the last copy at once, refreshed from the server, then every 30 s
-    // (the Mac's checks and the bot's schedule arrive on their own).
-    function panel() {
+    // The panel for a Reels tab section ('queue': the queue and the shortlist; 'rejects': the Rejected box): drawn
+    // from the last copy at once, refreshed from the server, then every 30 s (the Mac's checks and the bot's schedule
+    // arrive on their own). One shows at a time.
+    function panel(which) {
+        part = which === 'rejects' ? 'rejects' : 'queue';
         panelEl = el('div', 'pq-wrap');
-        panelEl.append(...(doc ? draw().childNodes : [el('p', 'reels-how pq', 'Loading the post queue…')]));
+        panelEl.append(...(doc ? draw().childNodes : [el('p', 'reels-how pq',
+            part === 'rejects' ? 'Loading the reject list…' : 'Loading the post queue…')]));
         const refresh = () => {
             const typing = document.activeElement && panelEl.contains(document.activeElement);
             if (typing) return;
@@ -672,5 +735,24 @@ window.PostsQueue = (function () {
 
     function onRejects(fn) { rejectListeners.add(fn); return () => rejectListeners.delete(fn); }
 
-    return { panel, rejectOf, reject, undoReject, rejectControl, onRejects };
+    // The document once (for the parts that need it with no panel showing: the counts, To review, the Profile rows'
+    // rejects); a failed read is retried at the next call.
+    function ready() {
+        if (doc) return Promise.resolve(doc);
+        if (!readyP) {
+            readyP = fetchDoc().then(d => { tellRejects(); tellChanged(); return d; },
+                () => { readyP = null; return null; });
+        }
+        return readyP;
+    }
+
+    // the Queue section's count: reels in the post queue still to go out, and the shortlist
+    function counts() {
+        const q = queue();
+        return { loaded: !!doc, queue: q.items.filter(i => i.status !== 'posted').length, shortlist: q.shortlist.length,
+            rejected: rejects().length };
+    }
+
+    return { panel, ready, counts, rejectOf, reject, undoReject, rejectControl, onRejects, addPaths, removeFromQueue,
+        removeFromShortlist, decisionOf, fileName };
 })();

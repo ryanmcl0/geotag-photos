@@ -4,6 +4,10 @@
  * a row of buttons under the tab bar, each with a small live count. The choice is remembered in this browser and kept
  * in the address as #reels/<section>, so a section can be linked (posts.html#reels/footage opens the tab on it).
  *
+ *   In progress  (posts-progress.js): what the short-form work is doing this minute (the redo of old reels, the
+ *            machine-only generator, the reels the AI planned and their renders, what was filed and held), each job
+ *            tagged Machine / AI / You, and the vlog days with the vlog dashboard in a frame. It reads
+ *            web/phone/reels/status.json (the video project's reel_status.py, once a minute). Count: jobs running now.
  *   Queue    (posts-queue.js panel('queue')): the bot's post queue (paste the paths of reels that can go out now; the
  *            slider's time frame; each line's status; the bot's schedule) and the shortlist (approved, not yet).
  *            Count: reels in the queue still to go out.
@@ -34,6 +38,7 @@ window.PostsReels = (function () {
     const VIEW_KEY = 'reels_profile_view';
     const SECTION_KEY = 'reels_section';
     const SECTIONS = [
+        ['progress', 'In progress', 'Jobs running right now'],
         ['queue', 'Queue', 'Reels in the post queue still to go out'],
         ['review', 'Review', 'Reels you haven\'t judged yet'],
         ['profile', 'Profile', 'Reels picked for posting, in order'],
@@ -66,6 +71,7 @@ window.PostsReels = (function () {
         if (window.PostsQueue) PostsQueue.ready();
         if (window.PostsMusic) PostsMusic.ready();
         if (window.PostsFootage) PostsFootage.load();
+        if (window.PostsProgress) PostsProgress.load();
         return doc;
     }
 
@@ -101,6 +107,10 @@ window.PostsReels = (function () {
         if (id === 'music') {
             const n = window.PostsMusic ? PostsMusic.count() : null;
             return n === null ? null : { n, title: `${n} song${n === 1 ? '' : 's'} in the pool` };
+        }
+        if (id === 'progress') {
+            const n = window.PostsProgress ? PostsProgress.count() : null;
+            return n === null ? null : { n, title: n ? `${n} job${n === 1 ? '' : 's'} running right now` : 'Nothing is running right now' };
         }
         if (id === 'footage') {
             const p = window.PostsFootage ? PostsFootage.count() : null;
@@ -339,6 +349,8 @@ window.PostsReels = (function () {
             if (window.PostsMusic) body.appendChild(PostsMusic.panel());
         } else if (section === 'footage') {
             if (window.PostsFootage) body.appendChild(PostsFootage.panel());
+        } else if (section === 'progress') {
+            if (window.PostsProgress) body.appendChild(PostsProgress.panel());
         } else {
             renderProfile(body, doc, rerender);
         }

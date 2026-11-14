@@ -390,3 +390,58 @@
     .fu-privlist { columns: 1; }
     .fu-big { font-size: 19px; }
 }
+
+/* ── Posts ▸ Reels ▸ In progress (posts-progress.js): what is running now, one card per job, Machine / AI / You tags ── */
+.ip { color: #eee; }
+.ip-headline { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.ip-headline .pq-h { margin-right: auto; }
+.ip-made { font-size: 12.5px; color: #888; font-variant-numeric: tabular-nums; }
+.ip-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: #bbb; margin: 4px 0 6px; }
+.ip-legend-item { white-space: nowrap; }
+.ip-note { font-size: 12.5px; color: #999; margin: 2px 0 8px; max-width: 78ch; }
+.ip-sub { font-size: 13px; color: #aaa; margin: 4px 0; }
+.ip-warn {
+    font-size: 13px; color: #f0c27a; background: #2a2114; border: 1px solid #5a4424; border-radius: 6px;
+    padding: 7px 10px; margin: 6px 0 10px;
+}
+.ip-card { background: #181818; border: 1px solid #262626; border-radius: 8px; padding: 12px 14px; margin: 10px 0; min-width: 0; }
+.ip-now { border-color: #2f3d55; }
+.ip-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.ip-card-title { font-size: 15px; font-weight: 650; color: #fff; margin: 0 6px 0 0; }
+.ip-who {
+    display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .02em; border-radius: 4px; padding: 1px 6px;
+    white-space: nowrap; vertical-align: 1px;
+}
+.ip-who-machine { color: #9bd3a6; background: #16261a; border: 1px solid #2f5a39; }
+.ip-who-ai { color: #c9b2ff; background: #221a33; border: 1px solid #4b3a7a; }
+.ip-who-you { color: #f0b27a; background: #2a1e12; border: 1px solid #7a5a3a; }
+.ip-who-mixed, .ip-who-ai-machine { color: #a9c7ff; background: #17202e; border: 1px solid #35507a; }
+.ip-state { display: inline-block; font-size: 11.5px; border-radius: 10px; padding: 1px 8px; white-space: nowrap; color: #bbb; background: #222; }
+.ip-state-running { color: #8ab4ff; background: #162033; }
+.ip-state-finished { color: #9bd3a6; background: #16261a; }
+.ip-state-waiting, .ip-state-paused { color: #f0c27a; background: #2a2114; }
+.ip-state-stopped, .ip-state-not-running { color: #999; background: #222; }
+.ip-bar { position: relative; height: 8px; background: #262626; border-radius: 4px; overflow: hidden; margin: 8px 0 4px; display: flex; }
+.ip-bar-fill { background: #8ab4ff; height: 100%; }
+.ip-bar-fail { background: #d9705f; height: 100%; }
+.ip-figs { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 6px 0; }
+.ip-fig-n { font-size: 20px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ip-fig-l { font-size: 12px; color: #999; }
+.ip-current { font-size: 13.5px; color: #e6e6e6; margin: 5px 0; overflow-wrap: anywhere; }
+.ip-fold { margin: 6px 0 0; }
+.ip-fold > summary { cursor: pointer; font-size: 13px; color: #bbb; }
+.ip-fold > summary:hover { color: #fff; }
+.ip-lines { margin: 6px 0 2px; }
+.ip-line { font-size: 12.5px; color: #ccc; padding: 2px 0; overflow-wrap: anywhere; }
+.ip-mono .ip-line { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: #aaa; }
+.ip-strong { color: #fff; font-weight: 600; }
+.ip-dim { color: #888; }
+.ip-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 18px; }
+.ip-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+.ip-table td { padding: 5px 8px 5px 0; border-bottom: 1px solid #1f1f1f; color: #ccc; vertical-align: top; }
+.ip-day { white-space: nowrap; color: #fff; font-weight: 600; }
+.ip-daystate, .ip-stage { white-space: nowrap; }
+.ip-msg { color: #999; overflow-wrap: anywhere; }
+.ip-dash { margin-top: 10px; }
+.ip-link { color: #8ab4ff; font-size: 13px; }
+.ip-frame { display: block; width: 100%; height: 720px; border: 1px solid #262626; border-radius: 8px; margin-top: 8px; background: #111; }

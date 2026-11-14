@@ -52,6 +52,19 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
         await F.load(true);
         out.countMissing = F.count();
     }
+    if (input.progress) {
+        const P = window.PostsProgress;
+        out.pCountNone = P.count();
+        docBody = JSON.stringify(input.progress);
+        await P.load(true);
+        out.pCount = P.count();
+        out.pValid = [P.valid(input.progress), P.valid({ made: 'x' }), P.valid(null)];
+        out.pAge = P.ageSeconds('2026-11-14T18:20:00', Date.parse('2026-11-14T18:27:30'));
+        out.pAgo = [P.agoText(40), P.agoText(450), P.agoText(7300), P.agoText(null)];
+        docBody = '<!DOCTYPE html><html>';           // the dev server's fallback page for a missing file
+        await P.load(true);
+        out.pCountMissing = P.count();
+    }
     if (input.posts) {
         docBody = JSON.stringify(input.posts);
         await window.PostsQueue.ready();
@@ -148,6 +161,20 @@ class ReelsTab(unittest.TestCase):
         self.assertIsNone(out["countMissing"])          # an HTML fallback page is no report
 
     # ── Review: what has been decided, and what is left to judge ──
+    def test_in_progress_count_and_age(self):
+        """Posts ▸ Reels ▸ In progress (posts-progress.js): the button's number is what runs this minute; a missing
+        report gives no number; the report's age is said in plain words (a stale one gets a warning on the page)."""
+        rep = {"version": 2, "made": "2026-11-14T18:20:00", "disk_ok": True,
+               "now": [{"who": "machine", "text": "Redoing old reels: 28 of 50 done"},
+                       {"who": "machine", "text": "Generator: 1 reel(s) planned and waiting"}]}
+        out = self.run_js(["posts-progress.js"], {"progress": rep})
+        self.assertIsNone(out["pCountNone"])
+        self.assertEqual(out["pCount"], 2)
+        self.assertEqual(out["pValid"], [True, False, False])
+        self.assertEqual(out["pAge"], 450)
+        self.assertEqual(out["pAgo"], ["just now", "8 min ago", "2 h ago", ""])
+        self.assertIsNone(out["pCountMissing"])
+
     def test_decisions_and_to_review(self):
         sfc = "/Volumes/Crucial X9/Short Form Content"
         reels = {"reels": [

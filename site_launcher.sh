@@ -42,9 +42,22 @@ reels_helper() {
   ( cd "$REPO" && nohup python3 tools/reels_local.py --port 8791 >>local_browse/serve_site.log 2>&1 & )
   say "reels helper started"
 }
+# The vlog pipeline's dashboard (the video project's tools/vlog/status.py serve, port 8770): Posts ▸ Reels ▸ In
+# progress shows it in a frame. Started only when the video project and the work disk are there; never holds
+# up the launch.
+vlog_dashboard() {
+  curl -s -o /dev/null --max-time 2 "http://127.0.0.1:8770/" && return 0
+  local ve="$HOME/Documents/Projects/video-editor-r4"
+  [ -d "$ve" ] || ve="$HOME/Documents/Projects/video-editor"
+  local trip="/Volumes/Crucial X9/editor/vlog/china-summer-2026/trip.json"
+  [ -x "$ve/.venv/bin/python" ] && [ -f "$trip" ] || return 0
+  ( cd "$ve" && nohup .venv/bin/python tools/vlog/status.py serve "$trip" --port 8770 >>"$REPO/local_browse/serve_site.log" 2>&1 & )
+  say "vlog dashboard started"
+}
 if curl -s -o /dev/null --max-time 2 "$URL"; then
   sync_posts
   reels_helper
+  vlog_dashboard
   open "$URL" && say "server up — opened new tab" || { say "open failed"; alert "Could not open the browser"; }
   exit 0
 fi
@@ -77,6 +90,7 @@ if ! curl -s -o /dev/null --max-time 2 "$URL"; then
   exit 1
 fi
 open "$URL" && say "cold start ok — opened new tab"
+vlog_dashboard
 
 # People and Posts serve phone photos through symlinks into the Tailscale
 # drive. Without it those pages load but every phone thumbnail 404s, so flag

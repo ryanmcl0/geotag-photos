@@ -2531,14 +2531,20 @@ window.Posts = (function () {
                 onDone();
             });
     }
+    const placesOpen = new Set();  // post ids whose place-name list is expanded
     function placeNamesRow(root, post) {
         const pinned = post.photos.map((ref, idx) => [ref, idx]).filter(([ref]) => ref.loc && !isPhoneRef(ref));
         if (!pinned.length) return null;
-        const box = document.createElement('div');
+        // Collapsed by default; open state survives the card re-rendering on edits.
+        const box = document.createElement('details');
         box.className = 'posts-places';
-        const head = document.createElement('div');
+        box.open = placesOpen.has(post.id);
+        box.addEventListener('toggle', () => {
+            if (box.open) placesOpen.add(post.id); else placesOpen.delete(post.id);
+        });
+        const head = document.createElement('summary');
         head.className = 'posts-places-head';
-        head.textContent = '📍 Place names on pull';
+        head.textContent = `📍 Place names on pull (${pinned.length})`;
         head.title = 'The name and the line under it, as they go on the photo. Edit either one; ' +
             'type "off" as the name for no label. Saved when you leave the field.';
         box.appendChild(head);

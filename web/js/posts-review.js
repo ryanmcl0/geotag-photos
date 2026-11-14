@@ -730,7 +730,7 @@ window.PostsReview = (function () {
 
     function reviewedPanel(doc) {
         reelsDoc = doc;
-        const root = el('section', 'pq rvw rv');
+        const root = el('section', 'pq rvw rvd');
         rv = { root, sig: null, kind: lsGet(RV_KIND_KEY, 'all'), trip: lsGet(RV_TRIP_KEY, 'all'), items: [], drawn: 0 };
         if (!RV_KINDS.some(k => k[0] === rv.kind)) rv.kind = 'all';
         rv.head = el('div', 'pq-h', 'Reviewed');

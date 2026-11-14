@@ -603,7 +603,9 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 
 /* ---------- 📍 place names pull will bake in (one field per pinned photo) ---------- */
 .posts-places { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-.posts-places-head { color: #999; font-size: 12px; }
+.posts-places-head { color: #999; font-size: 12px; cursor: pointer; user-select: none; width: fit-content; }
+.posts-places-head:hover { color: #ccc; }
+.posts-places:not([open]) { gap: 0; }
 .posts-places-row { display: flex; align-items: center; gap: 8px; }
 .posts-places-num {
   flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: #2a2a2a; color: #ddd;

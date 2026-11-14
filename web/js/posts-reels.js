@@ -41,6 +41,7 @@ window.PostsReels = (function () {
         ['progress', 'In progress', 'Jobs running right now'],
         ['queue', 'Queue', 'Reels in the post queue still to go out'],
         ['review', 'Review', 'Reels you haven\'t judged yet'],
+        ['reviewed', 'Reviewed', 'Reels you have judged: verdict, stars, notes'],
         ['profile', 'Profile', 'Reels picked for posting, in order'],
         ['music', 'Music', 'Songs in the music pool'],
         ['footage', 'Footage', 'Share of drone clips used in reels']
@@ -102,6 +103,10 @@ window.PostsReels = (function () {
         if (id === 'review') {
             const n = window.PostsReview ? PostsReview.count() : null;
             return n === null ? null : { n, title: `${n} reel${n === 1 ? '' : 's'} to judge` };
+        }
+        if (id === 'reviewed') {
+            const n = window.PostsReview ? PostsReview.reviewedCount() : null;
+            return n === null ? null : { n, title: `${n} reel${n === 1 ? '' : 's'} judged` };
         }
         if (id === 'profile') return { n: count(), title: 'Reels picked for posting' };
         if (id === 'music') {
@@ -345,6 +350,8 @@ window.PostsReels = (function () {
         } else if (section === 'review') {
             if (window.PostsReview) body.appendChild(PostsReview.panel(doc));
             if (window.PostsQueue) body.appendChild(PostsQueue.panel('rejects'));
+        } else if (section === 'reviewed') {
+            if (window.PostsReview) body.appendChild(PostsReview.reviewedPanel(doc));
         } else if (section === 'music') {
             if (window.PostsMusic) body.appendChild(PostsMusic.panel());
         } else if (section === 'footage') {

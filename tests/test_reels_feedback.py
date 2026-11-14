@@ -21,11 +21,11 @@ class FeedbackTest(unittest.TestCase):
         (self.root / "reels.json").write_text(json.dumps({"reels": [
             {"id": "a", "path": "/sfc/2026 China Summer/5 Hooks/a.mp4", "title": "A", "trip": "t"},
             {"id": "b", "path": "/sfc/2024 Mongolia/2 Shoots/b.mp4", "title": "B", "trip": "m"}]}))
-        self.old = (R.ROOT, R.FEEDBACK)
-        R.ROOT, R.FEEDBACK = self.root, self.root / "reel_feedback.json"
+        self.old = (R.ROOT, R.FEEDBACK, R.RATINGS)
+        R.ROOT, R.FEEDBACK, R.RATINGS = self.root, self.root / "reel_feedback.json", self.root / "reel_ratings.json"
 
     def tearDown(self):
-        R.ROOT, R.FEEDBACK = self.old
+        R.ROOT, R.FEEDBACK, R.RATINGS = self.old
         self.tmp.cleanup()
 
     def test_a_note_is_kept_replaced_and_withdrawn(self):
@@ -50,6 +50,24 @@ class FeedbackTest(unittest.TestCase):
         self.assertEqual(json.loads(R.FEEDBACK.read_text())["items"], [{"id": "a", "note": "old", "status": "handled"}])
         long = R.reel_feedback({"id": "b", "note": "x" * 5000})[1]["items"][-1]["note"]
         self.assertEqual(len(long), R.NOTE_MAX)
+
+    def test_stars_are_kept_replaced_and_withdrawn(self):
+        t = dt.datetime(2026, 11, 14, 23, 30)
+        code, doc = R.reel_rating({"id": "a", "stars": 4}, t)
+        self.assertEqual(code, 200)
+        self.assertEqual(doc["items"], {"a": {"stars": 4, "path": "/sfc/2026 China Summer/5 Hooks/a.mp4", "title": "A",
+                                              "trip": "t", "time": "2026-11-14T23:30:00"}})
+        R.reel_rating({"id": "a", "stars": 5}, t)
+        R.reel_rating({"id": "b", "stars": 2}, t)
+        got = json.loads(R.RATINGS.read_text())["items"]
+        self.assertEqual({k: v["stars"] for k, v in got.items()}, {"a": 5, "b": 2})
+        self.assertEqual(list(R.reel_rating({"id": "a", "undo": True}, t)[1]["items"]), ["b"])
+
+    def test_star_refusals(self):
+        for bad in (0, 6, "3", 2.5, True, None):
+            self.assertEqual(R.reel_rating({"id": "a", "stars": bad})[0], 400, bad)
+        self.assertEqual(R.reel_rating({"id": "zzz", "stars": 3})[0], 400)
+        self.assertFalse(R.RATINGS.exists())
 
 
 if __name__ == "__main__":

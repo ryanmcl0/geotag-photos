@@ -309,6 +309,21 @@
 .rvw-slim-text .pq-status { margin-top: 2px; }
 .rvw-row.decided { padding: 8px 12px; opacity: .8; }
 .rvw-more { margin: 4px 0 0; }
+.rvw-stars { display: flex; gap: 2px; align-items: center; }
+.rvw-acts .reels-mini.rvw-star, .rv-acts .reels-mini.rvw-star {
+    font-size: 17px; line-height: 1; padding: 5px 4px; border: none; background: none; color: #555; border-radius: 6px;
+}
+.reels-mini.rvw-star.on { color: #f2c94c; }
+.reels-mini.rvw-star.hover { color: #ffd76a; }
+.rv-top { display: flex; align-items: center; gap: 12px; }
+.rv-thumb { width: 54px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 6px; flex: none; }
+.rv-acts { display: flex; align-items: center; gap: 8px; flex: none; }
+.rv-player { margin: 10px 0 0 66px; }
+@media (max-width: 760px) {
+    .rv-top { flex-wrap: wrap; }
+    .rv-acts { flex-basis: 100%; }
+    .rv-player { margin-left: 0; }
+}
 @media (max-width: 760px) {
     .rvw-full, .rvw-full:has(.rvw-player.wide) { grid-template-columns: minmax(0, 1fr); }
     .rvw-player { width: min(100%, 320px); margin: 0 auto; }

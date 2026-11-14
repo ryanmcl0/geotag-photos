@@ -318,9 +318,9 @@ window.PostsQueue = (function () {
         if (rj) return { kind: 'rejected', at: rj.path, reason: rj.reason, when: rj.rejected };
         const q = queue();
         const it = q.items.find(same);
-        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when };
+        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when, added: it.added };
         const sl = q.shortlist.find(same);
-        if (sl) return { kind: 'shortlist', at: sl.path };
+        if (sl) return { kind: 'shortlist', at: sl.path, added: sl.added };
         return null;
     }
 

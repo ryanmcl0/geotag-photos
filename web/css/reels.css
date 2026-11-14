@@ -293,6 +293,11 @@
 .rvw-post:not(:disabled) { border-color: #8fd18f; color: #8fd18f; }
 .rvw-short:not(:disabled) { border-color: #e6c06a; color: #e6c06a; }
 .rvw-reject { flex: 1 1 auto; min-width: 0; }
+.rvw-fbbox { flex: 1 1 100%; min-width: 0; }
+.rvw-fbbox:empty { display: none; }
+.rvw-fbtext { display: block; width: 100%; resize: vertical; line-height: 1.4; }
+.rvw-fbbar { display: flex; gap: 6px; margin-top: 6px; }
+.rvw-fbsave { border-color: #e8c97a; color: #e8c97a; }
 .rvw-reject:has(.pq-reason) { flex-basis: 100%; }
 .rvw-reject .pq-reject-ctl { margin-top: 0; }
 .rvw-reject .pq-reject-btn { border-color: #7a3a33; color: #f08a7a; }

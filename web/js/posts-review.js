@@ -15,6 +15,15 @@
  * reel comes up. Keys, while this section shows and no text box has the cursor: J or ↓ the next reel, K or ↑ the one
  * before, Space play / pause, P Post, S Shortlist, R Reject… (Enter in the reason box rejects, Esc cancels).
  *
+ * What the three mean (owner 2026-11-14: "reject button is hard reject with optional feedback. shortlist button is
+ * like its good but needs smth fixed and then requires feedback. post is good to go as is"):
+ *   Post       good to go as it is.
+ *   Shortlist  good, but something needs fixing: S opens a text box and the note is REQUIRED (Enter saves, Shift+Enter
+ *              a new line, Esc cancels). The reel goes onto the shortlist and the note is kept on this Mac by the
+ *              local helper (POST /reels/feedback → web/phone/reels/reel_feedback.json) for the reel builders to act
+ *              on; the folded line shows it. Undo takes the reel off the shortlist and withdraws the note.
+ *   Reject…    a hard reject; the reason is optional ("No reason given" when nothing is written).
+ *
  * Hundreds of reels: a page of 12 at a time ("Show 12 more", or moving past the last one), each video
  * preload="none" with its cover as the poster, so nothing loads until it is played. Videos stream from the local
  * helper like the reel cards (reels-site.js mediaUrl), falling back to the dev server's copy.
@@ -36,6 +45,8 @@ window.PostsReview = (function () {
     let chipsEl = null;
     let moreEl = null;
     let listening = false;
+    let notes = {};                  // reel id → its open feedback note (reel_feedback.json's item)
+    let notesP = null;
 
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -53,10 +64,31 @@ window.PostsReview = (function () {
         return m ? m[1] : (r.trip || 'Other');
     }
 
+    // ── feedback notes (the local helper keeps them) ──
+    const api = () => (window.ReelsSite && ReelsSite.api) || '';
+    function takeNotes(doc) {
+        notes = {};
+        ((doc && doc.items) || []).forEach(it => { if (it && it.status === 'open' && it.id) notes[it.id] = it; });
+    }
+    function loadNotes() {
+        if (!notesP) {
+            notesP = fetch(api() + '/reels/feedback', { cache: 'no-store' })
+                .then(r => (r.ok ? r.json() : null)).then(takeNotes).catch(() => {});
+        }
+        return notesP;
+    }
+    // {id, note} saves the reel's note, {id, undo: true} withdraws it → true when the helper took it
+    function sendNote(body) {
+        return fetch(api() + '/reels/feedback', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        }).then(r => (r.ok ? r.json() : null)).then(doc => { if (doc) takeNotes(doc); return !!doc; }).catch(() => false);
+    }
+
     // what has been decided about a reel, or null
     function decision(r) {
         const d = window.PostsQueue ? PostsQueue.decisionOf(r.path) : null;
-        if (d) return d;
+        if (d) return (d.kind === 'shortlist' && notes[r.id]) ? Object.assign({}, d, { note: notes[r.id].note }) : d;
+        if (notes[r.id]) return { kind: 'shortlist', at: r.path, note: notes[r.id].note, noteOnly: true };
         const st = window.ReelsSite && ReelsSite.state();
         if (st && st.posted && st.posted[r.id]) return { kind: 'posted', profile: true, when: st.posted[r.id] };
         return null;
@@ -157,12 +189,14 @@ window.PostsReview = (function () {
             acts.appendChild(b);
             return b;
         };
-        btn('Post', 'P', 'rvw-post', 'Into the post queue: the bot fits it into the schedule (as if you pasted its path there)',
+        btn('Post', 'P', 'rvw-post', 'Good to go as it is: into the post queue, the bot fits it into the schedule',
             () => verdict(row, 'queue'));
-        btn('Shortlist', 'S', 'rvw-short', 'Good, not yet: onto the shortlist (the bot never sees it until Post now)',
-            () => verdict(row, 'shortlist'));
+        btn('Shortlist…', 'S', 'rvw-short', 'Good, but something needs fixing: says what (required), then onto the ' +
+            'shortlist; the reel builders act on the note', () => openFeedback(row));
         row.rejectSlot = el('div', 'rvw-reject');
         acts.appendChild(row.rejectSlot);
+        row.fbSlot = el('div', 'rvw-fbbox');
+        acts.appendChild(row.fbSlot);
         body.appendChild(acts);
         row.note = el('div', 'pq-status wait rvw-busy');
         body.appendChild(row.note);
@@ -189,6 +223,51 @@ window.PostsReview = (function () {
         if (b && !b.querySelector('kbd')) b.append(document.createTextNode(' '), el('kbd', '', 'R'));
     }
 
+    // Shortlist…: the text box under the verdicts (what needs fixing: required). Enter saves, Shift+Enter a new
+    // line, Esc cancels. Saved = the note to the helper, then the reel onto the shortlist.
+    function openFeedback(row) {
+        if (row.state || row.busy) return;
+        const open = row.fbSlot.querySelector('textarea');
+        if (open) { open.focus(); return; }
+        const ta = el('textarea', 'pq-reason-text rvw-fbtext');
+        ta.rows = 3;
+        ta.placeholder = 'What needs fixing? (required: Enter saves, Shift+Enter a new line, Esc cancels)';
+        const save = el('button', 'reels-mini rvw-fbsave', 'Shortlist with this note');
+        save.disabled = true;
+        ta.addEventListener('input', () => { save.disabled = !ta.value.trim(); });
+        save.type = 'button';
+        const cancel = el('button', 'reels-mini', 'Cancel');
+        cancel.type = 'button';
+        const close = () => row.fbSlot.replaceChildren();
+        const go = () => {
+            const note = ta.value.trim();
+            if (!note || row.busy) return;
+            row.busy = 'Saving the note, adding to the shortlist…';
+            paint(row);
+            sendNote({ id: row.r.id, note }).then(ok => {
+                if (!ok) {
+                    row.busy = null;
+                    row.missing = 'Not shortlisted: the note could not be saved (the local helper did not answer; relaunch the desktop app).';
+                    refresh();
+                    return null;
+                }
+                close();
+                return PostsQueue.addPaths([row.r.path], 'shortlist', false).then(() => { row.busy = null; refresh(); });
+            });
+        };
+        save.addEventListener('click', e => { e.stopPropagation(); go(); });
+        cancel.addEventListener('click', e => { e.stopPropagation(); close(); });
+        ta.addEventListener('keydown', e => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); }
+            else if (e.key === 'Escape') { e.preventDefault(); close(); row.el.focus(); }
+        });
+        const bar = el('div', 'rvw-fbbar');
+        bar.append(save, cancel);
+        row.fbSlot.replaceChildren(ta, bar);
+        ta.focus();
+    }
+
     function verdict(row, where) {
         if (row.state || row.busy) return;
         row.busy = where === 'queue' ? 'Adding to the post queue…' : 'Adding to the shortlist…';
@@ -204,8 +283,9 @@ window.PostsReview = (function () {
         if (!d) return;
         row.busy = 'Undoing…';
         paint(row);
+        const offList = () => (d.noteOnly ? Promise.resolve() : PostsQueue.removeFromShortlist(d.at));
         const done = d.kind === 'queue' ? PostsQueue.removeFromQueue(d.at)
-            : d.kind === 'shortlist' ? PostsQueue.removeFromShortlist(d.at)
+            : d.kind === 'shortlist' ? offList().then(() => (d.note ? sendNote({ id: row.r.id, undo: true }) : null))
                 : d.kind === 'rejected' ? PostsQueue.undoReject(d.at) : Promise.resolve();
         done.then(() => { row.busy = null; refresh(); });
     }
@@ -231,6 +311,7 @@ window.PostsReview = (function () {
         const txt = el('div', 'rvw-slim-text');
         txt.appendChild(el('div', 'pq-title', row.r.title || row.r.id));
         const what = d.kind === 'rejected' ? `Rejected: ${d.reason || ''}`
+            : d.kind === 'shortlist' && d.note ? `On the shortlist, to fix: ${d.note}`
             : d.kind === 'posted' ? (d.profile ? `Posted ${d.when || ''} (ticked on the Profile list)` : 'Posted')
                 : SAID[d.kind];
         txt.appendChild(el('div', 'pq-status ' + (d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : 'ok'),
@@ -242,7 +323,7 @@ window.PostsReview = (function () {
             u.disabled = !!row.busy;
             u.title = d.kind === 'rejected' ? 'Not rejected after all: off the reject list, back to judge'
                 : d.kind === 'queue' ? 'Take it out of the post queue again (it is not posted), back to judge'
-                    : 'Take it off the shortlist again, back to judge';
+                    : 'Take it off the shortlist again (its note is withdrawn), back to judge';
             u.addEventListener('click', e => { e.stopPropagation(); undo(row); });
             row.slim.appendChild(u);
         }
@@ -375,7 +456,7 @@ window.PostsReview = (function () {
             verdict(row, 'queue');
         } else if (k === 's' || k === 'S') {
             e.preventDefault();
-            verdict(row, 'shortlist');
+            openFeedback(row);
         } else if (k === 'r' || k === 'R') {
             e.preventDefault();
             const b = row.rejectSlot.querySelector('.pq-reject-btn');
@@ -392,11 +473,11 @@ window.PostsReview = (function () {
         headEl = el('div', 'pq-h', 'To review');
         rootEl.appendChild(headEl);
         rootEl.appendChild(el('p', 'reels-how',
-            'The reels you haven\'t judged yet, newest first. Post puts one in the post queue, Shortlist keeps it for ' +
-            'later, Reject… asks why and the reel builders learn from it. A judged reel folds away (with Undo) and the ' +
-            'next one comes up.'));
+            'The reels you haven\'t judged yet, newest first. Post: good to go as it is, into the post queue. ' +
+            'Shortlist…: good, but something needs fixing; it asks what, and the reel builders act on your note. ' +
+            'Reject…: a hard no; saying why is optional. A judged reel folds away (with Undo) and the next one comes up.'));
         const keys = el('p', 'reels-how rvw-keys');
-        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['S', 'Shortlist'], ['R', 'Reject…']].forEach(([k, w]) => {
+        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['S', 'Shortlist…'], ['R', 'Reject…']].forEach(([k, w]) => {
             keys.append(el('kbd', '', k), document.createTextNode(' ' + w + '  '));
         });
         rootEl.appendChild(keys);
@@ -413,16 +494,13 @@ window.PostsReview = (function () {
             if (window.ReelsSite) ReelsSite.onChange(() => refresh());
         }
         const go = () => drawList();
-        if (window.PostsQueue && !PostsQueue.counts().loaded) {
-            listEl.appendChild(el('p', 'reels-how', 'Loading…'));
-            PostsQueue.ready().then(go);
-        } else {
-            go();
-        }
+        const ready = (window.PostsQueue && !PostsQueue.counts().loaded) ? PostsQueue.ready() : Promise.resolve();
+        listEl.appendChild(el('p', 'reels-how', 'Loading…'));
+        Promise.all([ready, loadNotes()]).then(go);
         return rootEl;
     }
 
     function setDoc(doc) { reelsDoc = doc; }
 
-    return { panel, count, setDoc, pending, tripName, newestFirst };
+    return { panel, count, setDoc, pending, tripName, newestFirst, takeNotes, decision };
 })();

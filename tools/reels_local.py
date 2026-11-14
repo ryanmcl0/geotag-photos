@@ -23,6 +23,11 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
     POST /reels/song-feedback    {"id", "verdict": "pool"|"reel"|"undo", "note"} → record a rejection of the reel's
                                  song (the song and plan are taken from reels.json, not from the browser); "undo"
                                  withdraws that reel's rejections the pipeline hasn't acted on yet
+    GET  /reels/feedback         his notes on reels from Posts ▸ Reels ▸ Review (Shortlist… = "good, but fix this",
+                                 2026-11-14; the note is required there)
+    POST /reels/feedback         {"id", "note"} → the reel's open note (a new one replaces it); {"id", "undo": true}
+                                 withdraws it. Kept in web/phone/reels/reel_feedback.json for the video project to
+                                 act on (it marks a note "handled"); the reel's path and title come from reels.json
     GET  /reveal?trip=&id=       show the photo's EDITED file (the Lightroom export the site was built from) in
                                  Finder: the lightbox's "Finder" button on localhost. The file is looked up by
                                  the trip manifest's source folder + the photo's source filename, never from
@@ -74,6 +79,8 @@ ROOT = Path(__file__).resolve().parent.parent / "web" / "phone" / "reels"
 STATE = ROOT / "state.json"
 QUEUE = ROOT / "export_queue.json"
 SONGS = ROOT / "song_feedback.json"
+FEEDBACK = ROOT / "reel_feedback.json"
+NOTE_MAX = 2000
 FILES = ROOT / "files"
 MAX_BODY = 2_000_000
 CHUNK = 1 << 20
@@ -116,6 +123,29 @@ def clean_state(s):
 def known_ids():
     doc = read(ROOT / "reels.json", {})
     return {r["id"] for r in doc.get("reels", []) if isinstance(r, dict) and "id" in r}
+
+
+def reel_feedback(body, now=None):
+    """Apply one POST /reels/feedback to reel_feedback.json; → (code, response). One open note per reel: writing
+    again replaces it, "undo" withdraws it. A note the video project has acted on ("handled") is never touched."""
+    rid = body.get("id")
+    reel = next((r for r in read(ROOT / "reels.json", {}).get("reels", [])
+                 if isinstance(r, dict) and r.get("id") == rid), None)
+    if not reel:
+        return 400, {"error": "unknown reel"}
+    fb = read(FEEDBACK, {"items": []})
+    items = [it for it in fb.get("items") or [] if not (it.get("id") == rid and it.get("status") == "open")]
+    if not body.get("undo"):
+        note = body.get("note")
+        if not isinstance(note, str) or not note.strip():
+            return 400, {"error": "the note is empty"}
+        items.append({"id": rid, "path": reel.get("path"), "title": reel.get("title"), "trip": reel.get("trip"),
+                      "note": note.strip()[:NOTE_MAX],
+                      "time": (now or dt.datetime.now()).isoformat(timespec="seconds"), "status": "open"})
+    fb["items"] = items
+    fb["updated"] = (now or dt.datetime.now()).isoformat(timespec="seconds")
+    write(FEEDBACK, fb)
+    return 200, fb
 
 
 def song_feedback(body):
@@ -572,6 +602,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, read(QUEUE, {"items": []}))
         if self.path.split("?")[0] == "/reels/song-feedback":
             return self._json(200, read(SONGS, {"items": []}))
+        if self.path.split("?")[0] == "/reels/feedback":
+            return self._json(200, read(FEEDBACK, {"items": []}))
         self._json(404, {"error": "not found"})
 
     def do_PUT(self):
@@ -593,6 +625,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, s)
 
     def do_POST(self):
+        if self.path.split("?")[0] == "/reels/feedback":
+            try:
+                return self._json(*reel_feedback(self._body()))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
         if self.path.split("?")[0] == "/reels/song-feedback":
             try:
                 return self._json(*song_feedback(self._body()))

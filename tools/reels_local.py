@@ -145,6 +145,42 @@ def song_feedback(body):
 
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+
+# The "In progress" section's report, made on demand (2026-11-14). The video project writes web/phone/reels/status.json
+# only at the end of each generator turn (1 to 8 minutes), so the page could say "status is old" while all was well.
+# Here its own tool is asked (reel_status.py --print: read-only, a second or two), at most once every STATUS_TTL s.
+VIDEO_CHECKOUTS = [Path.home() / "Documents" / "Projects" / n for n in ("video-editor-r4", "video-editor")]
+STATUS_TTL = 15
+_STATUS = {"at": 0.0, "doc": None}
+_STATUS_LOCK = threading.Lock()
+
+
+def live_status(run=None, clock=None, checkouts=None):
+    """The video project's status report as a dict, or None when its tool is not there or fails (the page then reads
+    the file). run(argv, cwd) -> text and clock() are for tests."""
+    import subprocess
+    import time
+    clock = clock or time.monotonic
+    with _STATUS_LOCK:
+        if _STATUS["doc"] is not None and clock() - _STATUS["at"] < STATUS_TTL:
+            return _STATUS["doc"]
+        for ve in (VIDEO_CHECKOUTS if checkouts is None else checkouts):
+            py, tool = ve / ".venv" / "bin" / "python", ve / "tools" / "vlog" / "reel_status.py"
+            if not (py.exists() and tool.exists()):
+                continue
+            try:
+                if run:
+                    out = run([str(py), str(tool), "--print"], str(ve))
+                else:
+                    out = subprocess.run([str(py), str(tool), "--print"], cwd=str(ve), capture_output=True, text=True,
+                                         timeout=20).stdout
+                doc = json.loads(out)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                continue
+            if isinstance(doc, dict) and isinstance(doc.get("version"), int) and isinstance(doc.get("made"), str):
+                _STATUS.update(at=clock(), doc=doc)
+                return doc
+        return None
 _edit_index = {}          # photos_path -> {basename: full path}, built on first use per trip
 
 
@@ -529,6 +565,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"path": path})
         if self.path.split("?")[0] == "/reels/state":
             return self._json(200, read(STATE, {"queue": [], "posted": {}, "captions": {}}))
+        if self.path.split("?")[0] == "/reels/status":
+            doc = live_status()
+            return self._json(200 if doc else 404, doc or {"error": "the video project's status tool did not answer"})
         if self.path.split("?")[0] == "/reels/export":
             return self._json(200, read(QUEUE, {"items": []}))
         if self.path.split("?")[0] == "/reels/song-feedback":

@@ -4,8 +4,9 @@
  * vlogs can go there too so I can see all this status when I just launch the desktop localhost app", and: "it should
  * make it clear what is AI and what's machine").
  *
- * It only reads web/phone/reels/status.json (local-only, like usage.json): the video project's tools/vlog/reel_status.py
- * writes it once a minute from what its jobs leave behind. Nothing here starts, stops or changes a job. The report's
+ * It only reads a report: first the local helper's GET /reels/status (tools/reels_local.py asks the video project's
+ * tools/vlog/reel_status.py on demand), else web/phone/reels/status.json (local-only, like usage.json), which that tool
+ * writes at the end of each generator turn from what its jobs leave behind. Nothing here starts, stops or changes a job. The report's
  * shape (version 2):
  *   made (local time), disk_ok, note?, ai_note, render_running, filed_count, held_count
  *   now[]: {who, text}                              what is running this minute
@@ -27,6 +28,12 @@ window.PostsProgress = (function () {
     'use strict';
 
     const SRC = '/phone/reels/status.json';
+    // the local helper makes the report on demand (tools/reels_local.py GET /reels/status); the file is the fallback
+    const HOST = (typeof location !== 'undefined' && location.hostname) || 'localhost';
+    const PORT = (() => {
+        try { return parseInt(localStorage.getItem('reels_helper_port'), 10) || 8791; } catch (e) { return 8791; }
+    })();
+    const LIVE = `http://${HOST === 'localhost' ? '127.0.0.1' : HOST}:${PORT}/reels/status`;
     const EVERY = 30000;
     const STALE_S = 300;
     let report;                      // undefined = not loaded yet, null = no report
@@ -46,10 +53,11 @@ window.PostsProgress = (function () {
     function load(force) {
         if (!loadP || force) {
             // a missing file comes back as the site's HTML page (the dev server's fallback), so parse it carefully
-            loadP = fetch(SRC, { cache: 'no-store' })
+            const get = url => fetch(url, { cache: 'no-store' })
                 .then(r => (r.ok ? r.text() : null))
                 .then(t => { try { const d = t ? JSON.parse(t) : null; return valid(d) ? d : null; } catch (e) { return null; } })
-                .catch(() => null)
+                .catch(() => null);
+            loadP = get(LIVE).then(d => d || get(SRC))
                 .then(d => {
                     report = d;
                     try { document.dispatchEvent(new CustomEvent('reels:changed', { detail: 'progress' })); } catch (e) { /* no DOM */ }
@@ -74,7 +82,8 @@ window.PostsProgress = (function () {
     }
 
     const STATE = { running: 'Running', idle: 'Idle', waiting: 'Waiting for a render', finished: 'Finished',
-                    stopped: 'Stopped', paused: 'Paused', 'not running': 'Not running' };
+                    stopped: 'Stopped', paused: 'Paused', 'not running': 'Not running',
+                    'no disk space': 'No disk space' };
 
     function stateTag(state) {
         return el('span', 'ip-state ip-state-' + String(state || 'idle').replace(/\W/g, '-'), STATE[state] || state || '');
@@ -158,7 +167,7 @@ window.PostsProgress = (function () {
     function generatorCard(g) {
         const c = card(g.title || 'Machine-only generator', g.who, g.state, g.who_note);
         c.appendChild(figures([[g.finished, 'finished'], [g.waiting, 'planned, waiting'], [g.failed, 'failed'],
-                               [g.second_mac, 'sent to the second Mac']]));
+                               ...(g.second_mac_off ? [] : [[g.second_mac, 'sent to the second Mac']])]));
         if (g.batch) c.appendChild(el('div', 'ip-current', `Batch ${g.batch}` + (g.page ? ` · ${g.page}` : '')));
         if (g.plan) c.appendChild(el('div', 'ip-sub', `Plan: ${g.plan}`));
         if (g.note) c.appendChild(el('div', 'ip-warn', g.note));

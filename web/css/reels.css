@@ -419,7 +419,7 @@
 .ip-state { display: inline-block; font-size: 11.5px; border-radius: 10px; padding: 1px 8px; white-space: nowrap; color: #bbb; background: #222; }
 .ip-state-running { color: #8ab4ff; background: #162033; }
 .ip-state-finished { color: #9bd3a6; background: #16261a; }
-.ip-state-waiting, .ip-state-paused { color: #f0c27a; background: #2a2114; }
+.ip-state-waiting, .ip-state-paused, .ip-state-no-disk-space { color: #f0c27a; background: #2a2114; }
 .ip-state-stopped, .ip-state-not-running { color: #999; background: #222; }
 .ip-bar { position: relative; height: 8px; background: #262626; border-radius: 4px; overflow: hidden; margin: 8px 0 4px; display: flex; }
 .ip-bar-fill { background: #8ab4ff; height: 100%; }

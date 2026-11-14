@@ -1,28 +1,50 @@
 /*
- * Posts ▸ Reels (localhost only): the reels picked for posting, in posting order, with their captions and posted
- * ticks, a phone preview of how the profile will look, and the 4K export.
+ * Posts ▸ Reels (localhost only; the live site has no reels manifest, so the tab isn't there). Since 2026-11-14 (owner:
+ * "it's getting quite convoluted and big … different sections") the tab is in sections, one shown at a time, picked in
+ * a row of buttons under the tab bar, each with a small live count. The choice is remembered in this browser and kept
+ * in the address as #reels/<section>, so a section can be linked (posts.html#reels/footage opens the tab on it).
  *
- * At the top, the post queue (posts-queue.js): the paths of reels he approved, spread by the bot on the NAS over the
- * slider's time frame and approved in Telegram once a day.
+ *   Queue    (posts-queue.js panel('queue')): the bot's post queue (paste the paths of reels that can go out now; the
+ *            slider's time frame; each line's status; the bot's schedule) and the shortlist (approved, not yet).
+ *            Count: reels in the queue still to go out.
+ *   Review   approvals, rejects and feedback in one place. To review (posts-review.js): the reels in reels.json with no
+ *            decision yet, newest first, a page at a time, each with its player and Post / Shortlist / Reject… (the
+ *            post queue's own lists, so one state), keys to go through them fast. Under it the Rejected box
+ *            (posts-queue.js panel('rejects')): the reject list with reasons and Undo, and its paste box.
+ *            Count: reels still to judge.
+ *   Profile  (this file): the reels picked for posting, in posting order, with their captions and posted ticks, a
+ *            phone preview of how the profile will look, and the 4K export. Count: reels picked.
+ *   Music    (posts-music.js): the music pool new reels are cut to, Add / Remove, the review folders, rejected music.
+ *            Count: songs in the pool.
+ *   Footage  (posts-footage.js): how much of each trip's footage the reels use, from web/phone/reels/usage.json (the
+ *            video project's footage_usage.py). Count: the share of drone clips used.
  *
- * Reels are picked with "+ Post" on their cards (galleries and China pages, in posts mode). The list, captions and
- * ticks are kept by reels-site.js (web/phone/reels/state.json through tools/reels_local.py, or this browser when that
- * helper isn't running). "Export 4K" only queues a request (web/phone/reels/export_queue.json): the render is the
- * video project's tools/vlog/reel_export.py, run by hand, one reel at a time, to the NAS export folder.
- *
- * Under it, the music pool (posts-music.js): the songs new reels are cut to, with Add and Remove.
- *
+ * Profile: reels are picked with "+ Post" on their cards (galleries and China pages, in posts mode). The list,
+ * captions and ticks are kept by reels-site.js (web/phone/reels/state.json through tools/reels_local.py, or this
+ * browser when that helper isn't running). "Export 4K" only queues a request (web/phone/reels/export_queue.json): the
+ * render is the video project's tools/vlog/reel_export.py, run by hand, one reel at a time, to the NAS export folder.
  * Each picked reel also has "Reject…" (posts-queue.js keeps the reject list, by the reel's file path from reels.json):
  * a reel rejected here leaves this posting list too; one rejected elsewhere shows greyed with its reason and Undo.
+ *
+ * The counts follow the "reels:changed" event the parts fire on document when their data changes.
  */
 window.PostsReels = (function () {
     'use strict';
 
     const VIEW_KEY = 'reels_profile_view';
+    const SECTION_KEY = 'reels_section';
+    const SECTIONS = [
+        ['queue', 'Queue', 'Reels in the post queue still to go out'],
+        ['review', 'Review', 'Reels you haven\'t judged yet'],
+        ['profile', 'Profile', 'Reels picked for posting, in order'],
+        ['music', 'Music', 'Songs in the music pool'],
+        ['footage', 'Footage', 'Share of drone clips used in reels']
+    ];
     let selected = new Set();
     let exportQ = null;
     let redrawRows = null;           // the latest render's rerender, for a reject list that changed elsewhere
     let listening = false;
+    let section = null;
 
     function el(tag, cls, text) {
         const e = document.createElement(tag);
@@ -39,7 +61,88 @@ window.PostsReels = (function () {
         if (!doc) return null;
         await ReelsSite.loadState();
         exportQ = await ReelsSite.exportQueue();
+        // what the section counts (and the Profile rows' rejects) need, whichever section is showing first
+        if (window.PostsReview) PostsReview.setDoc(doc);
+        if (window.PostsQueue) PostsQueue.ready();
+        if (window.PostsMusic) PostsMusic.ready();
+        if (window.PostsFootage) PostsFootage.load();
         return doc;
+    }
+
+    // ── the sections ──
+    const known = id => SECTIONS.some(s => s[0] === id);
+
+    // from the address (#reels/<id>) first, else the one picked last in this browser
+    function currentSection() {
+        const m = /^#reels\/([\w-]+)/.exec(location.hash || '');
+        if (m && known(m[1])) { lsSet(SECTION_KEY, m[1]); return m[1]; }
+        const s = lsGet(SECTION_KEY, 'queue');
+        return known(s) ? s : 'queue';
+    }
+
+    function showInAddress(id) {
+        const want = '#reels/' + id;
+        if (location.hash !== want) {
+            try { history.replaceState(null, '', location.pathname + location.search + want); } catch (e) { /* file: */ }
+        }
+    }
+
+    function sectionCount(id) {
+        if (id === 'queue') {
+            if (!window.PostsQueue) return null;
+            const c = PostsQueue.counts();
+            return c.loaded ? { n: c.queue, title: `${c.queue} in the post queue, ${c.shortlist} on the shortlist` } : null;
+        }
+        if (id === 'review') {
+            const n = window.PostsReview ? PostsReview.count() : null;
+            return n === null ? null : { n, title: `${n} reel${n === 1 ? '' : 's'} to judge` };
+        }
+        if (id === 'profile') return { n: count(), title: 'Reels picked for posting' };
+        if (id === 'music') {
+            const n = window.PostsMusic ? PostsMusic.count() : null;
+            return n === null ? null : { n, title: `${n} song${n === 1 ? '' : 's'} in the pool` };
+        }
+        if (id === 'footage') {
+            const p = window.PostsFootage ? PostsFootage.count() : null;
+            return p === null ? null : { n: p, title: `${p} of the drone clips are in a reel` };
+        }
+        return null;
+    }
+
+    function paintCounts() {
+        const bar = document.getElementById('reels-sections');
+        if (!bar) return;
+        bar.querySelectorAll('[data-section]').forEach(b => {
+            const c = sectionCount(b.dataset.section);
+            const span = b.querySelector('.reels-section-n');
+            span.textContent = c ? String(c.n) : '';
+            span.hidden = !c;
+            b.title = c ? c.title : (SECTIONS.find(s => s[0] === b.dataset.section) || [])[2] || '';
+        });
+    }
+
+    function sectionBar(rerender) {
+        const bar = el('div', 'reels-sections');
+        bar.id = 'reels-sections';
+        bar.setAttribute('role', 'tablist');
+        bar.setAttribute('aria-label', 'Reels sections');
+        SECTIONS.forEach(([id, label]) => {
+            const b = el('button', 'reels-section' + (id === section ? ' active' : ''));
+            b.type = 'button';
+            b.dataset.section = id;
+            b.setAttribute('role', 'tab');
+            b.setAttribute('aria-selected', String(id === section));
+            b.append(el('span', '', label), el('span', 'reels-section-n'));
+            b.addEventListener('click', () => {
+                if (id === section) return;
+                lsSet(SECTION_KEY, id);
+                showInAddress(id);
+                if (window.ReelsSite) ReelsSite.stopPlaying();
+                rerender();
+            });
+            bar.appendChild(b);
+        });
+        return bar;
     }
 
     function count() {
@@ -206,23 +309,48 @@ window.PostsReels = (function () {
         return c;
     }
 
+    // The tab: the section buttons, then the section picked.
     function render(root, doc, rerender) {
+        section = currentSection();
+        showInAddress(section);
+        redrawRows = rerender;
+        if (!listening) {
+            listening = true;
+            // the Profile rows show the reject list: redraw them when it changed elsewhere (the other sections' parts
+            // redraw themselves)
+            if (window.PostsQueue) {
+                PostsQueue.onRejects(() => {
+                    if (redrawRows && section === 'profile' && document.getElementById('reels-sections')) redrawRows();
+                });
+            }
+            document.addEventListener('reels:changed', paintCounts);
+            if (window.ReelsSite) ReelsSite.onChange(paintCounts);
+        }
+        root.appendChild(sectionBar(rerender));
+        const body = el('div', 'reels-section-body');
+        body.id = 'reels-section-' + section;
+        root.appendChild(body);
+        if (section === 'queue') {
+            if (window.PostsQueue) body.appendChild(PostsQueue.panel('queue'));
+        } else if (section === 'review') {
+            if (window.PostsReview) body.appendChild(PostsReview.panel(doc));
+            if (window.PostsQueue) body.appendChild(PostsQueue.panel('rejects'));
+        } else if (section === 'music') {
+            if (window.PostsMusic) body.appendChild(PostsMusic.panel());
+        } else if (section === 'footage') {
+            if (window.PostsFootage) body.appendChild(PostsFootage.panel());
+        } else {
+            renderProfile(body, doc, rerender);
+        }
+        paintCounts();
+    }
+
+    // The Profile section: the picked reels in posting order, the 4K export and the phone preview.
+    function renderProfile(root, doc, rerender) {
         const st = ReelsSite.state();
         const byId = Object.fromEntries(doc.reels.map(r => [r.id, r]));
         const list = st.queue.map(id => byId[id]).filter(Boolean);
         selected = new Set([...selected].filter(id => st.queue.includes(id)));
-
-        // the post queue (posts-queue.js): paste approved reels' paths, the slider, the bot's schedule, the rejects
-        if (window.PostsQueue) {
-            redrawRows = rerender;
-            if (!listening) {
-                listening = true;
-                PostsQueue.onRejects(() => { if (redrawRows && root.isConnected) redrawRows(); });
-            }
-            root.appendChild(PostsQueue.panel());
-        }
-        // the music pool (posts-music.js): the songs new reels are cut to, add and remove
-        if (window.PostsMusic) root.appendChild(PostsMusic.panel());
 
         const where = ReelsSite.where() === 'disk'
             ? 'Saved on this Mac (web/phone/reels/state.json).'
@@ -289,5 +417,5 @@ window.PostsReels = (function () {
         root.appendChild(layout);
     }
 
-    return { load, render, count };
+    return { load, render, count, sections: SECTIONS.map(s => s[0]) };
 })();

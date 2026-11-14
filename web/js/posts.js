@@ -1116,6 +1116,12 @@ window.Posts = (function () {
                 renderPasswordForm(root);
                 return;
             }
+            // a Reels section link followed while the page is open (or the address edited)
+            window.addEventListener('hashchange', () => {
+                if (!reelsHash() || !reelsDoc) return;
+                activeTab = 'reels';
+                renderManager(root);
+            });
             // One-time backfill: give pre-numbering drafts their #N (in stored
             // order). Renders even if the save fails — numbers are then local.
             if (doc.posts.some(p => !p.num)) {
@@ -1207,6 +1213,9 @@ window.Posts = (function () {
         activeTab = localStorage.getItem('posts_tab') || 'ig';
         if (activeTab === 'main') activeTab = 'ig';   // pre-platform value
     } catch (e) { /* private mode */ }
+    // A link to a Reels section (posts.html#reels/footage, posts-reels.js) opens that tab.
+    const reelsHash = () => /^#reels(\/|$)/.test(location.hash || '');
+    if (reelsHash()) activeTab = 'reels';
 
     function renderManager(root) {
         updatePill();
@@ -1266,6 +1275,10 @@ window.Posts = (function () {
             b.addEventListener('click', () => {
                 activeTab = id;
                 try { localStorage.setItem('posts_tab', id); } catch (e) { /* private mode */ }
+                // the Reels tab keeps its section in the address; another tab drops it
+                if (id !== 'reels' && reelsHash()) {
+                    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* file: */ }
+                }
                 renderManager(root);
             });
             tabs.appendChild(b);

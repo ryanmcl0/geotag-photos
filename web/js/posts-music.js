@@ -1,6 +1,7 @@
 /*
  * Posts ▸ Reels ▸ Music pool (localhost only, owner 2026-11-08): "a section… in reels tab of posts page that tracks my
- * active music pool for reels and lets me add or remove from it".
+ * active music pool for reels and lets me add or remove from it". Since 2026-11-14 it is the tab's Music section
+ * (posts-reels.js), shown on its own; count() is the section button's number (songs in the pool).
  *
  * The pool is the list of songs NEW reels are cut to: the video project's montage batches, the bot's word requests on
  * the NAS and the day reels all pick from it. Taking a song out only stops new reels using it; it stays in the music
@@ -31,7 +32,7 @@ window.PostsMusic = (function () {
     'use strict';
 
     const HOST = location.hostname;
-    const API = `http://${HOST === 'localhost' ? '127.0.0.1' : HOST}:8791`;
+    const API = window.ReelsSite ? ReelsSite.api : `http://${HOST === 'localhost' ? '127.0.0.1' : HOST}:8791`;
     const OPEN_KEY = 'reels_music_open';
     const SHOWN = 30;
     let doc = null;
@@ -628,7 +629,13 @@ window.PostsMusic = (function () {
         return out;
     }
 
+    // the Music section's count (posts-reels.js) follows every redraw, whether or not the section is showing
+    function tellChanged() {
+        try { document.dispatchEvent(new CustomEvent('reels:changed', { detail: 'music' })); } catch (e) { /* no DOM */ }
+    }
+
     function redraw() {
+        tellChanged();
         if (!panelEl || !panelEl.isConnected) { clearInterval(timer); timer = null; return; }
         const a = document.activeElement;
         const focus = a && panelEl.contains(a) && a.dataset && a.dataset.keep ? a.dataset.keep : null;
@@ -663,5 +670,18 @@ window.PostsMusic = (function () {
         return panelEl;
     }
 
-    return { panel };
+    // The pool once, for the section's count before the section is opened.
+    let readyP = null;
+    function ready() {
+        if (doc || man) return Promise.resolve();
+        if (!readyP) readyP = Promise.all([fetchDoc().catch(() => null), fetchManifest()]).then(tellChanged);
+        return readyP;
+    }
+
+    // songs in the pool, or null before anything is loaded
+    function count() {
+        return doc || man ? pool().items.filter(i => i.status === 'in').length : null;
+    }
+
+    return { panel, ready, count };
 })();

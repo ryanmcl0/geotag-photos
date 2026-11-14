@@ -240,3 +240,153 @@
 .pm-rejbox .pm-rejwhy { width: 100%; margin-bottom: 8px; }
 .pm-row.pm-rejected { border-color: #3a2626; }
 .pm-rejbox .pq-reject-go { margin-bottom: 4px; }
+
+/* ── Posts ▸ Reels: the section buttons under the tab bar (posts-reels.js); quieter than the tabs above ── */
+.reels-sections {
+    display: flex; flex-wrap: wrap; gap: 2px 4px; margin: -6px 0 18px;
+    border-bottom: 1px solid #262626;
+}
+.reels-section {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    color: #999; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 10px 8px; cursor: pointer;
+}
+.reels-section:hover { color: #fff; }
+.reels-section.active { color: #fff; border-bottom-color: #8ab4ff; }
+.reels-section-n {
+    font-size: 11px; font-weight: 600; color: #aaa; background: #222; border-radius: 999px; padding: 1px 7px;
+    font-variant-numeric: tabular-nums;
+}
+.reels-section.active .reels-section-n { color: #dde6ff; background: #2c3a55; }
+.reels-section-n[hidden] { display: none; }
+.reels-section-body > .pq-wrap:last-child, .reels-section-body > .pm-wrap:last-child { margin-bottom: 0; }
+@media (max-width: 640px) {
+    .reels-section { padding: 6px 7px 7px; font-size: 12.5px; }
+}
+
+/* ── Posts ▸ Reels ▸ Review ▸ To review (posts-review.js): one reel big, its verdicts beside it ── */
+.rvw { margin: 0 0 14px; }
+.rvw-keys { color: #777; font-size: 12px; }
+.rvw kbd {
+    display: inline-block; min-width: 1.4em; text-align: center; box-sizing: border-box;
+    font: 600 10.5px/1.5 ui-monospace, Menlo, monospace; color: #bbb;
+    border: 1px solid #3a3a3a; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px;
+}
+.rvw-act kbd, .rvw-reject kbd { margin-left: 2px; color: #888; border-color: #333; }
+.rvw-trips { margin: 4px 0 12px; }
+.rvw-row {
+    background: #181818; border: 1px solid #262626; border-radius: 10px; padding: 12px; margin: 0 0 12px;
+    outline: none; transition: box-shadow .2s; scroll-margin-top: 90px;
+}
+.rvw-row.focus { box-shadow: 0 0 0 2px #8ab4ff; }
+.rvw-full { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+.rvw-full[hidden], .rvw-slim[hidden] { display: none; }
+.rvw-player { position: relative; width: 300px; aspect-ratio: 9 / 16; max-height: 76vh; background: #000; border-radius: 12px; overflow: hidden; }
+.rvw-full:has(.rvw-player.wide) { grid-template-columns: minmax(0, 560px) minmax(0, 1fr); }
+.rvw-player.wide { width: 100%; aspect-ratio: 16 / 9; }
+.rvw-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.rvw-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.rvw-title { font-size: 16px; font-weight: 600; color: #fff; line-height: 1.3; overflow-wrap: anywhere; }
+.rvw-body .reel-meta { font-size: 12.5px; }
+.rvw-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 10px; }
+.rvw-acts .reels-mini.rvw-act, .rvw-reject .reels-mini.pq-reject-btn { font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 999px; }
+.rvw-post:not(:disabled) { border-color: #8fd18f; color: #8fd18f; }
+.rvw-short:not(:disabled) { border-color: #e6c06a; color: #e6c06a; }
+.rvw-reject { flex: 1 1 auto; min-width: 0; }
+.rvw-reject:has(.pq-reason) { flex-basis: 100%; }
+.rvw-reject .pq-reject-ctl { margin-top: 0; }
+.rvw-reject .pq-reject-btn { border-color: #7a3a33; color: #f08a7a; }
+.rvw-reject .pq-reason { max-width: 560px; }
+.rvw-busy:empty { display: none; }
+.rvw-slim { display: flex; align-items: center; gap: 12px; }
+.rvw-thumb { width: 34px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 4px; flex: none; opacity: .7; }
+.rvw-slim-text { flex: 1; min-width: 0; }
+.rvw-slim-text .pq-status { margin-top: 2px; }
+.rvw-row.decided { padding: 8px 12px; opacity: .8; }
+.rvw-more { margin: 4px 0 0; }
+@media (max-width: 760px) {
+    .rvw-full, .rvw-full:has(.rvw-player.wide) { grid-template-columns: minmax(0, 1fr); }
+    .rvw-player { width: min(100%, 320px); margin: 0 auto; }
+    .rvw-player.wide { width: 100%; }
+}
+
+/* ── Posts ▸ Reels ▸ Footage (posts-footage.js): the summary, the camera filter, one row per trip ── */
+.fu { color: #eee; }
+.fu-headline { display: flex; align-items: baseline; gap: 12px; }
+.fu-headline .pq-h { margin-right: auto; }
+.fu-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 14px; }
+.fu-tile {
+    background: #181818; border: 1px solid #262626; border-radius: 8px; padding: 10px 12px; text-align: left;
+    color: #eee; font: inherit; min-width: 0;
+}
+.fu-big { font-size: 22px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.fu-label { font-size: 12.5px; color: #bbb; margin-top: 2px; }
+.fu-sub { font-size: 11.5px; color: #777; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.fu-tile-btn { cursor: pointer; }
+.fu-tile-btn:hover:not(:disabled) { border-color: #555; }
+.fu-tile-btn:disabled { cursor: default; }
+.fu-tile-btn.active { border-color: #8ab4ff; box-shadow: inset 0 0 0 1px #8ab4ff; }
+.fu-tile-btn .fu-sub { color: #8ab4ff; }
+.fu-tile-btn:disabled .fu-sub { color: #666; }
+.fu-cams { align-items: center; margin: 0 0 10px; }
+.fu-chips-label { font-size: 12px; color: #888; margin-right: 2px; }
+.fu-filter { font-size: 13px; color: #ccc; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+.fu-scroll { overflow-x: auto; max-width: 100%; }
+.fu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fu-table th {
+    text-align: left; color: #888; font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid #2a2a2a;
+    white-space: nowrap; vertical-align: bottom;
+}
+.fu-table td { padding: 7px 8px; border-bottom: 1px solid #1f1f1f; color: #ddd; vertical-align: middle; }
+.fu-table .fu-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fu-sort { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.fu-sort:hover, .fu-sort.on { color: #fff; }
+.fu-name { min-width: 0; }
+.fu-open {
+    background: none; border: 0; padding: 0; color: #fff; font: inherit; font-weight: 600; cursor: pointer; text-align: left;
+}
+.fu-open:hover { color: #8ab4ff; }
+.fu-year { color: #777; font-size: 12px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+.fu-tag {
+    display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 600; color: #f0b27a;
+    border: 1px dashed #7a5a3a; border-radius: 4px; padding: 0 5px; white-space: nowrap;
+}
+.fu-usedwrap { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.fu-frac { min-width: 6.5em; text-align: right; }
+.fu-pct { min-width: 2.8em; text-align: right; color: #fff; font-weight: 600; }
+/* the bar: its fill is the share used; under 10 % the outline turns dashed and an empty one is a bare dashed box,
+   so a gap reads from the shape, not the colour */
+.fu-bar {
+    position: relative; display: inline-block; width: 90px; height: 8px; border-radius: 2px;
+    background: #222; box-shadow: inset 0 0 0 1px #3a3a3a; overflow: hidden; flex: none;
+}
+.fu-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #8ab4ff; border-radius: 2px; }
+.fu-bar.low, .fu-bar.empty { background: transparent; box-shadow: none; border: 1px dashed #777; box-sizing: border-box; }
+.fu-bar.low .fu-fill { background: #e6c06a; }
+.fu-none { color: #555; }
+.fu-trip.open > td { border-bottom-color: transparent; }
+.fu-noreels .fu-pct { color: #f0b27a; }
+.fu-partsrow > td { padding: 0 8px 12px 22px; background: #121212; }
+.fu-partsbox { padding-top: 6px; }
+.fu-note { font-size: 12.5px; color: #aaa; margin: 4px 0 8px; line-height: 1.45; }
+.fu-parts { font-size: 12.5px; }
+.fu-parts td { padding: 5px 8px; }
+.fu-parts .fu-name { color: #ccc; }
+.fu-parts .fu-bar { width: 70px; }
+.fu-private td { color: #777; }
+.fu-private summary { cursor: pointer; font-size: 12.5px; }
+.fu-privlist { margin: 6px 0 2px 18px; padding: 0; color: #666; font-size: 12.5px; columns: 2; }
+.fu-quiet { margin-top: 10px; font-size: 12.5px; color: #888; }
+.fu-quiet summary { cursor: pointer; }
+.fu-quiet ul { margin: 6px 0 0 18px; padding: 0; font: 11.5px/1.5 ui-monospace, Menlo, monospace; color: #777; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+    .fu-table .fu-opt { display: none; }
+    .fu-bar { width: 48px; }
+    .fu-parts .fu-bar { width: 40px; }
+    .fu-frac { min-width: 0; }
+    .fu-usedwrap { gap: 5px; }
+    .fu-table td, .fu-table th { padding-left: 5px; padding-right: 5px; }
+    .fu-partsrow > td { padding-left: 8px; }
+    .fu-privlist { columns: 1; }
+    .fu-big { font-size: 19px; }
+}

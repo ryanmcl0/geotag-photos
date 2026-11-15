@@ -495,3 +495,6 @@
 .rvw-left:empty { display: none; }
 .rvw-left.done { border-color: #5a9; color: #8d8; }
 .pq-modes { margin-bottom: 8px; }
+.rvw-dayall { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
+.rvw-dayall .reels-mini.rvw-act { font-size: 13px; padding: 6px 13px; border-radius: 999px; border-color: #5a9; color: #9e9; }
+details.pq-sched > summary { cursor: pointer; }

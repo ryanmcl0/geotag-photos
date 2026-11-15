@@ -564,6 +564,48 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   position: absolute; bottom: 4px; left: 5px; font-size: 10.5px; color: #fff; text-shadow: 0 1px 3px #000;
 }
 .reels-phone-empty { grid-column: 1 / -1; color: #777; text-align: center; font-size: 13px; padding: 30px 0; }
+
+/* Profile ▸ How the profile will look: the bot's schedule on the phone, a day slider, the cover check */
+.sp { margin: 0 0 28px; }
+.sp-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; }
+.sp-bar input[type=range] { flex: 1 1 260px; min-width: 0; accent-color: #4da3ff; }
+.sp-label { flex: 1 1 100%; color: #ddd; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.sp-layout { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 860px) { .sp-layout { grid-template-columns: minmax(0, 1fr); } }
+.sp-phone { min-width: 0; }
+.reels-phone-tile.sp-tile img { opacity: 1; }
+.reels-phone-tile.sp-new { box-shadow: inset 0 0 0 3px #4da3ff; }
+.reels-phone-tile.sp-new img { opacity: .9; }
+.reels-phone-tile.sp-pick { outline: 3px solid #fff; outline-offset: -3px; z-index: 1; }
+.reels-phone-tile.sp-live { display: block; }
+.reels-phone-tile.sp-live img { opacity: .55; }
+.sp-dot {
+  position: absolute; top: 4px; right: 4px; min-width: 16px; height: 16px; border-radius: 8px; font: 700 11px/16px sans-serif;
+  text-align: center; color: #000; background: #f0b429; flex: 0 0 auto;
+}
+.sp-dot.bad { background: #ff5c5c; color: #fff; }
+.sp-side { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.sp-card { display: flex; gap: 14px; background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 12px; }
+.sp-big { width: 150px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 6px; flex: 0 0 auto; background: #000; }
+.sp-info { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.sp-verdict { font-weight: 600; font-size: 13.5px; }
+.sp-verdict.ok { color: #6fd08c; }
+.sp-verdict.warn { color: #f0b429; }
+.sp-verdict.bad { color: #ff7b7b; }
+.sp-verdict.none { color: #999; }
+.sp-why { margin: 0; padding-left: 18px; color: #ccc; font-size: 12.5px; }
+.sp-link { background: none; border: 0; padding: 0; color: #8ec5ff; cursor: pointer; font: inherit; text-align: left; }
+.sp-fix summary { cursor: pointer; }
+.sp-fix-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0;
+  border-bottom: 1px solid #222; padding: 6px 2px; color: inherit; cursor: pointer; font: inherit;
+}
+.sp-fix-row:hover, .sp-fix-row.sp-pick { background: #1a1a1a; }
+.sp-fix-row img { width: 36px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 3px; flex: 0 0 auto; }
+.sp-fix-row > div { flex: 1; min-width: 0; }
+.sp-fix-row .sp-dot { position: static; }
+.sp-fix-t { color: #eee; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-old-h { margin-top: 8px; }
 /* ---------- Business tab (posts-business.js, localhost only; rows and the phone from the Reels tab) ---------- */
 .biz-controls {
   display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin: 4px 0 18px; color: #ccc; font-size: 13px;

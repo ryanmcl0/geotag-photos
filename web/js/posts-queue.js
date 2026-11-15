@@ -1016,5 +1016,7 @@ window.PostsQueue = (function () {
     }
 
     return { panel, ready, counts, rejectOf, reject, undoReject, rejectControl, onRejects, addPaths, release, removeFromQueue,
-        removeFromShortlist, decisionOf, fileName, statusOf, scheduleBox, refresh };
+        removeFromShortlist, decisionOf, fileName, statusOf, scheduleBox, refresh,
+        // the bot's schedule rows ({key, title, day, time, status}) for Profile's schedule preview, or null before the load
+        scheduleRows: () => (doc ? ((queue().schedule || {}).rows || []) : null) };
 })();

@@ -16,8 +16,9 @@
  *            post queue's own lists, so one state), keys to go through them fast. Under it the Rejected box
  *            (posts-queue.js panel('rejects')): the reject list with reasons and Undo, and its paste box.
  *            Count: reels still to judge.
- *   Profile  (this file): the reels picked for posting, in posting order, with their captions and posted ticks, a
- *            phone preview of how the profile will look, and the 4K export. Count: reels picked.
+ *   Profile  (this file): first "How the profile will look" (2026-11-15): the bot's schedule on a phone on top of his
+ *            current posts, a slider day by day, and each cover's check (cover_check.json). Under it the older list:
+ *            the reels picked with "+ Post", their captions and posted ticks, and the 4K export. Count: reels picked.
  *   Music    (posts-music.js): the music pool new reels are cut to, Add / Remove, the review folders, rejected music.
  *            Count: songs in the pool.
  *   Footage  (posts-footage.js): how much of each trip's footage the reels use, from web/phone/reels/usage.json (the
@@ -238,6 +239,271 @@ window.PostsReels = (function () {
         return wrap;
     }
 
+    // ── the schedule preview (owner 2026-11-15: "show how its gonna look with the schedule. and put a slider so like I
+    // can see how it progresses over time. and determine if the cover photos are suitable or not") ──
+    // The bot's schedule (PostsQueue's rows, else the cover check's copy) on top of his profile as it is now, as of the
+    // day the slider is on. Covers and their verdicts: web/phone/reels/cover_check.json, from the video project's
+    // tools/reelbot/cover_check.py (queue_sync runs it after each sync): the cover each post will really get (the pool's
+    // cover photo, else Instagram's first frame), checked on the grid's 3:4 crop.
+    const PV_DAY = 'reels_preview_day';
+    const PV_VIEW = 'reels_preview_view';
+    const LIVE_ROWS = ['planned', 'approved', 'posted'];
+    let covers;                       // undefined: not asked yet, null: none
+    let pv = { day: null, pick: null, timer: null };
+
+    async function loadCovers() {
+        try {
+            const r = await fetch('/phone/reels/cover_check.json', { cache: 'no-store' });
+            covers = r.ok ? await r.json() : null;
+        } catch (e) { covers = null; }
+        return covers;
+    }
+
+    const ukDay = t => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Europe/London' });     // YYYY-MM-DD
+    const fmtDay = d => new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const fmtTime = t => new Date(t).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
+
+    function scheduleRows() {
+        const fromQ = window.PostsQueue && PostsQueue.scheduleRows ? PostsQueue.scheduleRows() : null;
+        const rows = (fromQ && fromQ.length ? fromQ : (covers && covers.schedule) || [])
+            .filter(r => r.time && LIVE_ROWS.includes(r.status || 'planned'));
+        // a reel the bot already posted is in the live list from the check's API read: don't show it twice
+        const liveAt = covers && covers.live && covers.live.length ? covers.updated : null;
+        return rows.filter(r => !(r.status === 'posted' && liveAt && r.time <= liveAt))
+            .sort((a, b) => a.time < b.time ? -1 : 1);
+    }
+
+    function coverOf(key) { return (covers && covers.covers && covers.covers[key]) || null; }
+    const imgUrl = rel => '/phone/reels/' + rel + (covers && covers.updated ? '?v=' + encodeURIComponent(covers.updated) : '');
+
+    function schedulePreview() {
+        const box = el('section', 'sp');
+        const head = el('div', 'pq-h', 'How the profile will look');
+        box.appendChild(head);
+        if (covers === undefined) {
+            box.appendChild(el('p', 'reels-how', 'Loading the schedule and the covers…'));
+            loadCovers().then(() => box.replaceWith(schedulePreview()));
+            return box;
+        }
+        const rows = scheduleRows();
+        if (!rows.length) {
+            box.appendChild(el('p', 'reels-how', 'No schedule yet: Send to NAS (Reviewed ▸ Posting schedule) gives the bot the queue, ' +
+                'and the bot makes the schedule.'));
+            return box;
+        }
+        const days = [...new Set(rows.map(r => ukDay(r.time)))].sort();
+        let di = days.indexOf(pv.day || lsGet(PV_DAY, ''));
+        if (di < 0) di = Math.max(0, days.indexOf(days.find(d => d >= ukDay(Date.now())) || days[0]));
+
+        const cs = Object.values((covers && covers.covers) || {});
+        const nBad = cs.filter(c => c.verdict === 'bad').length, nWarn = cs.filter(c => c.verdict === 'warn').length;
+        box.appendChild(el('p', 'reels-how',
+            'The bot\'s schedule on top of your profile as it is now. Drag the slider to see the grid day by day; the ' +
+            'reels that go out that day have a blue edge. Tap a tile for its cover check. ' +
+            (covers ? `Covers: ${cs.length - nBad - nWarn} fine, ${nWarn} to look at, ${nBad} bad ` +
+                `(checked ${new Date(covers.updated).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}).`
+                : 'No cover check yet (tools/reelbot/cover_check.py in the video project).')));
+
+        // the slider
+        const bar = el('div', 'sp-bar');
+        const play = el('button', 'reels-mini', '▶');
+        play.type = 'button';
+        play.title = 'Play the schedule day by day';
+        const range = el('input');
+        range.type = 'range';
+        range.min = '0';
+        range.max = String(days.length - 1);
+        range.value = String(di);
+        range.setAttribute('aria-label', 'Day of the schedule');
+        const label = el('div', 'sp-label');
+        bar.append(play, range, label);
+        box.appendChild(bar);
+
+        const layout = el('div', 'sp-layout');
+        const phoneBox = el('div', 'sp-phone');
+        const side = el('div', 'sp-side');
+        layout.append(phoneBox, side);
+        box.appendChild(layout);
+
+        const byKey = Object.fromEntries(rows.map(r => [r.key, r]));
+        const pos = Object.fromEntries(rows.map((r, i) => [r.key, i + 1]));
+
+        function draw() {
+            const day = days[+range.value];
+            pv.day = day;
+            lsSet(PV_DAY, day);
+            const upto = rows.filter(r => ukDay(r.time) <= day);
+            const today = upto.filter(r => ukDay(r.time) === day);
+            label.textContent = `${fmtDay(day)} · ${today.length} going out · ${upto.length} of ${rows.length} posted by the end of the day` +
+                (+range.value === days.length - 1 ? ' (the last day)' : ` · ${rows.length - upto.length} to come`);
+            phoneBox.replaceChildren(previewPhone(upto, new Set(today.map(r => r.key))));
+            drawSide();
+        }
+
+        function previewPhone(upto, fresh) {
+            const view = lsGet(PV_VIEW, 'grid');
+            const wrap = el('div', 'reels-phone-wrap');
+            const sw = el('div', 'reels-phone-switch');
+            [['grid', 'Main grid (3:4)'], ['reels', 'Reels tab (9:16)']].forEach(([k, l]) => {
+                const b = el('button', 'reel-chip' + (view === k ? ' active' : ''), l);
+                b.type = 'button';
+                b.addEventListener('click', () => { lsSet(PV_VIEW, k); draw(); });
+                sw.appendChild(b);
+            });
+            wrap.appendChild(sw);
+            const ph = el('div', 'reels-phone');
+            const scr = el('div', 'reels-phone-screen');
+            const live = ((covers && covers.live) || []).filter(m => view === 'grid' || /REEL|VIDEO/.test(m.type || ''));
+            const hd = el('div', 'reels-phone-head');
+            const av = el('div', 'reels-phone-avatar');
+            if (live[0]) av.style.backgroundImage = `url("${imgUrl(live[0].img)}")`;
+            const stats = el('div', 'reels-phone-stats');
+            [[upto.length, 'new reels'], [live.length + (live.length >= 30 ? '+' : ''), 'already up']].forEach(([n, l]) => {
+                const c = el('div', 'reels-phone-stat');
+                c.append(el('b', '', String(n)), el('span', '', l));
+                stats.appendChild(c);
+            });
+            hd.append(av, stats);
+            scr.append(hd, el('div', 'reels-phone-name', 'As of ' + fmtDay(pv.day)));
+            const tabs = el('div', 'reels-phone-tabs');
+            tabs.append(el('span', view === 'grid' ? 'on' : '', '▦'), el('span', view === 'reels' ? 'on' : '', '▶'));
+            scr.appendChild(tabs);
+            const grid = el('div', 'reels-phone-grid ' + (view === 'grid' ? 'tall34' : 'tall916'));
+            upto.slice().reverse().forEach(r => {
+                const c = coverOf(r.key);
+                const t = el('button', 'reels-phone-tile sp-tile' + (fresh.has(r.key) ? ' sp-new' : '') +
+                    (pv.pick === r.key ? ' sp-pick' : ''));
+                t.type = 'button';
+                t.title = `${fmtDay(ukDay(r.time))} ${fmtTime(r.time)} · ${r.title || r.key}` +
+                    (c && c.why && c.why.length ? '\n' + c.why.join('\n') : '');
+                if (c && c.img) {
+                    const img = el('img');
+                    img.src = imgUrl(c.img);
+                    img.loading = 'lazy';
+                    img.alt = '';
+                    t.appendChild(img);
+                }
+                if (c && c.verdict && c.verdict !== 'ok') t.appendChild(el('span', 'sp-dot ' + c.verdict, c.verdict === 'bad' ? '!' : '?'));
+                t.addEventListener('click', () => { pv.pick = r.key; draw(); });
+                grid.appendChild(t);
+            });
+            live.forEach(m => {
+                const t = el('a', 'reels-phone-tile sp-live');
+                t.href = m.permalink || '#';
+                t.target = '_blank';
+                t.rel = 'noopener';
+                t.title = 'Already on the profile · ' + new Date(m.time).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                const img = el('img');
+                img.src = imgUrl(m.img);
+                img.loading = 'lazy';
+                img.alt = '';
+                t.appendChild(img);
+                grid.appendChild(t);
+            });
+            scr.appendChild(grid);
+            ph.appendChild(scr);
+            wrap.appendChild(ph);
+            return wrap;
+        }
+
+        function jumpTo(key) {
+            const r = byKey[key];
+            if (!r) return;
+            pv.pick = key;
+            range.value = String(days.indexOf(ukDay(r.time)));
+            draw();
+        }
+
+        function drawSide() {
+            side.replaceChildren();
+            const r = pv.pick && byKey[pv.pick];
+            if (r) {
+                const c = coverOf(r.key) || {};
+                const card = el('div', 'sp-card');
+                if (c.img) {
+                    const img = el('img', 'sp-big');
+                    img.src = imgUrl(c.img);
+                    img.alt = '';
+                    card.appendChild(img);
+                }
+                const info = el('div', 'sp-info');
+                info.append(el('div', 'reel-title', r.title || r.key),
+                    el('div', 'reel-meta', `#${pos[r.key]} · ${fmtDay(ukDay(r.time))} ${fmtTime(r.time)} UK · ` +
+                        (c.src === 'cover' ? 'his cover photo' : c.src === 'frame' ? 'no cover photo: Instagram\'s first frame' : 'no cover')));
+                const v = el('div', 'sp-verdict ' + (c.verdict || 'none'),
+                    c.verdict === 'ok' ? 'Cover looks fine' : c.verdict === 'warn' ? 'Cover: have a look' : c.verdict === 'bad' ? 'Cover: not suitable' : 'Not checked yet');
+                info.appendChild(v);
+                if (c.why && c.why.length) {
+                    const ul = el('ul', 'sp-why');
+                    c.why.forEach(w => ul.appendChild(el('li', '', w)));
+                    info.appendChild(ul);
+                }
+                if (c.same_as && c.same_as.length) {
+                    info.appendChild(el('div', 'reel-meta', 'Same photo as:'));
+                    const ul = el('ul', 'sp-why');
+                    c.same_as.filter(k => byKey[k]).sort((a, b) => pos[a] - pos[b]).forEach(k => {
+                        const li = el('li');
+                        const a = el('button', 'sp-link', `#${pos[k]} ${byKey[k].title || k} (${fmtDay(ukDay(byKey[k].time))})`);
+                        a.type = 'button';
+                        a.addEventListener('click', () => jumpTo(k));
+                        li.appendChild(a);
+                        ul.appendChild(li);
+                    });
+                    info.appendChild(ul);
+                }
+                card.appendChild(info);
+                side.appendChild(card);
+            }
+            // every cover that needs a look, in posting order, bad first
+            const list = rows.filter(x => { const c = coverOf(x.key); return c && c.verdict && c.verdict !== 'ok'; })
+                .sort((a, b) => (coverOf(a.key).verdict === 'bad' ? 0 : 1) - (coverOf(b.key).verdict === 'bad' ? 0 : 1) || pos[a.key] - pos[b.key]);
+            const det = el('details', 'sp-fix');
+            det.open = lsGet('reels_preview_fix_open', true);
+            det.addEventListener('toggle', () => lsSet('reels_preview_fix_open', det.open));
+            det.appendChild(el('summary', 'pq-h', `Covers to fix or look at (${list.length})`));
+            list.forEach(x => {
+                const c = coverOf(x.key);
+                const b = el('button', 'sp-fix-row' + (pv.pick === x.key ? ' sp-pick' : ''));
+                b.type = 'button';
+                if (c.img) {
+                    const img = el('img');
+                    img.src = imgUrl(c.img);
+                    img.loading = 'lazy';
+                    img.alt = '';
+                    b.appendChild(img);
+                }
+                const tx = el('div');
+                tx.append(el('div', 'sp-fix-t', `#${pos[x.key]} ${x.title || x.key}`),
+                    el('div', 'reel-meta', `${fmtDay(ukDay(x.time))} · ` + c.why.join(' · ')));
+                b.append(tx, el('span', 'sp-dot ' + c.verdict, c.verdict === 'bad' ? '!' : '?'));
+                b.addEventListener('click', () => jumpTo(x.key));
+                det.appendChild(b);
+            });
+            if (!list.length) det.appendChild(el('p', 'reels-how', covers ? 'Every cover looks fine.' : 'No cover check yet.'));
+            side.appendChild(det);
+        }
+
+        range.addEventListener('input', () => { pv.pick = null; draw(); });
+        play.addEventListener('click', () => {
+            if (pv.timer) { clearInterval(pv.timer); pv.timer = null; play.textContent = '▶'; return; }
+            if (+range.value >= days.length - 1) range.value = '0';
+            play.textContent = '❚❚';
+            pv.timer = setInterval(() => {
+                if (!box.isConnected || +range.value >= days.length - 1) {
+                    clearInterval(pv.timer);
+                    pv.timer = null;
+                    play.textContent = '▶';
+                    return;
+                }
+                range.value = String(+range.value + 1);
+                pv.pick = null;
+                draw();
+            }, 450);
+        });
+        draw();
+        return box;
+    }
+
     // ── one row per picked reel ──
     function row(doc, r, i, n, rerender) {
         const st = ReelsSite.state();
@@ -371,6 +637,10 @@ window.PostsReels = (function () {
         const byId = Object.fromEntries(doc.reels.map(r => [r.id, r]));
         const list = st.queue.map(id => byId[id]).filter(Boolean);
         selected = new Set([...selected].filter(id => st.queue.includes(id)));
+
+        if (pv.timer) { clearInterval(pv.timer); pv.timer = null; }
+        root.appendChild(schedulePreview());
+        root.appendChild(el('div', 'pq-h sp-old-h', 'Picked with “+ Post” (the older list)'));
 
         const where = ReelsSite.where() === 'disk'
             ? 'Saved on this Mac (web/phone/reels/state.json).'

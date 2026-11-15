@@ -31,7 +31,7 @@ window.PostsQueue = (function () {
     'use strict';
 
     const SPAN_DEFAULT = 14;
-    const SPAN_MAX = 30;
+    const SPAN_MAX = 120;           // owner 2026-11-15: 30 days was too short for a big queue
     const MAX_PER_DAY = 7;           // the bot's posting times in a day (12:00, 20:00, 08:00, 17:00, …)
     let doc = null;                  // { version, posts, reel_queue }
     let chain = Promise.resolve();
@@ -374,35 +374,78 @@ window.PostsQueue = (function () {
     function sliderBlock(q) {
         const wrap = el('div', 'pq-slider');
         const n = q.items.filter(i => WAITING.has(i.status || 'pending')).length;
+        // two ways to set the pace (owner 2026-11-15): over how many days, or how many a day (the bot then posts
+        // exactly that many and the days are however long that takes)
+        let mode = q.per_day ? 'per_day' : 'days';
         let span = q.span_days || SPAN_DEFAULT;
+        let pd = q.per_day || Math.max(1, perDay(n, span));
+        const modes = el('div', 'reel-chips pq-modes');
         const label = el('label', 'pq-slider-label');
+        const what = el('span', '');
         const input = el('input');
         input.type = 'range';
         input.min = '1';
-        input.max = String(SPAN_MAX);
-        input.value = String(span);
         const read = el('div', 'pq-readout');
+        const lastDay = days => {
+            const d = new Date();
+            d.setDate(d.getDate() + Math.max(0, days - 1));
+            return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        };
         const say = () => {
+            const reels = `${n} reel${n === 1 ? '' : 's'} in the queue`;
+            if (mode === 'per_day') {
+                const days = n ? Math.ceil(n / pd) : 0;
+                read.textContent = reels + ` · ${pd} a day` +
+                    (n ? ` · takes ${days} day${days === 1 ? '' : 's'}, the last on about ${lastDay(days)}` : '');
+                return;
+            }
             const p = perDay(n, span);
-            read.textContent = `${n} reel${n === 1 ? '' : 's'} in the queue · over ${span} day${span === 1 ? '' : 's'}` +
+            read.textContent = reels + ` · over ${span} day${span === 1 ? '' : 's'}` +
                 (n ? ` · about ${p} a day` : '') +
                 (n && Math.ceil(n / span) > MAX_PER_DAY ? ` (at most ${MAX_PER_DAY} a day: it takes longer)` : '');
         };
-        say();
-        let t = null;
-        input.addEventListener('input', () => {
-            span = parseInt(input.value, 10);
+        const setUp = () => {
+            what.textContent = mode === 'per_day' ? 'Posts a day' : 'Post them over';
+            input.max = String(mode === 'per_day' ? MAX_PER_DAY : SPAN_MAX);
+            input.value = String(mode === 'per_day' ? pd : span);
+            modes.replaceChildren();
+            [['days', 'Over days'], ['per_day', 'Per day']].forEach(([k, txt]) => {
+                const c = el('button', 'reel-chip' + (k === mode ? ' active' : ''), txt);
+                c.type = 'button';
+                c.addEventListener('click', () => {
+                    if (k === mode) return;
+                    mode = k;
+                    setUp();
+                    save();
+                });
+                modes.appendChild(c);
+            });
             say();
+        };
+        let t = null;
+        const save = () => {
             clearTimeout(t);
-            t = setTimeout(() => change(qq => { qq.span_days = span; qq.span_set = new Date().toISOString(); }), 600);
+            t = setTimeout(() => change(qq => {
+                if (mode === 'per_day') qq.per_day = pd;
+                else { qq.per_day = 0; qq.span_days = span; }      // 0 = off (a removed key may not merge)
+                qq.span_set = new Date().toISOString();
+            }), 600);
+        };
+        input.addEventListener('input', () => {
+            const v = parseInt(input.value, 10);
+            if (mode === 'per_day') pd = v; else span = v;
+            say();
+            save();
         });
-        label.append(el('span', '', 'Post them over'), input);
+        setUp();
+        label.append(what, input);
+        wrap.appendChild(modes);
         wrap.append(label, read);
         const s = q.schedule || {};
         if (s.per_day && s.span_end) {
             const end = new Date(s.span_end + 'T00:00:00');
             end.setDate(end.getDate() - 1);
-            wrap.appendChild(el('div', 'pq-bot', `The bot's plan: ${s.per_day} a day, the last on about ` +
+            wrap.appendChild(el('div', 'pq-bot', `The bot's plan: ${s.per_day} a day${s.per_day_fixed ? ' (as you set)' : ''}, the last on about ` +
                 end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) +
                 (s.missed ? ` (${s.missed} unanswered morning${s.missed === 1 ? '' : 's'} moved it on)` : '') +
                 (s.posting === false ? '. Posting is off on the bot: nothing goes to Instagram yet.' : '.')));

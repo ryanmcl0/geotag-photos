@@ -38,9 +38,11 @@ window.PostsBizReview = (function () {
     const isPending = (c, it) => !posted(c)[it.id] &&
         (!reviews(c)[it.id] || (reviews(c)[it.id].verdict === 'shortlist' && reviews(c)[it.id].status === 'handled'));
 
-    // the schedule's order first (the plan), then the rest as content.json lists them
+    // the plan's order first (content.json "plan": what its maker would post first), then the rest as content.json
+    // lists them. Nothing is scheduled until he posts it here (owner 2026-11-15: the 13 planned "should move back to
+    // review tab").
     function ordered(c) {
-        const q = c.state().queue || [];
+        const q = c.plan();
         const pos = id => { const i = q.indexOf(id); return i < 0 ? 1e6 : i; };
         return c.items().map((it, i) => [it, i]).sort((a, b) => pos(a[0].id) - pos(b[0].id) || a[1] - b[1]).map(x => x[0]);
     }
@@ -272,7 +274,7 @@ window.PostsBizReview = (function () {
         headEl = el('div', 'pq-h', `To review (${list.length})`);
         rootEl.appendChild(headEl);
         rootEl.appendChild(el('p', 'reels-how',
-            'The posts you haven\'t judged yet, in the planned order. Post: good to go as it is, into the schedule; ' +
+            'The posts you haven\'t judged yet, in the planned order; nothing is scheduled until you post it. Post: good to go as it is, into the schedule; ' +
             'the stars (1–5) post it too and say how good it is. Shortlist…: good, but something needs fixing; it asks ' +
             'what, and it comes back here once fixed. Reject…: a hard no; saying why is optional. Then Send to NAS.'));
         rootEl.appendChild(K.keyHelp());

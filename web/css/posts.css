@@ -621,3 +621,12 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .posts-places-line { font-size: 11px !important; letter-spacing: .14em; text-transform: uppercase; color: #aaa !important; }
 .posts-places-name::placeholder, .posts-places-line::placeholder { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .posts-places-state { flex: 0 0 auto; color: #666; font-size: 11px; width: 56px; }
+
+/* Posts ▸ Business ▸ Review / Reviewed (posts-business-review.js) */
+.biz-rvw-player { width: 300px; aspect-ratio: auto; max-height: none; background: none; overflow: visible; }
+.biz-rvw .rv-player { width: 300px; margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.biz-rvw .rv-player .biz-rvw-player { width: 100%; }
+.biz-sendbar { margin: 4px 0 12px; }
+.biz-sendbar .reels-how { margin: 0; flex-basis: 100%; }
+.biz-rvw .pq-reason { flex-basis: 100%; }
+.biz-rvw .pq-reason .pq-reason-text { display: block; width: 100%; max-width: 560px; margin: 6px 0; }

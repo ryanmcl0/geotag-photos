@@ -105,6 +105,7 @@ window.PostsBusiness = (function () {
                 st.queue = st.queue || [];
                 st.posted = st.posted || {};
                 st.captions = st.captions || {};
+                st.reviews = st.reviews || {};
                 fn(st);
                 const r = await fetch(`${API}/business/state`, {
                     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(st),
@@ -112,6 +113,7 @@ window.PostsBusiness = (function () {
                 const body = await r.json().catch(() => ({}));
                 if (r.ok) {
                     doc.state = body;
+                    doc.unsent = true;
                     statusMsg = '';
                     return true;
                 }
@@ -200,6 +202,12 @@ window.PostsBusiness = (function () {
         body.appendChild(el('div', 'reel-meta',
             [kindText(it), it.section, it.pin ? `pin ${it.pin} on the profile` : null].filter(Boolean).join(' · ')));
         if (it.kind === 'carousel') body.appendChild(slides(it, box));
+        if (!p) {
+            const rv = (st.reviews || {})[it.id];
+            body.appendChild(el('div', 'pq-status ' + (rv ? 'ok' : 'warn'), rv
+                ? 'Reviewed: Post' + (rv.stars ? ' ' + '★'.repeat(rv.stars) + '☆'.repeat(5 - rv.stars) : '') + (rv.note ? ` · note: ${rv.note}` : '')
+                : 'Not reviewed yet: judge it in Review'));
+        }
         if (it.kind === 'reel' && it.sound) body.appendChild(el('div', 'biz-sound', '♪ Sound to pick in the app: ' + it.sound));
         if (it.kind === 'reel' && it.audio === 'reference' && !p) {
             body.appendChild(el('div', 'biz-note', 'Its soundtrack is for review only (not licensed): by hand, ' +
@@ -370,6 +378,11 @@ window.PostsBusiness = (function () {
                 : `No content.json in ${doc.folder} yet: export the posts there first.`));
             return;
         }
+        root.appendChild(sendBar());
+        const sec = currentSection();
+        root.appendChild(sectionBar(sec));
+        if (sec === 'review' && window.PostsBizReview) { root.appendChild(PostsBizReview.panel(core)); return; }
+        if (sec === 'reviewed' && window.PostsBizReview) { root.appendChild(PostsBizReview.reviewedPanel(core)); return; }
         const st = state();
         const all = items();
         const byId = Object.fromEntries(all.map(it => [it.id, it]));
@@ -377,7 +390,9 @@ window.PostsBusiness = (function () {
         const posted = Object.entries(st.posted || {}).filter(([id]) => byId[id])
             .sort((a, b) => String(a[1].date).localeCompare(String(b[1].date)));
         const queued = new Set(st.queue || []);
-        const backlog = all.filter(it => !queued.has(it.id) && !(st.posted || {})[it.id]);
+        // the backlog: not scheduled, not posted, not shortlisted or rejected in Review (those are in Reviewed)
+        const backlog = all.filter(it => !queued.has(it.id) && !(st.posted || {})[it.id] &&
+            !['shortlist', 'reject'].includes(((st.reviews || {})[it.id] || {}).verdict));
 
         root.appendChild(el('p', 'reels-how', [doc.content.name, doc.account ? '@' + doc.account : 'account not set up yet',
             `${all.length} ready`, `${posted.length} posted`, `${sch.length} scheduled`, `${backlog.length} in the backlog`]
@@ -430,5 +445,94 @@ window.PostsBusiness = (function () {
         root.appendChild(layout);
     }
 
-    return { load, render, count };
+    // ── the sections (owner 2026-11-15: "same as in reels i have these two tabs … Review / Reviewed") ──
+    const SECTION_KEY = 'business_section';
+    const SECTIONS = [['review', 'Review', 'Posts you haven\'t judged yet'],
+        ['reviewed', 'Reviewed', 'Posts you have judged: verdict, stars, notes'],
+        ['schedule', 'Schedule', 'The posting order, the days and the profile grid']];
+    function currentSection() {
+        let s = 'review';
+        try { s = JSON.parse(localStorage.getItem(SECTION_KEY)) || 'review'; } catch (e) { /* private mode */ }
+        return SECTIONS.some(x => x[0] === s) ? s : 'review';
+    }
+    function sectionBar(current) {
+        const bar = el('div', 'reels-sections');
+        bar.id = 'biz-sections';
+        bar.setAttribute('role', 'tablist');
+        const n = { review: window.PostsBizReview ? PostsBizReview.pending(core).length : null,
+            reviewed: window.PostsBizReview ? PostsBizReview.reviewed(core).length : null,
+            schedule: schedule(state()).length };
+        SECTIONS.forEach(([id, text, title]) => {
+            const b = el('button', 'reels-section' + (id === current ? ' active' : ''));
+            b.type = 'button';
+            b.title = title;
+            b.setAttribute('role', 'tab');
+            b.setAttribute('aria-selected', String(id === current));
+            const c = el('span', 'reels-section-n', n[id] === null ? '' : String(n[id]));
+            c.hidden = n[id] === null;
+            b.append(el('span', '', text), c);
+            b.addEventListener('click', () => {
+                if (id === current) return;
+                try { localStorage.setItem(SECTION_KEY, JSON.stringify(id)); } catch (e) { /* private mode */ }
+                if (redraw) redraw();
+            });
+            bar.appendChild(b);
+        });
+        return bar;
+    }
+
+    // ── Send to NAS (owner 2026-11-15: "approval for any scheduled posts in the queue should please still go through
+    // the telegram box / it needs the same send to nas concept as the other page has"): the changes made here wait on
+    // this Mac until sent; then the bot offers the scheduled posts in Telegram, one a day, and posts only on Approve ──
+    let sending = false;
+    let sendMsg = '';
+    function sendBar() {
+        const bar = el('div', 'rvd-agentbar biz-sendbar');
+        bar.id = 'biz-sendbar';
+        const b = el('button', 'reels-export-btn', sending ? 'Sending…' : 'Send to NAS');
+        b.type = 'button';
+        b.disabled = sending || !doc.unsent;
+        b.title = 'Hand the schedule, your verdicts and caption edits to the reel bot on the NAS';
+        b.addEventListener('click', async () => {
+            sending = true;
+            if (redraw) redraw();
+            try {
+                await chain;                                    // a save still on its way goes first
+                const r = await fetch(`${API}/business/send-to-nas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const body = await r.json().catch(() => ({}));
+                if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+                if (body.doc) doc = body.doc;
+                const sch = schedule(state());
+                sendMsg = body.sent ? `Sent: the bot has ${sch.length} scheduled post${sch.length === 1 ? '' : 's'}` +
+                    (sch.length ? `, the first offered in Telegram on ${fmtDay(sch[0][1])}.` : '.') : 'Nothing new to send.';
+            } catch (e) {
+                sendMsg = 'Not sent: ' + e.message;
+            }
+            sending = false;
+            if (redraw) redraw();
+        });
+        bar.appendChild(b);
+        bar.appendChild(el('span', 'pq-status ' + (doc.unsent ? 'warn' : 'ok'), sendMsg || (doc.unsent
+            ? 'Changes on this Mac not sent to the bot yet.'
+            : 'The bot has everything shown here.')));
+        bar.appendChild(el('span', 'reels-how', 'Each scheduled post is offered in Telegram on its day; nothing is posted until you tap Approve there.'));
+        return bar;
+    }
+
+    // what posts-business-review.js needs
+    const core = {
+        el, items, state, mutate, change, fileURL, label, kindText, captionOf, preview, slides, today,
+        account: () => doc && doc.account,
+        redraw: () => redraw && redraw(),
+        // after a verdict saved in place: the Send bar and the section counts, without redrawing the list
+        paintTop: () => {
+            const a = document.getElementById('biz-sendbar');
+            if (a) a.replaceWith(sendBar());
+            const b = document.getElementById('biz-sections');
+            if (b) b.replaceWith(sectionBar(currentSection()));
+        },
+        isLocal: () => LOCAL
+    };
+
+    return { load, render, count, core };
 })();

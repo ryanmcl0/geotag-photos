@@ -96,18 +96,62 @@ class BusinessLocalTest(unittest.TestCase):
                 "captions": {"car-a": "Edited.", "nope": "x"}, "skipped": {}, "bot_note": "changed"}
         code, _, out = self.call("/business/state", "PUT", body, {"Origin": "http://localhost:8788"})
         self.assertEqual(code, 200)
-        s = json.loads((self.folder / "state.json").read_text())
+        self.assertEqual(json.loads((self.folder / "state.json").read_text()), self.state)   # the NAS waits for Send
+        s = json.loads((self.cfg.parent / "draft.json").read_text())
         self.assertEqual(s, json.loads(out))
         self.assertEqual((s["rev"], s["start"], s["every"], s["queue"]), (4, "2026-11-20", 2, ["car-a", "reel-1"]))
         self.assertEqual(s["posted"], {"reel-1": {"date": "2026-11-12", "via": "hand"}})
         self.assertEqual(s["captions"], {"car-a": "Edited."})
         self.assertEqual((s["skipped"], s["bot_note"]), ({"car-a": "2026-11-15"}, "kept"))   # not the tab's to change
 
+    def test_review_verdicts(self):
+        body = {**self.state, "reviews": {
+            "reel-1": {"verdict": "post", "stars": 4, "note": " keep the hook ", "time": "2026-11-15T20:00:00",
+                       "queued": True},
+            "car-a": {"verdict": "shortlist", "note": "slide 3 text too small", "status": "handled", "stars": 5},
+            "leak": {"verdict": "shortlist"},                       # a shortlist needs its note
+            "nope": {"verdict": "post"}, }}
+        code, _, out = self.call("/business/state", "PUT", body, {"Origin": "http://localhost:8788"})
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(out)["reviews"], {
+            "reel-1": {"verdict": "post", "stars": 4, "note": "keep the hook", "time": "2026-11-15T20:00:00",
+                       "queued": True},
+            "car-a": {"verdict": "shortlist", "note": "slide 3 text too small", "status": "handled"}})
+        # a page that doesn't send reviews leaves them as they are
+        code, _, out = self.call("/business/state", "PUT", {**self.state, "rev": 4})
+        self.assertEqual((code, sorted(json.loads(out)["reviews"])), (200, ["car-a", "reel-1"]))
+        bad = {**self.state, "rev": 5, "reviews": {"reel-1": {"verdict": "maybe"}, "car-a": {"verdict": "reject"}}}
+        self.assertEqual(json.loads(self.call("/business/state", "PUT", bad)[2])["reviews"], {"car-a": {"verdict": "reject"}})
+
     def test_a_stale_rev_gets_the_state_on_disk(self):
         code, _, out = self.call("/business/state", "PUT", {**self.state, "rev": 2, "queue": []})
         self.assertEqual(code, 409)
         self.assertEqual(json.loads(out)["state"]["queue"], ["reel-1", "car-a"])
         self.assertEqual(json.loads((self.folder / "state.json").read_text())["rev"], 3)
+
+    def test_send_to_nas(self):
+        self.assertFalse(self.doc()["unsent"])
+        body = {**self.state, "queue": ["car-a"], "every": 2, "posted": {"reel-1": {"date": "2026-11-14", "via": "hand"}},
+                "reviews": {"car-a": {"verdict": "post", "stars": 5}}}
+        self.assertEqual(self.call("/business/state", "PUT", body)[0], 200)
+        d = self.doc()
+        self.assertTrue(d["unsent"])
+        self.assertEqual((d["state"]["queue"], d["nas"]["rev"]), (["car-a"], 3))
+        # meanwhile the bot posts car-a and marks a skip on the NAS: both show through the draft, and survive the send
+        nas = {**self.state, "posted": {"car-a": {"date": "2026-11-15", "via": "bot"}}, "skipped": {"x": "y"}}
+        (self.folder / "state.json").write_text(json.dumps(nas))
+        self.assertEqual(sorted(self.doc()["state"]["posted"]), ["car-a", "reel-1"])
+        self.assertEqual(self.call("/business/send-to-nas", "POST", {}, {"Origin": "https://example.com"})[0], 403)
+        code, _, out = self.call("/business/send-to-nas", "POST", {})
+        self.assertEqual((code, json.loads(out)["sent"]), (200, True))
+        s = json.loads((self.folder / "state.json").read_text())
+        self.assertEqual((s["rev"], s["queue"], s["every"], s["skipped"], s["bot_note"]), (4, ["car-a"], 2, {"x": "y"}, "kept"))
+        self.assertEqual(s["posted"], {"car-a": {"date": "2026-11-15", "via": "bot"},
+                                       "reel-1": {"date": "2026-11-14", "via": "hand"}})
+        self.assertEqual(s["reviews"], {"car-a": {"verdict": "post", "stars": 5}})
+        self.assertFalse((self.cfg.parent / "draft.json").exists())
+        self.assertFalse(self.doc()["unsent"])
+        self.assertEqual(json.loads(self.call("/business/send-to-nas", "POST", {})[2])["sent"], False)
 
     def test_bad_values_and_other_sites_are_refused(self):
         self.assertEqual(self.call("/business/state", "PUT", {**self.state, "start": "soon"})[0], 400)

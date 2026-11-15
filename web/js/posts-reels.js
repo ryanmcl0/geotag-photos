@@ -429,7 +429,10 @@ window.PostsReels = (function () {
                 const info = el('div', 'sp-info');
                 info.append(el('div', 'reel-title', r.title || r.key),
                     el('div', 'reel-meta', `#${pos[r.key]} · ${fmtDay(ukDay(r.time))} ${fmtTime(r.time)} UK · ` +
-                        (c.src === 'cover' ? 'his cover photo' : c.src === 'frame' ? 'no cover photo: Instagram\'s first frame' : 'no cover')));
+                        (c.src === 'frame' ? 'no cover: Instagram\'s first frame' : c.src !== 'cover' ? 'no cover'
+                            : c.from === 'frame' ? 'a frame of the reel (no portrait photo of yours fits)'
+                            : c.from ? `your ${c.from} photo` : 'a cover photo')));
+                if (c.from_why) info.appendChild(el('div', 'reel-meta', c.from_why));
                 const v = el('div', 'sp-verdict ' + (c.verdict || 'none'),
                     c.verdict === 'ok' ? 'Cover looks fine' : c.verdict === 'warn' ? 'Cover: have a look' : c.verdict === 'bad' ? 'Cover: not suitable' : 'Not checked yet');
                 info.appendChild(v);

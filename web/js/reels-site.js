@@ -380,7 +380,7 @@ window.ReelsSite = (function () {
         return g;
     }
 
-    const KIND_ORDER = { day_montage: 0, day_route: 1, shoot_reel: 2, one_shot: 3, vlog_cut: 4, trip_montage: 5,
+    const KIND_ORDER = { day_montage: 0, day_route: 1, shoot_reel: 2, one_shot: 3, vlog_cut: 4, vlog_block: 4.5, trip_montage: 5,
         hook_reel: 6, other: 7 };
     function sortReels(list) {
         return list.slice().sort((a, b) =>
@@ -398,7 +398,7 @@ window.ReelsSite = (function () {
         const bar = el('div', 'reel-chips');
         if (kinds.length < 2) return bar;
         const LABEL = { day_montage: 'Day montages', day_route: 'Day routes', shoot_reel: 'Shoot reels',
-            one_shot: 'One-shots', vlog_cut: 'Vlog cuts', trip_montage: 'Whole-trip montages', hook_reel: 'Hook reels',
+            one_shot: 'One-shots', vlog_cut: 'Vlog cuts', vlog_block: 'Vlog drone blocks', trip_montage: 'Whole-trip montages', hook_reel: 'Hook reels',
             other: 'Other' };
         let cur = 'all';
         [['all', `All (${reels.length})`], ...kinds.map(k => [k, `${LABEL[k] || k} (${counts[k]})`])].forEach(([k, label]) => {

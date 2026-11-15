@@ -69,6 +69,18 @@ state.json (the schedule, written here, by that tool's own post command and by t
     GET/HEAD /business/files/<path>   a file content.json lists (a reel, its silent copy, a cover, a slide), with Range
                                  support; nothing else in the folder
 
+Posts ▸ Reels ▸ Reviewed ▸ Posting schedule (owner 2026-11-15: "a button that has the proposed schedule … and then
+have a button that i click that's like send to nas"), both run the video project's own tools from its checkout
+(POSTING_CHECKOUTS, the first that has the tool; nothing the browser sends becomes part of a command):
+    POST /reels/propose          {"reel_queue": {...}} → video-editor tools/reelbot/propose.py (read only): the bot's own
+                                 planner on the page's queue with the bot's settings and what it already holds
+    POST /reels/send-to-nas      start one run of video-editor tools/reelbot/queue_sync.py --wait-bot 150 --json (the
+                                 page's queue checked, copied to the NAS, the bot's real schedule back on the page);
+                                 409 + the run while one is going. Only from a page on this Mac.
+    GET  /reels/send-to-nas      the latest run: {id, state running|done|failed, started, finished, result (its RESULT
+                                 line: what went to the bot, what was refused and why, the bot's plan), log (its last
+                                 lines), error}
+
     tools/reels_local.py [--port 8791]          (serve.sh starts it)
 """
 import datetime as dt
@@ -247,6 +259,105 @@ def live_status(run=None, clock=None, checkouts=None):
                 _STATUS.update(at=clock(), doc=doc)
                 return doc
         return None
+# Send to NAS and the proposed schedule (2026-11-15): the video project's checkout that has the tool. video-editor-
+# posting is a checkout kept at the video project's main for this (its .venv a link to the main checkout's).
+POSTING_CHECKOUTS = [Path.home() / "Documents" / "Projects" / n
+                     for n in ("video-editor-posting", "video-editor-r4", "video-editor")]
+SEND_WAIT_BOT = 150           # s queue_sync waits for the bot's plan from the new list
+SEND_TIMEOUT = 20 * 60
+SEND = {"run": None}
+SEND_LOCK = threading.Lock()
+
+
+def posting_tool(name, needs=None, checkouts=None):
+    """(python, tool, checkout) of the first checkout whose tools/reelbot/<name> exists (and holds `needs`), or None."""
+    for ve in (POSTING_CHECKOUTS if checkouts is None else checkouts):
+        py, tool = ve / ".venv" / "bin" / "python", ve / "tools" / "reelbot" / name
+        try:
+            if py.exists() and tool.is_file() and (not needs or needs in tool.read_text(encoding="utf-8")):
+                return py, tool, ve
+        except OSError:
+            continue
+    return None
+
+
+def propose(body, run=None, checkouts=None):
+    """POST /reels/propose → (code, the proposed schedule). run(argv, cwd, stdin) -> text is for tests."""
+    import subprocess
+    q = body.get("reel_queue") if isinstance(body, dict) else None
+    if not isinstance(q, dict):
+        return 400, {"error": "reel_queue missing"}
+    found = posting_tool("propose.py", checkouts=checkouts)
+    if not found:
+        return 503, {"error": "the video project's propose.py isn't there (update its checkout)"}
+    py, tool, ve = found
+    data = json.dumps(q)
+    try:
+        if run:
+            out = run([str(py), str(tool)], str(ve), data)
+        else:
+            out = subprocess.run([str(py), str(tool)], cwd=str(ve), input=data, capture_output=True, text=True,
+                                 timeout=60).stdout
+        return 200, json.loads(out)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return 500, {"error": f"the proposed schedule couldn't be made ({str(e)[:160]})"}
+
+
+def send_status():
+    with SEND_LOCK:
+        return dict(SEND["run"]) if SEND["run"] else {"state": "none"}
+
+
+def send_start(popen=None, checkouts=None, now=None):
+    """POST /reels/send-to-nas → (code, the run). One at a time; the run goes on in a thread."""
+    found = posting_tool("queue_sync.py", needs="--wait-bot", checkouts=checkouts)
+    if not found:
+        return 503, {"error": "the video project's queue_sync.py has no Send to NAS yet (update its checkout)"}
+    with SEND_LOCK:
+        r = SEND["run"]
+        if r and r.get("state") == "running":
+            return 409, dict(r, error="a send is already running")
+        when = (now or dt.datetime.now()).isoformat(timespec="seconds")
+        SEND["run"] = r = {"id": when, "state": "running", "started": when, "log": [], "checkout": str(found[2])}
+        started = dict(r)
+    threading.Thread(target=_send, args=(r, found, popen), daemon=True).start()
+    return 202, started
+
+
+def _send(r, found, popen=None):
+    import subprocess
+    py, tool, ve = found
+    argv = [str(py), str(tool), "--site", "auto", "--wait-bot", str(SEND_WAIT_BOT), "--json"]
+    result, err = None, None
+    try:
+        p = (popen or subprocess.Popen)(argv, cwd=str(ve), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        start = __import__("time").monotonic()
+        for line in p.stdout:
+            line = line.rstrip("\n")
+            if line.startswith("RESULT "):
+                try:
+                    result = json.loads(line[len("RESULT "):])
+                except ValueError:
+                    pass
+                continue
+            with SEND_LOCK:
+                r["log"] = (r["log"] + [line[:300]])[-40:]
+            if __import__("time").monotonic() - start > SEND_TIMEOUT:
+                p.kill()
+                err = "it took longer than 20 minutes and was stopped"
+                break
+        rc = p.wait()
+        if rc and not err:
+            tail = next((x for x in reversed(r["log"]) if x.strip()), "")
+            err = f"it stopped with an error: {tail[:200]}" if tail else f"it stopped with exit {rc}"
+    except Exception as e:                          # noqa: BLE001 — said on the page
+        err = f"it couldn't start ({str(e)[:160]})"
+    with SEND_LOCK:
+        r.update(state="failed" if err or result is None else "done", result=result,
+                 error=err or (None if result else "it finished without saying what it did"),
+                 finished=dt.datetime.now().isoformat(timespec="seconds"))
+
+
 _edit_index = {}          # photos_path -> {basename: full path}, built on first use per trip
 
 
@@ -644,6 +755,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, read(FEEDBACK, {"items": []}))
         if self.path.split("?")[0] == "/reels/ratings":
             return self._json(200, read(RATINGS, {"items": {}}))
+        if self.path.split("?")[0] == "/reels/send-to-nas":
+            return self._json(200, send_status())
         self._json(404, {"error": "not found"})
 
     def do_PUT(self):
@@ -665,6 +778,15 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, s)
 
     def do_POST(self):
+        if self.path.split("?")[0] in ("/reels/propose", "/reels/send-to-nas"):
+            if not self._page_on_this_mac():
+                return self._json(403, {"error": "only the Posts page on this Mac"})
+            if self.path.split("?")[0] == "/reels/send-to-nas":
+                return self._json(*send_start())
+            try:
+                return self._json(*propose(self._body()))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)})
         if self.path.split("?")[0] == "/reels/rating":
             try:
                 return self._json(*reel_rating(self._body()))

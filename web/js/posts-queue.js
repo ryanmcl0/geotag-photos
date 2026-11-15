@@ -4,7 +4,11 @@
  * He reviews the finished reels one by one; each one he approves he copies its file path into the box here. The
  * slider sets the time frame to post them over and shows what that means per day. The video project's Mac helper
  * (video-editor tools/reelbot/queue_sync.py) checks each line, copies the good ones to the bot on the NAS and writes
- * back what it found and the bot's schedule; the bot asks once each morning in Telegram (Approve all / Skip N).
+ * back what it found and the bot's schedule; at 07:00 the bot sends each reel of the day in Telegram (Approve / Skip /
+ * Caption, then Confirm). 2026-11-15: Posting schedule shows the proposed schedule (the bot's planner on this queue,
+ * video-editor tools/reelbot/propose.py through the local helper) and has Send to NAS (the helper runs queue_sync.py,
+ * which waits for the bot's plan, so the schedule table is the bot's real one after it). A line he gave Post is never
+ * refused for a check any more: its warnings (flags) show on the line and in Telegram.
  *
  * State: "reel_queue" in the Posts document (/api/posts, the same document as the drafts; functions/api/posts.ts keeps
  * it when a drafts-only save leaves it out), so post.py's mirror carries it to the live site and back like the drafts.
@@ -354,7 +358,7 @@ window.PostsQueue = (function () {
         if (!iso) return '';
         const d = new Date(iso);
         const opt = { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
-        try { return d.toLocaleString('en-GB', opt) + ' China'; } catch (e) { return iso; }
+        try { return d.toLocaleString('en-GB', opt) + ' UK'; } catch (e) { return iso; }
     }
 
     // refresh on demand (video-editor docs/POST_QUEUE.md "Refresh on demand"): the Mac checks each queued reel against
@@ -372,9 +376,10 @@ window.PostsQueue = (function () {
         if (i.status === 'pending' && i.refresh === 'waiting') {
             return [upFirst(i.why || 'waiting to be refreshed with the current code'), 'wait'];
         }
+        const warn = i.flags && i.flags.length ? ' · ⚠️ ' + i.flags.join('; ') + ' (shown in Telegram: skip it there)' : '';
         switch (i.status) {
-            case 'valid': return ['Ready: the bot will fit it in' + fresh, 'ok'];
-            case 'scheduled': return [(i.approved ? 'Approved for ' : 'Planned for ') + fmtWhen(i.when) + fresh, 'ok'];
+            case 'valid': return ['Ready: the bot will fit it in' + fresh + warn, 'ok'];
+            case 'scheduled': return [(i.approved ? 'Approved for ' : 'Planned for ') + fmtWhen(i.when) + fresh + warn, 'ok'];
             case 'posted': return ['Posted' + (i.when ? ' ' + fmtWhen(i.when) : ''), 'done'];
             case 'skipped': return ['Not posted: ' + (i.why || 'skipped'), 'warn'];
             case 'invalid': return ['Problem: ' + (i.why || 'not usable'), 'bad'];
@@ -407,7 +412,7 @@ window.PostsQueue = (function () {
             return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
         };
         const say = () => {
-            const reels = `${n} reel${n === 1 ? '' : 's'} in the queue`;
+            const reels = `${n} reel${n === 1 ? '' : 's'} to post`;
             if (mode === 'per_day') {
                 const days = n ? Math.ceil(n / pd) : 0;
                 read.textContent = reels + ` · ${pd} a day` +
@@ -457,11 +462,12 @@ window.PostsQueue = (function () {
         wrap.appendChild(modes);
         wrap.append(label, read);
         const s = q.schedule || {};
-        if (s.per_day && s.span_end) {
-            const end = new Date(s.span_end + 'T00:00:00');
-            end.setDate(end.getDate() - 1);
-            wrap.appendChild(el('div', 'pq-bot', `The bot's plan: ${s.per_day} a day${s.per_day_fixed ? ' (as you set)' : ''}, the last on about ` +
-                end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) +
+        const planned = (s.rows || []).filter(r => r.time && ['planned', 'approved'].includes(r.status));
+        if (s.per_day && planned.length) {
+            // one story with the counts above (owner 2026-11-15: the numbers didn't add up): what the bot holds now
+            const last = planned.map(r => r.day || r.time.slice(0, 10)).sort().pop();
+            wrap.appendChild(el('div', 'pq-bot', `The bot's plan (as of the last Send to NAS): ${planned.length} planned, ` +
+                `${s.per_day} a day${s.per_day_fixed ? ' (as you set)' : ''}, the last on ` + fmtDay(last + 'T12:00:00') +
                 (s.missed ? ` (${s.missed} unanswered morning${s.missed === 1 ? '' : 's'} moved it on)` : '') +
                 (s.posting === false ? '. Posting is off on the bot: nothing goes to Instagram yet.' : '.')));
         }
@@ -622,7 +628,7 @@ window.PostsQueue = (function () {
         }
     }
 
-    function scheduleBlock(q) {
+    function scheduleBlock(q, label) {
         const rows = ((q.schedule || {}).rows || []).filter(r => r.time);
         // folded by default (owner 2026-11-15: "make the schedule collapsible otherwise it takes up huge amount of space")
         const box = el('details', 'pq-sched');
@@ -630,7 +636,9 @@ window.PostsQueue = (function () {
         try { open = localStorage.getItem('reels_sched_table') === '1'; } catch (e) { /* private window */ }
         box.open = open;
         box.addEventListener('toggle', () => { try { localStorage.setItem('reels_sched_table', box.open ? '1' : '0'); } catch (e) { /* none */ } });
-        box.appendChild(el('summary', 'pq-h', `Schedule (${rows.length} reel${rows.length === 1 ? '' : 's'})`));
+        const live = rows.filter(r => ['planned', 'approved'].includes(r.status)).length;
+        box.appendChild(el('summary', 'pq-h', `${label || 'Schedule'} (${live} planned` +
+            (rows.length > live ? `, ${rows.length - live} done or moved` : '') + ')'));
         if (!rows.length) {
             box.appendChild(el('p', 'reels-how', 'No schedule yet: the bot makes it once the Mac has checked the reels.'));
             return box;
@@ -641,7 +649,7 @@ window.PostsQueue = (function () {
         tbl.appendChild(head);
         const word = { planned: 'planned', approved: 'approved', posted: 'posted', off: 'posting was off',
             skipped: 'skipped that day', late: 'moved on', removed: 'removed', failed: 'failed', refused: 'not public',
-            limit: 'Instagram limit', private: 'not public' };
+            limit: 'Instagram limit', private: 'not public', nomaster: 'not posted: no full-quality file' };
         rows.forEach(r => {
             const tr = el('tr', 'pq-' + (r.status || 'planned'));
             const d = new Date(r.time);
@@ -689,7 +697,8 @@ window.PostsQueue = (function () {
         sec.appendChild(el('p', 'reels-how',
             'Paste the file path of each reel that can go out now, one per line (in Finder: select the file, hold Option, ' +
             'right-click, Copy … as Pathname). Several at once is fine. The bot spreads them over the time you set ' +
-            'and each morning sends one Telegram message with that day\'s posts: Approve all, or Skip a number.'));
+            'and each morning at 07:00 sends that day\'s reels to Telegram, one message each: Approve, Skip or change the ' +
+            'caption, then Confirm once. Send to NAS (Reviewed ▸ Posting schedule) hands the queue to the bot.'));
         pasteBar(sec, 'queue', 'Add to queue');
         sec.appendChild(sliderBlock(q));
         const cols = el('div', 'pq-cols');
@@ -820,11 +829,179 @@ window.PostsQueue = (function () {
         const it = queue().items.find(i => i.path === path || (!!name && fileName(i.path) === name));
         return it ? statusText(it) : null;
     }
+    // ── the proposed schedule and Send to NAS (owner 2026-11-15) ──
+    // "a button that has the proposed schedule and based on my schedule settings and based on what's in the queue. and
+    // then have a button that i click that's like send to nas. and then it sends the whole plan to the nas where then
+    // the telegram bot takes over." The proposal is the bot's own planner (video-editor tools/reelbot/propose.py, through
+    // the local helper) on the queue as it is now; Send to NAS runs the Mac's queue_sync.py, which waits for the bot's
+    // plan from the new list, so the schedule table below is the bot's real one afterwards.
+    const api = () => (window.ReelsSite && ReelsSite.api) || 'http://127.0.0.1:8791';
+    let proposal = { sig: null, data: null, busy: false, err: null, timer: null };
+    let send = { run: null, poll: null, err: null };
+
+    // the page's lines as one story (owner 2026-11-15: "205 marked Post · 152 going to the bot · 53 not sent")
+    function story(q) {
+        const its = q.items;
+        const c = { posted: 0, held: 0, refused: 0, unchecked: 0, bot: 0, flagged: 0 };
+        its.forEach(i => {
+            if (i.status === 'posted') c.posted++;
+            else if (i.status === 'invalid' || i.status === 'skipped') c.refused++;
+            else if (i.hold) c.held++;
+            else if (i.status === 'valid' || i.status === 'scheduled') { c.bot++; if (i.flags && i.flags.length) c.flagged++; }
+            else c.unchecked++;
+        });
+        const not = [c.held && `${c.held} held (vlog reels until you release them)`,
+            c.refused && `${c.refused} refused (see their lines)`,
+            c.unchecked && `${c.unchecked} not checked yet (Send to NAS checks them)`,
+            c.posted && `${c.posted} already posted`].filter(Boolean);
+        return `${its.length} marked Post · ${c.bot} going to the bot` +
+            (c.flagged ? ` (${c.flagged} with warnings you'll see in Telegram)` : '') +
+            (not.length ? ` · ${its.length - c.bot} not sent: ` + not.join(', ') : '');
+    }
+
+    function propSig(q) {
+        return JSON.stringify([q.items.map(i => [i.path, i.status, !!i.hold, i.key || '', i.place || '']), q.span_days,
+            q.per_day || 0, q.span_set || '']);
+    }
+
+    function loadProposal(q) {
+        const sig = propSig(q);
+        if (proposal.sig === sig || proposal.busy) return;
+        clearTimeout(proposal.timer);
+        proposal.timer = setTimeout(() => {
+            proposal.busy = true;
+            proposal.sig = sig;
+            fetch(api() + '/reels/propose', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reel_queue: { items: q.items, span_days: q.span_days, per_day: q.per_day || 0,
+                    span_set: q.span_set } }) })
+                .then(r => r.json().then(j => (r.ok ? j : Promise.reject(new Error(j.error || r.status)))))
+                .then(d => { proposal.data = d; proposal.err = null; },
+                    e => { proposal.err = 'Couldn\'t make the proposed schedule: ' + e.message +
+                        ' (is the local helper running? ./serve.sh starts it)'; proposal.sig = null; })
+                .then(() => { proposal.busy = false; redraw(); tellChanged(); });
+        }, 400);
+    }
+
+    function hhmm(iso) {
+        return new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+    function dayName(iso) {
+        return new Date(iso).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' });
+    }
+
+    function proposedBlock(q) {
+        const box = el('details', 'pq-sched pq-proposed');
+        let open = true;
+        try { open = localStorage.getItem('reels_proposed') !== '0'; } catch (e) { /* none */ }
+        box.open = open;
+        box.addEventListener('toggle', () => { try { localStorage.setItem('reels_proposed', box.open ? '1' : '0'); } catch (e) { /* none */ } });
+        const d = proposal.data;
+        box.appendChild(el('summary', 'pq-h', 'Proposed schedule' + (d ? ` (${d.count} reel${d.count === 1 ? '' : 's'})` : '')));
+        loadProposal(q);
+        if (proposal.err) { box.appendChild(el('p', 'pq-status bad', proposal.err)); return box; }
+        if (!d) { box.appendChild(el('p', 'reels-how', 'Working it out…')); return box; }
+        if (!d.count) { box.appendChild(el('p', 'reels-how', 'Nothing to schedule: no reel in the queue goes to the bot.')); return box; }
+        const times = (d.slots || []).slice(0, Math.max(1, d.per_day || 1)).slice().sort().join(', ');
+        box.appendChild(el('p', 'pq-bot',
+            `What the bot will do with these settings: ${d.count} reel${d.count === 1 ? '' : 's'}, ${d.per_day} a day` +
+            `${d.per_day_fixed ? ' (as you set)' : ''}, from ${dayName(d.first_day + 'T12:00:00Z')} to ` +
+            `${dayName(d.last_day + 'T12:00:00Z')}. Each morning at ${d.queue_time} (UK) it sends that day's reels to ` +
+            `Telegram; they post at ${times} UK.` + (d.unchecked ? ` ${d.unchecked} not checked by the Mac yet: Send to NAS ` +
+            'checks them and their places, so the order can still move a little.' : '') +
+            (proposal.busy ? ' Updating…' : '')));
+        const tbl = el('table', 'pq-table');
+        const head = el('tr');
+        ['Day', 'UK time', 'Reel', ''].forEach(h => head.appendChild(el('th', '', h)));
+        tbl.appendChild(head);
+        const word = { proposed: '', asked: 'sent to Telegram', approved: 'approved', missed: 'unanswered: moves to a later day' };
+        d.rows.forEach(r => {
+            const tr = el('tr', 'pq-' + (r.status === 'approved' ? 'approved' : 'planned'));
+            [dayName(r.time), hhmm(r.time), r.title + (r.flags ? ' ⚠️' : ''), word[r.status] || ''].forEach(v => tr.appendChild(el('td', '', v)));
+            tbl.appendChild(tr);
+        });
+        box.appendChild(tbl);
+        return box;
+    }
+
+    function pollSend() {
+        clearTimeout(send.poll);
+        fetch(api() + '/reels/send-to-nas', { cache: 'no-store' }).then(r => r.json()).then(r => {
+            send.run = r.state === 'none' ? null : r;
+            send.err = null;
+            if (r.state === 'running') send.poll = setTimeout(pollSend, 3000);
+            else if (r.state === 'done') refresh().then(redraw);
+            redraw();
+        }, () => { send.err = 'The local helper didn\'t answer (./serve.sh starts it).'; redraw(); });
+    }
+
+    function sendResult(res) {
+        const out = [];
+        const n = res.lines, nb = res.to_bot;
+        const not = [res.held && `${res.held} held (vlog reels until you release them)`,
+            res.posted && `${res.posted} already posted`,
+            res.refused.length && `${res.refused.length} refused: ` + Object.entries(res.reasons || {}).map(([k, v]) => `${k} (${v})`).join('; '),
+            res.waiting.length && `${res.waiting.length} couldn't be copied yet (tried again next time)`].filter(Boolean);
+        out.push(`Sent. ${n} marked Post · ${nb} going to the bot` + (res.flagged ? ` (${res.flagged} with warnings you'll see in Telegram)` : '') +
+            (n - nb ? ` · ${n - nb} not sent: ` + not.join(', ') : '') + '.');
+        const s = res.schedule || {};
+        if (res.bot_fresh === false) {
+            out.push('The bot hasn\'t made its plan from the new list yet (it may be restarting): the schedule below is its last one. Press Send to NAS again in a few minutes.');
+        } else if (s.planned) {
+            out.push(`The bot's plan: ${s.planned} planned, ${s.per_day} a day, the last on ${dayName(s.last_day + 'T12:00:00Z')}.` +
+                (s.posting === false ? ' Posting is off on the bot: you switch it on with /posting on in Telegram.' : ''));
+        }
+        return out;
+    }
+
+    function sendBlock() {
+        const box = el('div', 'pq-send');
+        const b = el('button', 'reels-export-btn', 'Send to NAS');
+        b.type = 'button';
+        b.title = 'Check every reel in the queue on this Mac, copy them to the bot on the NAS and get the bot\'s real schedule back. ' +
+            'From tomorrow 07:00 the Telegram bot sends each day\'s reels for your Approve / Skip.';
+        const running = send.run && send.run.state === 'running';
+        b.disabled = !!running;
+        b.addEventListener('click', () => {
+            b.disabled = true;
+            fetch(api() + '/reels/send-to-nas', { method: 'POST' }).then(r => r.json().then(j => {
+                if (!r.ok && r.status !== 409) throw new Error(j.error || r.status);
+                send.run = j;
+            })).then(() => { send.err = null; pollSend(); },
+                e => { send.err = 'Couldn\'t start: ' + e.message; redraw(); });
+        });
+        box.appendChild(b);
+        const r = send.run;
+        if (send.err) box.appendChild(el('div', 'pq-status bad', send.err));
+        else if (running) {
+            const last = (r.log || []).filter(x => x.trim()).slice(-1)[0] || '';
+            box.appendChild(el('div', 'pq-status wait', 'Sending… the Mac checks each reel, copies it to the NAS, then waits for the bot\'s plan (up to 2½ minutes).'));
+            if (last) box.appendChild(el('div', 'pq-path', last.replace(/^\S+ \S+ /, '')));
+        } else if (r && r.state === 'done' && r.result) {
+            sendResult(r.result).forEach(t => box.appendChild(el('div', 'pq-status ok', t)));
+            if (r.result.refused.length) {
+                const det = el('details', 'pq-sched');
+                det.appendChild(el('summary', 'pq-h', `Refused (${r.result.refused.length})`));
+                const ul = el('ul', 'pq-added');
+                r.result.refused.forEach(x => ul.appendChild(el('li', 'bad', '✗ ' + fileName(x.path) + ': ' + x.why)));
+                det.appendChild(ul);
+                box.appendChild(det);
+            }
+            box.appendChild(el('div', 'reels-how', 'Finished ' + new Date(r.finished).toLocaleString('en-GB', { hour12: false })));
+        } else if (r && r.state === 'failed') {
+            box.appendChild(el('div', 'pq-status bad', 'Send to NAS failed: ' + (r.error || 'see the log')));
+        }
+        return box;
+    }
+
     function scheduleBox() {
         const q = queue();
         const box = el('div', 'pq-schedbox');
+        if (send.run === null && !send.poll && !send.err) { send.poll = -1; pollSend(); }   // a run left going: show it
+        box.appendChild(el('div', 'pq-readout', story(q)));
         box.appendChild(sliderBlock(q));
-        box.appendChild(scheduleBlock(q));
+        box.appendChild(proposedBlock(q));
+        box.appendChild(sendBlock());
+        box.appendChild(scheduleBlock(q, 'The bot\'s schedule'));
         box.appendChild(el('p', 'reels-how', q.synced
             ? 'Last checked by the Mac: ' + new Date(q.synced).toLocaleString('en-GB', { hour12: false })
             : 'Not checked by the Mac yet (video-editor: tools/reelbot/queue_sync.py).'));

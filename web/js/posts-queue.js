@@ -889,7 +889,7 @@ window.PostsQueue = (function () {
     function proposedBlock(q) {
         const box = el('details', 'pq-sched pq-proposed');
         let open = true;
-        try { open = localStorage.getItem('reels_proposed') !== '0'; } catch (e) { /* none */ }
+        try { open = localStorage.getItem('reels_proposed') === '1'; /* folded unless he opened it */ } catch (e) { /* none */ }
         box.open = open;
         box.addEventListener('toggle', () => { try { localStorage.setItem('reels_proposed', box.open ? '1' : '0'); } catch (e) { /* none */ } });
         const d = proposal.data;

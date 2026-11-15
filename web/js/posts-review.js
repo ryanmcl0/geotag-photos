@@ -784,7 +784,9 @@ window.PostsReview = (function () {
         const line = (x, extra) => `- ${x.r.path}\n  ${extra}` + (fmt(judgedAt(x.d)) ? ` (${fmt(judgedAt(x.d))})` : '');
         const short = items.filter(x => x.d.kind === 'shortlist');
         const rej = items.filter(x => x.d.kind === 'rejected');
-        const posted = items.filter(x => (x.d.kind === 'queue' || x.d.kind === 'posted') && x.d.note);
+        // every Post (P, stars, F): the good ones, best first, so the agent knows what to make more of
+        const posted = items.filter(x => x.d.kind === 'queue' || x.d.kind === 'posted')
+            .sort((a, b) => (b.d.stars || 0) - (a.d.stars || 0) || (b.d.note ? 1 : 0) - (a.d.note ? 1 : 0));
         const out = [
             '# Reel review feedback (Posts ▸ Reels ▸ Reviewed, copied ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ')',
             '',
@@ -799,7 +801,9 @@ window.PostsReview = (function () {
             'back to my Review list. A shortlisted reel with no note: ask me what to fix.',
             '3. REJECTED = a hard no. Never re-make, re-post or delete them. Read the reasons as my taste: when a reason ' +
             'repeats, turn it into a rule or a check for future reels.',
-            '4. POSTED WITH A NOTE = posted exactly as it is: never change those reels. The note is taste for the next reels.',
+            '4. POSTED = good as it is (stars say how good, 5 = best): never change those reels. They are the record of ' +
+            'what works: look at the 4–5 star ones (their footage, hook, text, song, pace, length) and write down what ' +
+            'they share, then make more reels like them. A note on a posted reel is taste for the next reels.',
             '5. Never use private clips. When you want me to look at something, give me its full file path on its own line.',
             '6. Tell me in plain words, reel by reel, what you did, and anything you could not do.',
             ''
@@ -810,8 +814,9 @@ window.PostsReview = (function () {
         out.push('', `## Rejected (${rej.length})`);
         rej.forEach(x => out.push(line(x, 'Why: ' + (x.d.reason || 'No reason given'))));
         if (!rej.length) out.push('(none)');
-        out.push('', `## Posted, with a note for the next reels (${posted.length})`);
-        posted.forEach(x => out.push(line(x, (x.d.stars ? `${x.d.stars}/5 stars. ` : '') + 'Note: ' + x.d.note)));
+        out.push('', `## Posted: the good ones, get more of these (${posted.length}, best first)`);
+        posted.forEach(x => out.push(line(x, (x.d.stars ? `${x.d.stars}/5 stars` : 'Posted, no stars') +
+            (x.d.note ? '. Note: ' + x.d.note : ''))));
         if (!posted.length) out.push('(none)');
         return out.join('\n') + '\n';
     }
@@ -824,8 +829,8 @@ window.PostsReview = (function () {
         rv.head = el('div', 'pq-h', 'Reviewed');
         const fb = el('button', 'reels-export-btn rvd-agent', 'Feedback to agent');
         fb.type = 'button';
-        fb.title = 'Copy the shortlisted and rejected reels (file paths, your notes and reasons) and your notes on posted ' +
-            'reels, with instructions, to paste to your AI agent';
+        fb.title = 'Copy the shortlisted, rejected and posted reels (file paths, stars, your notes and reasons), with ' +
+            'instructions, to paste to your AI agent';
         const fbSaid = el('span', 'pq-status ok rvd-agent-said');
         fb.addEventListener('click', () => {
             const text = agentText(reviewed(reelsDoc));

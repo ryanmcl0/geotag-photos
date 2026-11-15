@@ -31,6 +31,11 @@
  *              'post'"): Post with how good it is. Keys 1–5. The stars are kept by the local helper (POST /reels/rating
  *              → web/phone/reels/reel_ratings.json) for the reel builders to learn from; Undo withdraws them too.
  *
+ * Reviewed also replaces the old Queue page (owner 2026-11-15): Post puts a reel in the post queue, the bot's schedule is
+ * made from those, and this page shows it (the spread slider, the schedule table, each posted reel's planned time).
+ * "Feedback to agent" copies the shortlisted and rejected reels (paths, notes, reasons) and the notes on posted reels,
+ * with a prompt and instructions, for him to paste to an AI agent.
+ *
  * Posts ▸ Reels ▸ Reviewed (reviewedPanel, owner 2026-11-14: "another tab for reviewed which tracks everything that
  * i've already reviewed and given feedback"): every reel judged, last judged first, with its verdict, stars, note or
  * reason; filter by verdict and trip; play it; change the stars of a posted one; Undo sends it back to Review.
@@ -632,8 +637,12 @@ window.PostsReview = (function () {
             : d.kind === 'shortlist' ? (d.note ? `Shortlist, to fix: ${d.note}` : 'Shortlist (no note)')
                 : d.kind === 'posted' ? (d.profile ? `Posted ${d.when || ''}` : 'Posted')
                     : 'Post: in the post queue';
-        const full = (d.kind === 'queue' || d.kind === 'posted') && d.note ? `${what} · note: ${d.note}` : what;
-        return el('div', 'pq-status ' + (d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : 'ok'), full);
+        // a queued reel: where it stands with the bot (ready, planned for a time, a problem the Mac found)
+        const st = d.kind === 'queue' && window.PostsQueue && PostsQueue.statusOf ? PostsQueue.statusOf(d.at) : null;
+        const base = st ? `Post: ${st[0].charAt(0).toLowerCase()}${st[0].slice(1)}` : what;
+        const full = (d.kind === 'queue' || d.kind === 'posted') && d.note ? `${base} · note: ${d.note}` : base;
+        const cls = d.kind === 'rejected' ? 'bad' : d.kind === 'shortlist' ? 'warn' : st ? st[1] : 'ok';
+        return el('div', 'pq-status ' + cls, full);
     }
 
     function fmtJudged(d) {
@@ -722,7 +731,10 @@ window.PostsReview = (function () {
     function rvDraw(force) {
         if (!rv || !rv.root.isConnected) return;
         const all = reviewed(reelsDoc);
-        const sig = JSON.stringify(all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason]));
+        const sig = JSON.stringify([all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason, x.d.status, x.d.when]),
+            window.PostsQueue && PostsQueue.counts()]);
+        // the schedule box follows the document, except while its slider is in the hand
+        if (window.PostsQueue && rv.sched && !rv.sched.contains(document.activeElement)) rv.sched.replaceChildren(PostsQueue.scheduleBox());
         if (!force && sig === rv.sig) return;
         rv.sig = sig;
         const byKind = rv.kind === 'all' ? all : all.filter(x => x.d.kind === rv.kind);
@@ -764,12 +776,79 @@ window.PostsReview = (function () {
         }
     }
 
+    // "Feedback to agent": the text he pastes to his AI agent. Shortlisted reels (fix this), rejected reels (a hard no:
+    // taste for the next reels) and posted reels with a note (posted as is: taste for the next reels), each with its
+    // full path, plus what to do with them.
+    function agentText(items) {
+        const fmt = t => { const x = new Date(t); return isNaN(x) ? '' : x.toISOString().slice(0, 10); };
+        const line = (x, extra) => `- ${x.r.path}\n  ${extra}` + (fmt(judgedAt(x.d)) ? ` (${fmt(judgedAt(x.d))})` : '');
+        const short = items.filter(x => x.d.kind === 'shortlist');
+        const rej = items.filter(x => x.d.kind === 'rejected');
+        const posted = items.filter(x => (x.d.kind === 'queue' || x.d.kind === 'posted') && x.d.note);
+        const out = [
+            '# Reel review feedback (Posts ▸ Reels ▸ Reviewed, copied ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ')',
+            '',
+            'You are the reel editor for my Instagram (@ryanmcl0), working in ~/Documents/Projects/video-editor (read its ' +
+            'AGENTS.md and your memory first). Below is my feedback on reels I reviewed. Act on it:',
+            '',
+            '1. First run the queue sync: cd ~/Documents/Projects/video-editor-r4 && .venv/bin/python tools/reelbot/queue_sync.py',
+            '2. SHORTLISTED = good, but fix exactly what my note says and keep everything else as it is. Before changing a ' +
+            'reel, look up my earlier notes on that same reel and apply them too. Re-render it to the same path (move the ' +
+            'old file to the archive, never delete it), check the new one on its frames yourself, then set its note to ' +
+            '"status": "handled" in ~/Documents/Projects/geotag-photos/web/phone/reels/reel_feedback.json so it comes ' +
+            'back to my Review list. A shortlisted reel with no note: ask me what to fix.',
+            '3. REJECTED = a hard no. Never re-make, re-post or delete them. Read the reasons as my taste: when a reason ' +
+            'repeats, turn it into a rule or a check for future reels.',
+            '4. POSTED WITH A NOTE = posted exactly as it is: never change those reels. The note is taste for the next reels.',
+            '5. Never use private clips. When you want me to look at something, give me its full file path on its own line.',
+            '6. Tell me in plain words, reel by reel, what you did, and anything you could not do.',
+            ''
+        ];
+        out.push(`## Shortlisted: fix these (${short.length})`);
+        short.forEach(x => out.push(line(x, 'Fix: ' + (x.d.note || '(no note given: ask me)'))));
+        if (!short.length) out.push('(none)');
+        out.push('', `## Rejected (${rej.length})`);
+        rej.forEach(x => out.push(line(x, 'Why: ' + (x.d.reason || 'No reason given'))));
+        if (!rej.length) out.push('(none)');
+        out.push('', `## Posted, with a note for the next reels (${posted.length})`);
+        posted.forEach(x => out.push(line(x, (x.d.stars ? `${x.d.stars}/5 stars. ` : '') + 'Note: ' + x.d.note)));
+        if (!posted.length) out.push('(none)');
+        return out.join('\n') + '\n';
+    }
+
     function reviewedPanel(doc) {
         reelsDoc = doc;
         const root = el('section', 'pq rvw rvd');
         rv = { root, sig: null, kind: lsGet(RV_KIND_KEY, 'all'), trip: lsGet(RV_TRIP_KEY, 'all'), items: [], drawn: 0 };
         if (!RV_KINDS.some(k => k[0] === rv.kind)) rv.kind = 'all';
         rv.head = el('div', 'pq-h', 'Reviewed');
+        const fb = el('button', 'reels-export-btn rvd-agent', 'Feedback to agent');
+        fb.type = 'button';
+        fb.title = 'Copy the shortlisted and rejected reels (file paths, your notes and reasons) and your notes on posted ' +
+            'reels, with instructions, to paste to your AI agent';
+        const fbSaid = el('span', 'pq-status ok rvd-agent-said');
+        fb.addEventListener('click', () => {
+            const text = agentText(reviewed(reelsDoc));
+            const done = n => { fbSaid.textContent = n; setTimeout(() => { fbSaid.textContent = ''; }, 6000); };
+            const fallback = () => {
+                const ta = el('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (e) { /* none */ }
+                ta.remove();
+                done(ok ? 'Copied.' : 'Could not copy: the browser refused.');
+            };
+            const n = (text.match(/^- /gm) || []).length;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => done(`Copied ${n} reel${n === 1 ? '' : 's'} with instructions: paste it to your agent.`), fallback);
+            } else fallback();
+        });
+        const bar = el('div', 'rvd-agentbar');
+        bar.append(fb, fbSaid);
         root.appendChild(rv.head);
         root.appendChild(el('p', 'reels-how',
             'Every reel you have judged, last judged first: its verdict, stars, note or reason. Change the stars of a ' +
@@ -778,7 +857,12 @@ window.PostsReview = (function () {
         rv.trips = el('div', 'reel-chips rvw-trips');
         rv.list = el('div', 'rvw-list');
         rv.more = el('div', 'rvw-more');
-        root.append(rv.kinds, rv.trips, rv.list, rv.more);
+        const sum = el('summary', 'pq-h', 'Posting schedule');
+        rv.schedWrap = el('details', 'rvd-sched');
+        rv.schedWrap.open = !!lsGet('reels_reviewed_sched', true);
+        rv.schedWrap.addEventListener('toggle', () => lsSet('reels_reviewed_sched', rv.schedWrap.open));
+        rv.schedWrap.append(sum, rv.sched = el('div'));
+        root.append(bar, rv.schedWrap, rv.kinds, rv.trips, rv.list, rv.more);
         rv.list.appendChild(el('p', 'reels-how', 'Loading…'));
         if (!rv.listening) {
             document.addEventListener('reels:changed', () => rvDraw(false));
@@ -788,11 +872,17 @@ window.PostsReview = (function () {
         rv.listening = true;
         const ready = (window.PostsQueue && !PostsQueue.counts().loaded) ? PostsQueue.ready() : Promise.resolve();
         Promise.all([ready, loadNotes(), loadRatings()]).then(() => rvDraw(true));
+        // the bot's schedule and the Mac's checks arrive on their own: a fresh read every 30 s while this shows
+        clearInterval(rv.timer);
+        rv.timer = setInterval(() => {
+            if (!root.isConnected) { clearInterval(rv.timer); return; }
+            if (window.PostsQueue && PostsQueue.refresh) PostsQueue.refresh();
+        }, 30000);
         return root;
     }
 
     function setDoc(doc) { reelsDoc = doc; loadNotes(); loadRatings(); }
 
-    return { panel, reviewedPanel, count, reviewedCount, setDoc, pending, reviewed, judgedAt, tripName, newestFirst,
+    return { panel, reviewedPanel, agentText, count, reviewedCount, setDoc, pending, reviewed, judgedAt, tripName, newestFirst,
         takeNotes, takeRatings, decision };
 })();

@@ -318,7 +318,7 @@ window.PostsQueue = (function () {
         if (rj) return { kind: 'rejected', at: rj.path, reason: rj.reason, when: rj.rejected };
         const q = queue();
         const it = q.items.find(same);
-        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when, added: it.added };
+        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when, added: it.added, status: it.status };
         const sl = q.shortlist.find(same);
         if (sl) return { kind: 'shortlist', at: sl.path, added: sl.added };
         return null;
@@ -749,6 +749,28 @@ window.PostsQueue = (function () {
         return readyP;
     }
 
+    // For Reels ▸ Reviewed (owner 2026-11-15: the Queue page is superseded by Reviewed; "anything clicked post enters
+    // the queue and the schedule is derived based off of those"): a queued reel's line ([text, class]), the spread
+    // slider + the bot's schedule as one box, and a fresh read of the document.
+    function statusOf(path) {
+        const name = fileName(path);
+        const it = queue().items.find(i => i.path === path || (!!name && fileName(i.path) === name));
+        return it ? statusText(it) : null;
+    }
+    function scheduleBox() {
+        const q = queue();
+        const box = el('div', 'pq-schedbox');
+        box.appendChild(sliderBlock(q));
+        box.appendChild(scheduleBlock(q));
+        box.appendChild(el('p', 'reels-how', q.synced
+            ? 'Last checked by the Mac: ' + new Date(q.synced).toLocaleString('en-GB', { hour12: false })
+            : 'Not checked by the Mac yet (video-editor: tools/reelbot/queue_sync.py).'));
+        return box;
+    }
+    function refresh() {
+        return fetchDoc().then(() => { tellRejects(); tellChanged(); }, () => {});
+    }
+
     // the Queue section's count: reels in the post queue still to go out, and the shortlist
     function counts() {
         const q = queue();
@@ -757,5 +779,5 @@ window.PostsQueue = (function () {
     }
 
     return { panel, ready, counts, rejectOf, reject, undoReject, rejectControl, onRejects, addPaths, removeFromQueue,
-        removeFromShortlist, decisionOf, fileName };
+        removeFromShortlist, decisionOf, fileName, statusOf, scheduleBox, refresh };
 })();

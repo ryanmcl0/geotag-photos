@@ -406,17 +406,14 @@ window.PostsQueue = (function () {
         input.type = 'range';
         input.min = '1';
         const read = el('div', 'pq-readout');
-        const lastDay = days => {
-            const d = new Date();
-            d.setDate(d.getDate() + Math.max(0, days - 1));
-            return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-        };
         const say = () => {
             const reels = `${n} reel${n === 1 ? '' : 's'} to post`;
             if (mode === 'per_day') {
                 const days = n ? Math.ceil(n / pd) : 0;
                 read.textContent = reels + ` · ${pd} a day` +
-                    (n ? ` · takes ${days} day${days === 1 ? '' : 's'}, the last on about ${lastDay(days)}` : '');
+                    // the days only: the bot's real end date (pairs wait, a place never twice in a row) is in the
+                    // proposed schedule below (owner 2026-11-15: the numbers have to tell one story)
+                    (n ? ` · at least ${days} day${days === 1 ? '' : 's'} (the dates: Proposed schedule)` : '');
                 return;
             }
             const p = perDay(n, span);

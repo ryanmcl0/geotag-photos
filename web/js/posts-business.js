@@ -523,7 +523,8 @@ window.PostsBusiness = (function () {
 
     // what posts-business-review.js needs
     const core = {
-        el, items, state, mutate, change, fileURL, label, kindText, captionOf, preview, slides, today,
+        el, items, state, mutate,
+        plan: () => (doc && doc.ok && doc.content.plan) || [], change, fileURL, label, kindText, captionOf, preview, slides, today,
         account: () => doc && doc.account,
         redraw: () => redraw && redraw(),
         // after a verdict saved in place: the Send bar and the section counts, without redrawing the list

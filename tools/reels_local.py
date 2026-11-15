@@ -72,7 +72,8 @@ state.json (the schedule, written here, by that tool's own post command and by t
                                  Only from a page on this Mac.
     state.json "reviews"         his verdicts from Business ▸ Review: {id: {"verdict": post|shortlist|reject, "stars"?,
                                  "note"?, "time", "queued"?, "status"?: open|handled}} (clean_reviews)
-    GET/HEAD /business/files/<path>   a file content.json lists (a reel, its silent copy, a cover, a slide), with Range
+    GET/HEAD /business/files/<path>   a file content.json lists (a reel, its silent copy, a cover, a slide) or the
+                                 folder's avatar.png / avatar.jpg (the profile picture: "avatar" in GET /business), with Range
                                  support; nothing else in the folder
 
 Posts ▸ Reels ▸ Reviewed ▸ Posting schedule (owner 2026-11-15: "a button that has the proposed schedule … and then
@@ -524,7 +525,8 @@ def business_doc(cfg=None):
     nas = nas if isinstance(nas, dict) else {}
     draft = read_draft()
     state = with_nas_marks(draft, nas) if draft is not None else nas
-    return {"ok": True, "folder": str(folder), "account": account, "content": content, "state": state,
+    avatar = next((n for n in AVATARS if (folder / n).is_file()), None)
+    return {"ok": True, "folder": str(folder), "account": account, "content": content, "state": state, "avatar": avatar,
             "unsent": unsent(draft, nas), "nas": {"rev": nas.get("rev", 0), "updated": nas.get("updated")}}
 
 
@@ -596,6 +598,9 @@ def send_business(cfg=None):
         except FileNotFoundError:
             pass
     return 200, {"sent": True, "doc": business_doc(cfg)}
+
+
+AVATARS = ("avatar.png", "avatar.jpg")             # the account's profile picture, for the tab's phone preview
 
 
 def business_ids(content):
@@ -692,7 +697,7 @@ def business_file(rel, cfg=None):
     doc = business_doc(cfg)
     if not doc["ok"] or not rel or "\0" in rel or "\\" in rel:
         return None
-    listed = set()
+    listed = {doc["avatar"]} if doc.get("avatar") else set()
     for it in doc["content"]["items"]:
         if isinstance(it, dict):
             listed.update(x for x in [it.get("file"), it.get("silent"), it.get("cover"), *(it.get("files") or [])]

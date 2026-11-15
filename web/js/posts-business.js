@@ -309,8 +309,10 @@ window.PostsBusiness = (function () {
         const scr = el('div', 'reels-phone-screen');
         const head = el('div', 'reels-phone-head');
         const avatar = el('div', 'reels-phone-avatar');
+        // the account's own picture (avatar.png in the content folder), else the first post's cover
         const first = order.find(it => it.cover);
-        if (first) avatar.style.backgroundImage = `url("${fileURL(first.cover)}")`;
+        const pic = doc.avatar || (first && first.cover);
+        if (pic) avatar.style.backgroundImage = `url("${fileURL(pic)}")`;
         const stats = el('div', 'reels-phone-stats');
         [[order.length, 'posts'], [posted, 'posted'], [order.length - posted, 'planned']].forEach(([n, l]) => {
             const s = el('div', 'reels-phone-stat');

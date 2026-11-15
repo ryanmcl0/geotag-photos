@@ -159,6 +159,13 @@ class BusinessLocalTest(unittest.TestCase):
         self.assertEqual(code, 403)
         self.assertEqual(json.loads((self.folder / "state.json").read_text())["rev"], 3)
 
+    def test_the_avatar(self):
+        self.assertIsNone(self.doc()["avatar"])
+        self.assertEqual(self.call("/business/files/avatar.png")[0], 404)
+        (self.folder / "avatar.png").write_bytes(b"logo")
+        self.assertEqual(self.doc()["avatar"], "avatar.png")
+        self.assertEqual(self.call("/business/files/avatar.png")[2], b"logo")
+
     def test_files_listed_in_content_only(self):
         code, h, body = self.call("/business/files/reels/one.mp4", headers={"Range": "bytes=10-19"})
         self.assertEqual((code, body, h["Content-Range"]), (206, VIDEO[10:20], f"bytes 10-19/{len(VIDEO)}"))

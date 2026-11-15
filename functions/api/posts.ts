@@ -88,7 +88,7 @@ interface QueueItem {
 // shortlist: reels he approved but isn't posting yet (only the page reads it; the bot only gets items).
 interface ShortlistItem { id?: string; path: string; added?: string }
 interface ReelQueue {
-    items: QueueItem[]; shortlist?: ShortlistItem[]; span_days?: number; span_set?: string; updated?: string;
+    items: QueueItem[]; shortlist?: ShortlistItem[]; span_days?: number; per_day?: number; span_set?: string; updated?: string;
     schedule?: Record<string, unknown>; synced?: string;
 }
 const QUEUE_STATUSES = ['pending', 'valid', 'invalid', 'scheduled', 'posted', 'skipped'];
@@ -187,7 +187,9 @@ function validQueue(q: unknown): q is ReelQueue | undefined {
     const text = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
     if (!Array.isArray(r.items) || r.items.length > 500) return false;
     if (r.span_days !== undefined &&
-        !(Number.isInteger(r.span_days) && r.span_days >= 1 && r.span_days <= 90)) return false;
+        !(Number.isInteger(r.span_days) && r.span_days >= 1 && r.span_days <= 365)) return false;
+    // per_day: a fixed number a day chosen on the page (0 = off, the span sets the pace); the bot has 7 posting times
+    if (r.per_day !== undefined && !(Number.isInteger(r.per_day) && r.per_day >= 0 && r.per_day <= 7)) return false;
     if (!text(r.span_set, 40) || !text(r.updated, 40) || !text(r.synced, 40)) return false;
     if (r.schedule !== undefined && (!r.schedule || typeof r.schedule !== 'object' || Array.isArray(r.schedule) ||
         JSON.stringify(r.schedule).length > 200 * 1024)) return false;

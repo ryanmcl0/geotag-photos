@@ -494,3 +494,4 @@
 }
 .rvw-left:empty { display: none; }
 .rvw-left.done { border-color: #5a9; color: #8d8; }
+.pq-modes { margin-bottom: 8px; }

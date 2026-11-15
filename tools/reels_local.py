@@ -66,6 +66,12 @@ state.json (the schedule, written here, by that tool's own post command and by t
                                  and only when rev is the current one (409 + the current state otherwise, so a mark the
                                  bot wrote meanwhile is never lost); ids must be items of content.json; only from a
                                  page on this Mac (Origin localhost)
+    POST /business/send-to-nas   the draft (below) into state.json: PUT /business/state writes the tab's changes to
+                                 draft.json next to the business config, on this Mac; the bot's state.json changes only
+                                 here. GET /business shows the draft with the NAS's posted/skipped marks, and "unsent".
+                                 Only from a page on this Mac.
+    state.json "reviews"         his verdicts from Business ▸ Review: {id: {"verdict": post|shortlist|reject, "stars"?,
+                                 "note"?, "time", "queued"?, "status"?: open|handled}} (clean_reviews)
     GET/HEAD /business/files/<path>   a file content.json lists (a reel, its silent copy, a cover, a slide), with Range
                                  support; nothing else in the folder
 
@@ -514,13 +520,116 @@ def business_doc(cfg=None):
     if not isinstance(content, dict) or not isinstance(content.get("items"), list):
         why = "unreachable" if not folder.is_dir() else "no content.json"
         return {"ok": False, "reason": why, "folder": str(folder), "account": account}
-    state = read(folder / "state.json", {})
-    return {"ok": True, "folder": str(folder), "account": account, "content": content,
-            "state": state if isinstance(state, dict) else {}}
+    nas = read(folder / "state.json", {})
+    nas = nas if isinstance(nas, dict) else {}
+    draft = read_draft()
+    state = with_nas_marks(draft, nas) if draft is not None else nas
+    return {"ok": True, "folder": str(folder), "account": account, "content": content, "state": state,
+            "unsent": unsent(draft, nas), "nas": {"rev": nas.get("rev", 0), "updated": nas.get("updated")}}
+
+
+# ── the draft (owner 2026-11-15: "approval for any scheduled posts in the queue should please still go through the
+# telegram box / it needs the same send to nas concept as the other page has") ──
+# The tab's changes (verdicts, order, start, gap, captions, hand ticks) are kept on this Mac in draft.json next to the
+# business config; the bot's state.json on the NAS changes only when he presses Send to NAS. What the bot and the post
+# command mark there (posted, skipped) always shows through.
+TAB_FIELDS = ("start", "every", "queue", "captions", "reviews")
+
+
+def draft_path():
+    return BUSINESS_CONFIG.parent / "draft.json"
+
+
+def read_draft():
+    d = read(draft_path(), None)
+    return d if isinstance(d, dict) else None
+
+
+def merged_posted(nas_posted, draft_posted):
+    """The bot's and the post command's marks from the NAS, his hand ticks from the draft."""
+    out = {k: v for k, v in (nas_posted or {}).items() if isinstance(v, dict) and v.get("via") != "hand"}
+    out.update({k: v for k, v in (draft_posted or {}).items()
+                if isinstance(v, dict) and v.get("via") == "hand" and k not in out})
+    return out
+
+
+def with_nas_marks(draft, nas):
+    view = dict(draft)
+    view["posted"] = merged_posted(nas.get("posted"), draft.get("posted"))
+    for k in ("skipped",):
+        if k in nas:
+            view[k] = nas[k]
+    return view
+
+
+def unsent(draft, nas):
+    if draft is None:
+        return False
+    hand = lambda p: {k: v for k, v in (p or {}).items() if isinstance(v, dict) and v.get("via") == "hand"}
+    return (any(draft.get(k) != nas.get(k) for k in TAB_FIELDS if k in draft or k in nas)
+            or hand(draft.get("posted")) != hand(nas.get("posted")))
+
+
+def send_business(cfg=None):
+    """Send to NAS: the draft's tab fields and hand ticks into the bot's state.json (rev + 1), then the draft goes."""
+    doc = business_doc(cfg)
+    if not doc["ok"]:
+        return 404, {"error": f"content folder {doc['reason']}"}
+    folder = Path(doc["folder"])
+    with BUSINESS_LOCK:
+        nas = read(folder / "state.json", {})
+        nas = nas if isinstance(nas, dict) else {}
+        draft = read_draft()
+        if draft is None:
+            return 200, {"sent": False, "doc": business_doc(cfg)}
+        new = dict(nas)
+        for k in TAB_FIELDS:
+            if k in draft:
+                new[k] = draft[k]
+        new["posted"] = merged_posted(nas.get("posted"), draft.get("posted"))
+        new["version"] = 1
+        new["rev"] = int(nas.get("rev") or 0) + 1
+        new["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+        write(folder / "state.json", new)
+        try:
+            draft_path().unlink()
+        except FileNotFoundError:
+            pass
+    return 200, {"sent": True, "doc": business_doc(cfg)}
 
 
 def business_ids(content):
     return {it["id"] for it in content.get("items", []) if isinstance(it, dict) and isinstance(it.get("id"), str)}
+
+
+REVIEW_VERDICTS = ("post", "shortlist", "reject")
+
+
+def clean_reviews(reviews, ids):
+    """His verdicts from Business ▸ Review: {id: {"verdict": post|shortlist|reject, "stars"?: 1–5, "note"?, "time",
+    "queued"?: true when Post put it in the queue, "status"?: "open"|"handled"}}. Unknown ids and verdicts are dropped;
+    a shortlist needs its note (what to fix)."""
+    out = {}
+    for k, v in (reviews or {}).items() if isinstance(reviews, dict) else ():
+        if k not in ids or not isinstance(v, dict) or v.get("verdict") not in REVIEW_VERDICTS:
+            continue
+        r = {"verdict": v["verdict"]}
+        note = v.get("note")
+        if isinstance(note, str) and note.strip():
+            r["note"] = note.strip()[:NOTE_MAX]
+        if r["verdict"] == "shortlist" and "note" not in r:
+            continue
+        stars = v.get("stars")
+        if r["verdict"] == "post" and isinstance(stars, int) and not isinstance(stars, bool) and 1 <= stars <= 5:
+            r["stars"] = stars
+        if isinstance(v.get("time"), str) and len(v["time"]) <= 40:
+            r["time"] = v["time"]
+        if v.get("queued") is True:
+            r["queued"] = True
+        if v.get("status") in ("open", "handled"):
+            r["status"] = v["status"]
+        out[k] = r
+    return out
 
 
 def clean_business_state(body, current, content):
@@ -549,6 +658,8 @@ def clean_business_state(body, current, content):
             del posted[k]["permalink"]
     out["posted"] = posted
     out["captions"] = {k: v[:5000] for k, v in (body.get("captions") or {}).items() if k in ids and isinstance(v, str)}
+    if "reviews" in body:                             # a page from before the Review section leaves them as they are
+        out["reviews"] = clean_reviews(body.get("reviews"), ids)
     out["version"] = 1
     out["rev"] = int(current.get("rev") or 0) + 1
     out["updated"] = dt.datetime.now().isoformat(timespec="seconds")
@@ -562,16 +673,18 @@ def put_business_state(body, cfg=None):
         return 404, {"error": f"content folder {doc['reason']}"}
     folder = Path(doc["folder"])
     with BUSINESS_LOCK:
-        current = read(folder / "state.json", {})
-        current = current if isinstance(current, dict) else {}
+        nas = read(folder / "state.json", {})
+        nas = nas if isinstance(nas, dict) else {}
+        draft = read_draft()
+        current = with_nas_marks(draft, nas) if draft is not None else nas
         if not isinstance(body, dict) or body.get("rev") != current.get("rev", 0):
             return 409, {"error": "changed elsewhere", "state": current}
         try:
             new = clean_business_state(body, current, doc["content"])
         except ValueError as e:
             return 400, {"error": str(e)}
-        write(folder / "state.json", new)
-    return 200, new
+        write(draft_path(), new)                      # the NAS changes only at Send to NAS
+    return 200, with_nas_marks(new, nas)
 
 
 def business_file(rel, cfg=None):
@@ -787,6 +900,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(*propose(self._body()))
             except ValueError as e:
                 return self._json(400, {"error": str(e)})
+        if self.path.split("?")[0] == "/business/send-to-nas":
+            if not self._page_on_this_mac():
+                return self._json(403, {"error": "only the Posts page on this Mac"})
+            return self._json(*send_business())
         if self.path.split("?")[0] == "/reels/rating":
             try:
                 return self._json(*reel_rating(self._body()))

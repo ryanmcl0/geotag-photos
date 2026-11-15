@@ -144,7 +144,7 @@ window.PostsReview = (function () {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
         }).then(r => (r.ok ? r.json() : null)).then(doc => { if (doc) takeRatings(doc); return !!doc; }).catch(() => false);
     }
-    const starText = n => '★'.repeat(n) + '☆'.repeat(5 - n);
+    const starText = n => ReviewKit.starText(n);
 
     // what has been decided about a reel, or null
     function decision(r) {
@@ -301,79 +301,31 @@ window.PostsReview = (function () {
         const open = row.fbSlot.querySelector('textarea');
         if (open && row.fbMode === (post ? 'post' : 'shortlist')) { open.focus(); return; }
         row.fbMode = post ? 'post' : 'shortlist';
-        let stars = 0;
-        const ta = el('textarea', 'pq-reason-text rvw-fbtext');
-        ta.rows = 3;
-        ta.placeholder = post
-            ? 'Your feedback (required): what works, what to do differently next time. Enter saves, Shift+Enter a new line, Esc cancels'
-            : 'What needs fixing? (required: Enter saves, Shift+Enter a new line, Esc cancels)';
-        const save = el('button', 'reels-mini rvw-fbsave', post ? 'Post with this note' : 'Shortlist with this note');
-        save.disabled = true;
-        ta.addEventListener('input', () => { save.disabled = !ta.value.trim(); });
-        save.type = 'button';
-        const cancel = el('button', 'reels-mini', 'Cancel');
-        cancel.type = 'button';
-        const close = () => row.fbSlot.replaceChildren();
-        const go = () => {
-            const note = ta.value.trim();
-            if (!note || row.busy) return;
-            row.busy = post ? 'Saving the note, adding to the post queue…' : 'Saving the note, adding to the shortlist…';
-            paint(row);
-            sendNote(post ? { id: row.r.id, note, kind: 'post' } : { id: row.r.id, note })
-                .then(ok => (ok && post && stars ? sendRating({ id: row.r.id, stars }) : ok))
-                .then(ok => {
-                    if (!ok) {
-                        row.busy = null;
-                        row.missing = (post ? 'Not posted' : 'Not shortlisted') +
-                            ': the note could not be saved (the local helper did not answer; relaunch the desktop app).';
-                        refresh();
-                        return null;
-                    }
-                    close();
-                    return PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false, { hold: isVlog(row.r) }).then(() => { row.busy = null; refresh(); });
-                });
-        };
-        save.addEventListener('click', e => { e.stopPropagation(); go(); });
-        cancel.addEventListener('click', e => { e.stopPropagation(); close(); });
-        ta.addEventListener('keydown', e => {
-            e.stopPropagation();
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); }
-            else if (e.key === 'Escape') { e.preventDefault(); close(); row.el.focus(); }
+        ReviewKit.noteBox(row.fbSlot, {
+            post,
+            onCancel: () => row.el.focus(),
+            onSave: (note, stars) => {
+                if (row.busy) return;
+                row.busy = post ? 'Saving the note, adding to the post queue…' : 'Saving the note, adding to the shortlist…';
+                paint(row);
+                sendNote(post ? { id: row.r.id, note, kind: 'post' } : { id: row.r.id, note })
+                    .then(ok => (ok && post && stars ? sendRating({ id: row.r.id, stars }) : ok))
+                    .then(ok => {
+                        if (!ok) {
+                            row.busy = null;
+                            row.missing = (post ? 'Not posted' : 'Not shortlisted') +
+                                ': the note could not be saved (the local helper did not answer; relaunch the desktop app).';
+                            refresh();
+                            return null;
+                        }
+                        return PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false, { hold: isVlog(row.r) }).then(() => { row.busy = null; refresh(); });
+                    });
+            }
         });
-        const bar = el('div', 'rvw-fbbar');
-        bar.append(save, cancel);
-        if (post) {
-            const pick = el('div', 'rvw-fbstars');
-            pick.appendChild(el('span', 'reel-meta', 'Stars (optional): '));
-            const g = starButtons(n => {
-                stars = stars === n ? 0 : n;            // the same star again clears it
-                g.querySelectorAll('.rvw-star').forEach(x => x.classList.toggle('on', +x.dataset.n <= stars));
-                ta.focus();
-            });
-            pick.appendChild(g);
-            row.fbSlot.replaceChildren(pick, ta, bar);
-        } else {
-            row.fbSlot.replaceChildren(ta, bar);
-        }
-        ta.focus();
     }
 
     // ★1–★5: Post with stars (the same as Post, and how good it is)
-    function starButtons(onPick, before, current) {
-        const g = el('div', 'rvw-stars');
-        g.title = 'Post, and how good it is (keys 1–5)';
-        for (let n = 1; n <= 5; n++) {
-            const b = el('button', 'reels-mini rvw-act rvw-star' + (current && n <= current ? ' on' : ''), '★');
-            b.type = 'button';
-            b.title = `Post: ${n} of 5 (key ${n})`;
-            b.dataset.n = String(n);
-            b.addEventListener('click', e => { e.stopPropagation(); if (before) before(); onPick(n); });
-            b.addEventListener('mouseenter', () => g.querySelectorAll('.rvw-star').forEach(x => x.classList.toggle('hover', +x.dataset.n <= n)));
-            g.appendChild(b);
-        }
-        g.addEventListener('mouseleave', () => g.querySelectorAll('.rvw-star').forEach(x => x.classList.remove('hover')));
-        return g;
-    }
+    const starButtons = (onPick, before, current) => ReviewKit.stars(onPick, before, current);
 
     function verdict(row, where, stars) {
         if (row.state || row.busy) return;
@@ -642,39 +594,22 @@ window.PostsReview = (function () {
         paintHead();
     }
 
-    // keys: only while this list shows and the cursor is not in a text box
-    function onKey(e) {
-        if (!rootEl || !rootEl.isConnected || e.metaKey || e.ctrlKey || e.altKey) return;
-        const t = e.target;
-        if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-        const k = e.key;
-        const row = rows[focusAt];
-        if (k === 'j' || k === 'J' || k === 'ArrowDown') { e.preventDefault(); if (focusAt < 0) setFocus(0, true); else step(1, false); return; }
-        if (k === 'k' || k === 'K' || k === 'ArrowUp') { e.preventDefault(); step(-1, false); return; }
-        if (!row || row.state) return;
-        if (k === ' ' && t && t.tagName !== 'BUTTON' && t.tagName !== 'VIDEO') {
-            e.preventDefault();
-            if (row.video.paused) row.video.play().catch(() => {}); else row.video.pause();
-        } else if (k === 'p' || k === 'P') {
-            e.preventDefault();
-            verdict(row, 'queue');
-        } else if (k >= '1' && k <= '5') {
-            e.preventDefault();
-            verdict(row, 'queue', +k);
-        } else if (k === 'f' || k === 'F') {
-            e.preventDefault();
-            openFeedback(row, 'post');
-        } else if (k === 's' || k === 'S') {
-            e.preventDefault();
-            openFeedback(row);
-        } else if (k === 'r' || k === 'R') {
-            e.preventDefault();
+    // keys: only while this list shows and the cursor is not in a text box (the shared review keys)
+    const onKey = ReviewKit.keys(() => rootEl && rootEl.isConnected, () => rows[focusAt], row => !!row.state, {
+        next: () => { if (focusAt < 0) setFocus(0, true); else step(1, false); },
+        back: () => step(-1, false),
+        play: row => { if (row.video.paused) row.video.play().catch(() => {}); else row.video.pause(); },
+        post: row => verdict(row, 'queue'),
+        stars: (row, n) => verdict(row, 'queue', n),
+        postNote: row => openFeedback(row, 'post'),
+        shortlist: row => openFeedback(row),
+        reject: row => {
             const b = row.rejectSlot.querySelector('.pq-reject-btn');
             const open = row.rejectSlot.querySelector('.pq-reason-text');
             if (open) open.focus();
             else if (b) b.click();
         }
-    }
+    });
 
     // ── the panel ──
     function panel(doc) {
@@ -687,10 +622,7 @@ window.PostsReview = (function () {
             'the stars (1–5) post it too and say how good it is. ' +
             'Shortlist…: good, but something needs fixing; it asks what, and the reel builders act on your note. ' +
             'Reject…: a hard no; saying why is optional. A judged reel folds away (with Undo) and the next one comes up.'));
-        const keys = el('p', 'reels-how rvw-keys');
-        [['J', 'next'], ['K', 'back'], ['Space', 'play'], ['P', 'Post'], ['1–5', 'Post with stars'], ['F', 'Post + stars + note'], ['S', 'Shortlist…'], ['R', 'Reject…']].forEach(([k, w]) => {
-            keys.append(el('kbd', '', k), document.createTextNode(' ' + w + '  '));
-        });
+        const keys = ReviewKit.keyHelp();
         rootEl.appendChild(keys);
         leftEl = el('div', 'rvw-left');
         leftEl.setAttribute('aria-live', 'polite');
@@ -970,23 +902,8 @@ window.PostsReview = (function () {
         const fbSaid = el('span', 'pq-status ok rvd-agent-said');
         fb.addEventListener('click', () => {
             const text = agentText(reviewed(reelsDoc));
-            const done = n => { fbSaid.textContent = n; setTimeout(() => { fbSaid.textContent = ''; }, 6000); };
-            const fallback = () => {
-                const ta = el('textarea');
-                ta.value = text;
-                ta.style.position = 'fixed';
-                ta.style.opacity = '0';
-                document.body.appendChild(ta);
-                ta.select();
-                let ok = false;
-                try { ok = document.execCommand('copy'); } catch (e) { /* none */ }
-                ta.remove();
-                done(ok ? 'Copied.' : 'Could not copy: the browser refused.');
-            };
             const n = (text.match(/^- /gm) || []).length;
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(() => done(`Copied ${n} reel${n === 1 ? '' : 's'} with instructions: paste it to your agent.`), fallback);
-            } else fallback();
+            ReviewKit.copy(text, fbSaid, `Copied ${n} reel${n === 1 ? '' : 's'} with instructions: paste it to your agent.`);
         });
         const bar = el('div', 'rvd-agentbar');
         bar.append(fb, fbSaid);

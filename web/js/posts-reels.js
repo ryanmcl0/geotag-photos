@@ -39,7 +39,6 @@ window.PostsReels = (function () {
     const SECTION_KEY = 'reels_section';
     const SECTIONS = [
         ['progress', 'In progress', 'Jobs running right now'],
-        ['queue', 'Queue', 'Reels in the post queue still to go out'],
         ['review', 'Review', 'Reels you haven\'t judged yet'],
         ['reviewed', 'Reviewed', 'Reels you have judged: verdict, stars, notes'],
         ['profile', 'Profile', 'Reels picked for posting, in order'],
@@ -82,9 +81,11 @@ window.PostsReels = (function () {
     // from the address (#reels/<id>) first, else the one picked last in this browser
     function currentSection() {
         const m = /^#reels\/([\w-]+)/.exec(location.hash || '');
-        if (m && known(m[1])) { lsSet(SECTION_KEY, m[1]); return m[1]; }
-        const s = lsGet(SECTION_KEY, 'queue');
-        return known(s) ? s : 'queue';
+        // #reels/queue (the old Queue page, superseded by Reviewed on 2026-11-15) opens Reviewed
+        const asked = m && (m[1] === 'queue' ? 'reviewed' : m[1]);
+        if (asked && known(asked)) { lsSet(SECTION_KEY, asked); return asked; }
+        const s = lsGet(SECTION_KEY, 'review');
+        return known(s) ? s : 'review';
     }
 
     function showInAddress(id) {

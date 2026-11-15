@@ -60,6 +60,14 @@ window.PostsReview = (function () {
     let headEl = null;
     let chipsEl = null;
     let leftEl = null;      // the floating 'N left' badge (owner 2026-11-15: stays put while scrolling)
+    // the vlog reels by day (owner 2026-11-15: "a way in the review tab … to see these vlog reels per day", posted in
+    // the week after the long-form video): kind all | vlog, and the day picked ('all' or "<trip>|<day>")
+    const KIND_KEY = 'reels_review_kind';
+    const VDAY_KEY = 'reels_review_vday';
+    let kindSel = lsGet(KIND_KEY, 'all');
+    let vday = lsGet(VDAY_KEY, 'all');
+    let typeEl = null;
+    let daysEl = null;
     let moreEl = null;
     let listening = false;
     let notes = {};                  // reel id → its open feedback note (reel_feedback.json's item)
@@ -81,6 +89,17 @@ window.PostsReview = (function () {
     function tripName(r) {
         const m = /\/Short Form Content\/([^/]+)\//.exec(r.path || '');
         return m ? m[1] : (r.trip || 'Other');
+    }
+    const isVlog = r => r.kind === 'vlog_cut';
+    const dayKey = r => `${tripName(r)}|${r.day || 0}`;
+    function dayLabel(k, oneTrip) {
+        const [t, d] = k.split('|');
+        const day = +d ? `Day ${d}` : 'No day';
+        return oneTrip ? day : `${t} · ${day}`;
+    }
+    // vlog reels in trip and day order (the day's story order), not newest first
+    function byDay(a, b) {
+        return tripName(a).localeCompare(tripName(b)) || (a.day || 0) - (b.day || 0) || String(a.path).localeCompare(String(b.path));
     }
 
     // ── feedback notes (the local helper keeps them) ──
@@ -502,10 +521,11 @@ window.PostsReview = (function () {
     function paintHead() {
         if (!headEl) return;
         const all = pending(reelsDoc);
-        const here = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
-        headEl.textContent = `To review (${here.length}${trip === 'all' ? '' : ` of ${all.length}`})`;
+        const here = shown();
+        const filtered = trip !== 'all' || kindSel === 'vlog';
+        headEl.textContent = `To review (${here.length}${filtered ? ` of ${all.length}` : ''})`;
         if (leftEl) {
-            leftEl.textContent = `${here.length} left` + (trip === 'all' ? '' : ` in ${trip} · ${all.length} in all`);
+            leftEl.textContent = `${here.length} left` + (filtered ? ` here · ${all.length} in all` : '');
             leftEl.classList.toggle('done', !here.length);
         }
         // the trip chips: every trip with reels to judge, and the one picked
@@ -525,12 +545,89 @@ window.PostsReview = (function () {
             });
             chipsEl.appendChild(c);
         });
+        paintVlog();
+    }
+
+    // the type chips (all reels / vlog reels), the day chips, and "Post all" for the day picked
+    function paintVlog() {
+        if (!typeEl) return;
+        const all = pending(reelsDoc);
+        const inTrip = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
+        const vl = inTrip.filter(isVlog);
+        typeEl.replaceChildren();
+        [['all', `All reels (${inTrip.length})`], ['vlog', `Vlog reels by day (${vl.length})`]].forEach(([k, label]) => {
+            const c = el('button', 'reel-chip' + (k === kindSel ? ' active' : ''), label);
+            c.type = 'button';
+            c.addEventListener('click', () => {
+                if (k === kindSel) return;
+                kindSel = k;
+                lsSet(KIND_KEY, k);
+                drawList();
+            });
+            typeEl.appendChild(c);
+        });
+        daysEl.replaceChildren();
+        if (kindSel !== 'vlog') return;
+        const per = new Map();
+        vl.slice().sort(byDay).forEach(r => per.set(dayKey(r), (per.get(dayKey(r)) || 0) + 1));
+        const oneTrip = trip !== 'all';
+        const keys = [...per.keys()];
+        if (vday !== 'all' && !per.has(vday)) keys.push(vday);
+        const chips = el('div', 'reel-chips rvw-trips');
+        [['all', `All days (${vl.length})`], ...keys.map(k => [k, `${dayLabel(k, oneTrip)} (${per.get(k) || 0})`])].forEach(([k, label]) => {
+            const c = el('button', 'reel-chip' + (k === vday ? ' active' : ''), label);
+            c.type = 'button';
+            c.addEventListener('click', () => {
+                if (k === vday) return;
+                vday = k;
+                lsSet(VDAY_KEY, k);
+                drawList();
+            });
+            chips.appendChild(c);
+        });
+        daysEl.appendChild(chips);
+        if (!vl.length) {
+            daysEl.appendChild(el('p', 'reels-how', 'No vlog reels left to judge' + (oneTrip ? ' from this trip.' : '.')));
+            return;
+        }
+        if (vday === 'all') {
+            daysEl.appendChild(el('p', 'reels-how', 'Pick a day to watch its vlog reels in story order, then Post them one by one or all at once.'));
+            return;
+        }
+        const left = shown();
+        if (!left.length) return;
+        const bar = el('div', 'rvw-dayall');
+        const b = el('button', 'reels-mini rvw-act', `Post all ${left.length} from ${dayLabel(vday, oneTrip)}`);
+        b.type = 'button';
+        b.title = 'Every vlog reel still to judge from this day goes into the post queue as it is (no stars); judge any ' +
+            'you want to fix or drop first.';
+        const said = el('span', 'pq-status ok');
+        b.addEventListener('click', () => {
+            if (!window.PostsQueue) return;
+            b.disabled = true;
+            said.textContent = 'Adding…';
+            PostsQueue.addPaths(left.map(r => r.path), 'queue', false)
+                .then(() => { said.textContent = `${left.length} into the post queue.`; refresh(); },
+                      () => { said.textContent = 'Could not save: try again.'; b.disabled = false; });
+        });
+        bar.append(b, said);
+        daysEl.appendChild(bar);
+    }
+
+    // the reels this filter shows: the trip, then (vlog reels) the day
+    function shown() {
+        const all = pending(reelsDoc);
+        let here = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
+        if (kindSel === 'vlog') {
+            here = here.filter(isVlog).sort(byDay);
+            if (vday !== 'all') here = here.filter(r => dayKey(r) === vday);
+        }
+        return here;
     }
 
     function drawList() {
         rows.forEach(row => { if (row.video) { row.video.pause(); } });
-        const all = pending(reelsDoc);
-        list = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
+        list = shown();
         rows = [];
         drawn = 0;
         focusAt = -1;
@@ -600,6 +697,10 @@ window.PostsReview = (function () {
         rootEl.appendChild(leftEl);
         chipsEl = el('div', 'reel-chips rvw-trips');
         rootEl.appendChild(chipsEl);
+        typeEl = el('div', 'reel-chips rvw-trips rvw-types');
+        rootEl.appendChild(typeEl);
+        daysEl = el('div', 'rvw-days');
+        rootEl.appendChild(daysEl);
         listEl = el('div', 'rvw-list');
         rootEl.appendChild(listEl);
         moreEl = el('div', 'rvw-more');
@@ -746,7 +847,13 @@ window.PostsReview = (function () {
         if (!force && sig === rv.sig) return;
         rv.sig = sig;
         const byKind = rv.kind === 'all' ? all : all.filter(x => x.d.kind === rv.kind);
-        const here = rv.trip === 'all' ? byKind : byKind.filter(x => tripName(x.r) === rv.trip);
+        const inTrip = rv.trip === 'all' ? byKind : byKind.filter(x => tripName(x.r) === rv.trip);
+        const vl = inTrip.filter(x => isVlog(x.r));
+        let here = inTrip;
+        if (rv.type === 'vlog') {
+            here = vl.slice().sort((a, b) => byDay(a.r, b.r));
+            if (rv.vday !== 'all') here = here.filter(x => dayKey(x.r) === rv.vday);
+        }
         const stars = all.filter(x => x.d.stars);
         rv.head.textContent = `Reviewed (${all.length})` + (stars.length
             ? ` · ${stars.length} rated, average ${(stars.reduce((a, x) => a + x.d.stars, 0) / stars.length).toFixed(1)} ★` : '');
@@ -761,6 +868,17 @@ window.PostsReview = (function () {
         rvChips(rv.trips, [['all', 'All trips', byKind.length], ...trips.map(t => [t, t, per.get(t) || 0])], rv.trip, 'Trip', k => {
             rv.trip = k; lsSet(RV_TRIP_KEY, k); rvDraw(true);
         });
+        rvChips(rv.types, [['all', 'All reels', inTrip.length], ['vlog', 'Vlog reels by day', vl.length]], rv.type, 'Type', k => {
+            rv.type = k; lsSet('reels_reviewed_type', k); rvDraw(true);
+        });
+        if (rv.type === 'vlog') {
+            const per = new Map();
+            vl.slice().sort((a, b) => byDay(a.r, b.r)).forEach(x => per.set(dayKey(x.r), (per.get(dayKey(x.r)) || 0) + 1));
+            const ks = [...per.keys()];
+            if (rv.vday !== 'all' && !per.has(rv.vday)) ks.push(rv.vday);
+            rvChips(rv.days, [['all', 'All days', vl.length], ...ks.map(k => [k, dayLabel(k, rv.trip !== 'all'), per.get(k) || 0])],
+                rv.vday, 'Day', k => { rv.vday = k; lsSet('reels_reviewed_vday', k); rvDraw(true); });
+        } else rv.days.replaceChildren();
         rv.items = here;
         rv.drawn = 0;
         rv.list.replaceChildren();
@@ -832,7 +950,8 @@ window.PostsReview = (function () {
     function reviewedPanel(doc) {
         reelsDoc = doc;
         const root = el('section', 'pq rvw rvd');
-        rv = { root, sig: null, kind: lsGet(RV_KIND_KEY, 'all'), trip: lsGet(RV_TRIP_KEY, 'all'), items: [], drawn: 0 };
+        rv = { root, sig: null, kind: lsGet(RV_KIND_KEY, 'all'), trip: lsGet(RV_TRIP_KEY, 'all'), items: [], drawn: 0,
+            type: lsGet('reels_reviewed_type', 'all'), vday: lsGet('reels_reviewed_vday', 'all') };
         if (!RV_KINDS.some(k => k[0] === rv.kind)) rv.kind = 'all';
         rv.head = el('div', 'pq-h', 'Reviewed');
         const fb = el('button', 'reels-export-btn rvd-agent', 'Feedback to agent');
@@ -868,6 +987,8 @@ window.PostsReview = (function () {
             'posted one here; Undo takes the verdict back and the reel goes back to Review.'));
         rv.kinds = el('div', 'reel-chips rvw-trips');
         rv.trips = el('div', 'reel-chips rvw-trips');
+        rv.types = el('div', 'reel-chips rvw-trips');
+        rv.days = el('div', 'reel-chips rvw-trips');
         rv.list = el('div', 'rvw-list');
         rv.more = el('div', 'rvw-more');
         const sum = el('summary', 'pq-h', 'Posting schedule');
@@ -875,7 +996,7 @@ window.PostsReview = (function () {
         rv.schedWrap.open = !!lsGet('reels_reviewed_sched', true);
         rv.schedWrap.addEventListener('toggle', () => lsSet('reels_reviewed_sched', rv.schedWrap.open));
         rv.schedWrap.append(sum, rv.sched = el('div'));
-        root.append(bar, rv.schedWrap, rv.kinds, rv.trips, rv.list, rv.more);
+        root.append(bar, rv.schedWrap, rv.kinds, rv.trips, rv.types, rv.days, rv.list, rv.more);
         rv.list.appendChild(el('p', 'reels-how', 'Loading…'));
         if (!rv.listening) {
             document.addEventListener('reels:changed', () => rvDraw(false));

@@ -609,8 +609,13 @@ window.PostsQueue = (function () {
 
     function scheduleBlock(q) {
         const rows = ((q.schedule || {}).rows || []).filter(r => r.time);
-        const box = el('div', 'pq-sched');
-        box.appendChild(el('div', 'pq-h', 'Schedule'));
+        // folded by default (owner 2026-11-15: "make the schedule collapsible otherwise it takes up huge amount of space")
+        const box = el('details', 'pq-sched');
+        let open = false;
+        try { open = localStorage.getItem('reels_sched_table') === '1'; } catch (e) { /* private window */ }
+        box.open = open;
+        box.addEventListener('toggle', () => { try { localStorage.setItem('reels_sched_table', box.open ? '1' : '0'); } catch (e) { /* none */ } });
+        box.appendChild(el('summary', 'pq-h', `Schedule (${rows.length} reel${rows.length === 1 ? '' : 's'})`));
         if (!rows.length) {
             box.appendChild(el('p', 'reels-how', 'No schedule yet: the bot makes it once the Mac has checked the reels.'));
             return box;

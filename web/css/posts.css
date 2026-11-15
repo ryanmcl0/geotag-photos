@@ -609,6 +609,7 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 .sp-fix-row .sp-dot { position: static; }
 .sp-fix-t { color: #eee; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-old-h { margin-top: 8px; }
+.sp-offgrid { color: #9ab; font-size: 12px; padding: 8px 14px; margin: 0; }
 /* ---------- Business tab (posts-business.js, localhost only; rows and the phone from the Reels tab) ---------- */
 .biz-controls {
   display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin: 4px 0 18px; color: #ccc; font-size: 13px;

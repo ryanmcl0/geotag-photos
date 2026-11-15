@@ -341,7 +341,7 @@ window.PostsReels = (function () {
         }
 
         function previewPhone(upto, fresh) {
-            const view = lsGet(PV_VIEW, 'grid');
+            const view = lsGet(PV_VIEW, covers && covers.share_to_feed === false ? 'reels' : 'grid');
             const wrap = el('div', 'reels-phone-wrap');
             const sw = el('div', 'reels-phone-switch');
             [['grid', 'Main grid (3:4)'], ['reels', 'Reels tab (9:16)']].forEach(([k, l]) => {
@@ -369,7 +369,14 @@ window.PostsReels = (function () {
             tabs.append(el('span', view === 'grid' ? 'on' : '', '▦'), el('span', view === 'reels' ? 'on' : '', '▶'));
             scr.appendChild(tabs);
             const grid = el('div', 'reels-phone-grid ' + (view === 'grid' ? 'tall34' : 'tall916'));
-            upto.slice().reverse().forEach(r => {
+            // the bot posts to the Reels tab only (share_to_feed false, owner 2026-11-15: "I don't want to show on main
+            // grid"): on the main grid only what is up already
+            const offGrid = view === 'grid' && covers && covers.share_to_feed === false;
+            if (offGrid) {
+                scr.appendChild(el('p', 'reels-how sp-offgrid', `The bot's reels go to the Reels tab only, so the main grid stays ` +
+                    `as it is now. ${upto.length} new reel${upto.length === 1 ? '' : 's'} by this day: switch to Reels tab to see them.`));
+            }
+            (offGrid ? [] : upto.slice().reverse()).forEach(r => {
                 const c = coverOf(r.key);
                 const t = el('button', 'reels-phone-tile sp-tile' + (fresh.has(r.key) ? ' sp-new' : '') +
                     (pv.pick === r.key ? ' sp-pick' : ''));

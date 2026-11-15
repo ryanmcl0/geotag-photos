@@ -83,7 +83,7 @@ const SETTINGS_KEYS = ['highlightsEnabled', 'highlightsIg', 'highlightsXhs', 'br
 interface QueueItem {
     id?: string; path: string; added?: string; status?: string; why?: string; key?: string;
     title?: string; kind?: string; place?: string; frame?: string; dur?: number; thumb?: string;
-    when?: string; approved?: boolean; checked?: string;
+    when?: string; approved?: boolean; checked?: string; hold?: boolean;
 }
 // shortlist: reels he approved but isn't posting yet (only the page reads it; the bot only gets items).
 interface ShortlistItem { id?: string; path: string; added?: string }
@@ -202,7 +202,8 @@ function validQueue(q: unknown): q is ReelQueue | undefined {
         (i.status === undefined || QUEUE_STATUSES.includes(i.status)) &&
         QUEUE_TEXT.every(k => text((i as unknown as Record<string, unknown>)[k], k === 'id' ? 1000 : 400)) &&
         (i.dur === undefined || (typeof i.dur === 'number' && i.dur >= 0 && i.dur < 86400)) &&
-        (i.approved === undefined || typeof i.approved === 'boolean'));
+        (i.approved === undefined || typeof i.approved === 'boolean') &&
+        (i.hold === undefined || typeof i.hold === 'boolean'));
 }
 
 function validSettings(s: unknown): s is Settings | undefined {

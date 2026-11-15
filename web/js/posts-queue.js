@@ -162,7 +162,13 @@ window.PostsQueue = (function () {
         return null;
     }
 
-    function queueLine(p, now) { return { id: p, path: p, added: now, status: 'pending' }; }
+    // hold: approved but held until he releases it (owner 2026-11-15, the vlog reels: "it shouldn't go into the usual
+    // posting schedule … marked as approved until I give the go-ahead"); queue_sync keeps held lines from the bot
+    function queueLine(p, now, hold) {
+        const l = { id: p, path: p, added: now, status: 'pending' };
+        if (hold) l.hold = true;
+        return l;
+    }
 
     // where: 'queue' (post now) or 'shortlist' (approved, not yet)
     function addLines(text, where) {
@@ -171,7 +177,8 @@ window.PostsQueue = (function () {
 
     // the same for paths already clean (To review's Post / Shortlist): report = show each line's result under the
     // paste box, as a paste does. → a promise, settled once saved.
-    function addPaths(lines, where, report) {
+    function addPaths(lines, where, report, opts) {
+        const hold = !!(opts && opts.hold);
         if (!lines.length) return Promise.resolve();
         const q0 = queue();
         const inQueue = new Set(q0.items.map(i => i.path));
@@ -189,7 +196,7 @@ window.PostsQueue = (function () {
         return change((q, rj) => {
             const there = new Set([...q.items, ...q.shortlist, ...rj.items].map(i => i.path));
             take.filter(p => !there.has(p)).forEach(p =>
-                where === 'queue' ? q.items.push(queueLine(p, now)) : q.shortlist.push({ id: p, path: p, added: now }));
+                where === 'queue' ? q.items.push(queueLine(p, now, hold)) : q.shortlist.push({ id: p, path: p, added: now }));
             if (!q.span_days) q.span_days = SPAN_DEFAULT;
         });
     }
@@ -318,10 +325,17 @@ window.PostsQueue = (function () {
         if (rj) return { kind: 'rejected', at: rj.path, reason: rj.reason, when: rj.rejected };
         const q = queue();
         const it = q.items.find(same);
-        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when, added: it.added, status: it.status };
+        if (it) return { kind: it.status === 'posted' ? 'posted' : 'queue', at: it.path, when: it.when, added: it.added, status: it.status,
+            held: !!it.hold && it.status !== 'posted' };
         const sl = q.shortlist.find(same);
         if (sl) return { kind: 'shortlist', at: sl.path, added: sl.added };
         return null;
+    }
+
+    // held → released: these go to the bot at the next check (the vlog reels of a day, once the long video is out)
+    function release(paths) {
+        const take = new Set(paths);
+        return change(q => { q.items.forEach(i => { if (take.has(i.path) && i.hold) i.hold = false; }); });
     }
 
     // queue → shortlist: still good, just not yet (the bot drops it at the next check, like Remove)
@@ -349,6 +363,7 @@ window.PostsQueue = (function () {
     function upFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
     function statusText(i) {
+        if (i.hold && i.status !== 'posted' && i.status !== 'invalid') return ['Approved, held: it posts only once you release it', 'wait'];
         const fresh = i.refresh === 'refreshed' ? ' · re-rendered with the current code' +
             (i.refreshed ? ' on ' + fmtDay(i.refreshed) : '') : '';
         if (i.status === 'invalid' && ['rebuild', 'retire', 'by hand', 'failed'].includes(i.refresh)) {
@@ -373,7 +388,7 @@ window.PostsQueue = (function () {
 
     function sliderBlock(q) {
         const wrap = el('div', 'pq-slider');
-        const n = q.items.filter(i => WAITING.has(i.status || 'pending')).length;
+        const n = q.items.filter(i => WAITING.has(i.status || 'pending') && !i.hold).length;
         // two ways to set the pace (owner 2026-11-15): over how many days, or how many a day (the bot then posts
         // exactly that many and the days are however long that takes)
         let mode = q.per_day ? 'per_day' : 'days';
@@ -826,6 +841,6 @@ window.PostsQueue = (function () {
             rejected: rejects().length };
     }
 
-    return { panel, ready, counts, rejectOf, reject, undoReject, rejectControl, onRejects, addPaths, removeFromQueue,
+    return { panel, ready, counts, rejectOf, reject, undoReject, rejectControl, onRejects, addPaths, release, removeFromQueue,
         removeFromShortlist, decisionOf, fileName, statusOf, scheduleBox, refresh };
 })();

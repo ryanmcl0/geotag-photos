@@ -330,7 +330,7 @@ window.PostsReview = (function () {
                         return null;
                     }
                     close();
-                    return PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false).then(() => { row.busy = null; refresh(); });
+                    return PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false, { hold: isVlog(row.r) }).then(() => { row.busy = null; refresh(); });
                 });
         };
         save.addEventListener('click', e => { e.stopPropagation(); go(); });
@@ -387,7 +387,7 @@ window.PostsReview = (function () {
                 refresh();
                 return null;
             }
-            return PostsQueue.addPaths([row.r.path], where, false).then(() => { row.busy = null; refresh(); });
+            return PostsQueue.addPaths([row.r.path], where, false, { hold: isVlog(row.r) }).then(() => { row.busy = null; refresh(); });
         });
     }
 
@@ -591,23 +591,23 @@ window.PostsReview = (function () {
             return;
         }
         if (vday === 'all') {
-            daysEl.appendChild(el('p', 'reels-how', 'Pick a day to watch its vlog reels in story order, then Post them one by one or all at once.'));
+            daysEl.appendChild(el('p', 'reels-how', 'Pick a day to watch its vlog reels in story order. Post approves a vlog reel but HOLDS it: nothing goes out until you release the day on Reviewed (Vlog reels by day).'));
             return;
         }
         const left = shown();
         if (!left.length) return;
         const bar = el('div', 'rvw-dayall');
-        const b = el('button', 'reels-mini rvw-act', `Post all ${left.length} from ${dayLabel(vday, oneTrip)}`);
+        const b = el('button', 'reels-mini rvw-act', `Approve all ${left.length} from ${dayLabel(vday, oneTrip)}`);
         b.type = 'button';
-        b.title = 'Every vlog reel still to judge from this day goes into the post queue as it is (no stars); judge any ' +
-            'you want to fix or drop first.';
+        b.title = 'Every vlog reel still to judge from this day is approved as it is (no stars) and HELD: nothing posts ' +
+            'until you release the day on Reviewed. Judge any you want to fix or drop first.';
         const said = el('span', 'pq-status ok');
         b.addEventListener('click', () => {
             if (!window.PostsQueue) return;
             b.disabled = true;
             said.textContent = 'Adding…';
-            PostsQueue.addPaths(left.map(r => r.path), 'queue', false)
-                .then(() => { said.textContent = `${left.length} into the post queue.`; refresh(); },
+            PostsQueue.addPaths(left.map(r => r.path), 'queue', false, { hold: true })
+                .then(() => { said.textContent = `${left.length} approved and held: release them on Reviewed when the long video is out.`; refresh(); },
                       () => { said.textContent = 'Could not save: try again.'; b.disabled = false; });
         });
         bar.append(b, said);
@@ -840,7 +840,7 @@ window.PostsReview = (function () {
     function rvDraw(force) {
         if (!rv || !rv.root.isConnected) return;
         const all = reviewed(reelsDoc);
-        const sig = JSON.stringify([all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason, x.d.status, x.d.when]),
+        const sig = JSON.stringify([all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason, x.d.status, x.d.when, x.d.held]),
             window.PostsQueue && PostsQueue.counts()]);
         // the schedule box follows the document, except while its slider is in the hand
         if (window.PostsQueue && rv.sched && !rv.sched.contains(document.activeElement)) rv.sched.replaceChildren(PostsQueue.scheduleBox());
@@ -878,6 +878,15 @@ window.PostsReview = (function () {
             if (rv.vday !== 'all' && !per.has(rv.vday)) ks.push(rv.vday);
             rvChips(rv.days, [['all', 'All days', vl.length], ...ks.map(k => [k, dayLabel(k, rv.trip !== 'all'), per.get(k) || 0])],
                 rv.vday, 'Day', k => { rv.vday = k; lsSet('reels_reviewed_vday', k); rvDraw(true); });
+            const held = here.filter(x => x.d.kind === 'queue' && x.d.held);
+            if (held.length && window.PostsQueue && PostsQueue.release) {
+                const b = el('button', 'reels-mini rvw-act rvw-release', rv.vday === 'all'
+                    ? `Release all ${held.length} held for posting` : `Release ${held.length} held from ${dayLabel(rv.vday, rv.trip !== 'all')} for posting`);
+                b.type = 'button';
+                b.title = 'They join the posting schedule at the next check (as many a day as the schedule says)';
+                b.addEventListener('click', () => { b.disabled = true; PostsQueue.release(held.map(x => x.d.at)).then(() => rvDraw(true)); });
+                rv.days.appendChild(b);
+            }
         } else rv.days.replaceChildren();
         rv.items = here;
         rv.drawn = 0;

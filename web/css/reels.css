@@ -498,3 +498,9 @@
 .rvw-dayall { display: flex; align-items: center; gap: 12px; margin: 6px 0 10px; }
 .rvw-dayall .reels-mini.rvw-act { font-size: 13px; padding: 6px 13px; border-radius: 999px; border-color: #5a9; color: #9e9; }
 details.pq-sched > summary { cursor: pointer; }
+
+/* Posting schedule: the proposed schedule and Send to NAS (2026-11-15) */
+.pq-schedbox > .pq-readout:first-child { font-size: 13px; font-weight: 500; color: #ddd; margin: 2px 0 8px; }
+.pq-proposed { margin-top: 10px; }
+.pq-send { margin: 12px 0 6px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.pq-send .pq-status { font-size: 13px; }

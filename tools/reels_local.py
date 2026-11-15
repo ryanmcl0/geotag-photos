@@ -74,7 +74,7 @@ have a button that i click that's like send to nas"), both run the video project
 (POSTING_CHECKOUTS, the first that has the tool; nothing the browser sends becomes part of a command):
     POST /reels/propose          {"reel_queue": {...}} → video-editor tools/reelbot/propose.py (read only): the bot's own
                                  planner on the page's queue with the bot's settings and what it already holds
-    POST /reels/send-to-nas      start one run of video-editor tools/reelbot/queue_sync.py --wait-bot 150 --json (the
+    POST /reels/send-to-nas      start one run of video-editor tools/reelbot/queue_sync.py --wait-bot 240 --json (the
                                  page's queue checked, copied to the NAS, the bot's real schedule back on the page);
                                  409 + the run while one is going. Only from a page on this Mac.
     GET  /reels/send-to-nas      the latest run: {id, state running|done|failed, started, finished, result (its RESULT
@@ -263,7 +263,7 @@ def live_status(run=None, clock=None, checkouts=None):
 # posting is a checkout kept at the video project's main for this (its .venv a link to the main checkout's).
 POSTING_CHECKOUTS = [Path.home() / "Documents" / "Projects" / n
                      for n in ("video-editor-posting", "video-editor-r4", "video-editor")]
-SEND_WAIT_BOT = 150           # s queue_sync waits for the bot's plan from the new list
+SEND_WAIT_BOT = 240           # s queue_sync waits for the bot's plan from the new list
 SEND_TIMEOUT = 20 * 60
 SEND = {"run": None}
 SEND_LOCK = threading.Lock()

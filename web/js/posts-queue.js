@@ -974,7 +974,7 @@ window.PostsQueue = (function () {
         if (send.err) box.appendChild(el('div', 'pq-status bad', send.err));
         else if (running) {
             const last = (r.log || []).filter(x => x.trim()).slice(-1)[0] || '';
-            box.appendChild(el('div', 'pq-status wait', 'Sending… the Mac checks each reel, copies it to the NAS, then waits for the bot\'s plan (up to 2½ minutes).'));
+            box.appendChild(el('div', 'pq-status wait', 'Sending… the Mac checks each reel, copies it to the NAS, then waits for the bot\'s plan (up to 4 minutes).'));
             if (last) box.appendChild(el('div', 'pq-path', last.replace(/^\S+ \S+ /, '')));
         } else if (r && r.state === 'done' && r.result) {
             sendResult(r.result).forEach(t => box.appendChild(el('div', 'pq-status ok', t)));

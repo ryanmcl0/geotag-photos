@@ -69,7 +69,7 @@ class SendToNasTest(unittest.TestCase):
         self.assertEqual(st["log"], ["checking", "done"])
         a, cwd = argv[0]
         self.assertEqual(cwd, str(self.new))
-        self.assertEqual(a[1:], [str(self.new / "tools/reelbot/queue_sync.py"), "--site", "auto", "--wait-bot", "150",
+        self.assertEqual(a[1:], [str(self.new / "tools/reelbot/queue_sync.py"), "--site", "auto", "--wait-bot", "240",
                                  "--json"])
 
     def test_one_run_at_a_time(self):

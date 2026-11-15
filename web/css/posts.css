@@ -574,9 +574,12 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 @media (max-width: 860px) { .sp-layout { grid-template-columns: minmax(0, 1fr); } }
 .sp-phone { min-width: 0; }
 .reels-phone-tile.sp-tile img { opacity: 1; }
-.reels-phone-tile.sp-new { box-shadow: inset 0 0 0 3px #4da3ff; }
-.reels-phone-tile.sp-new img { opacity: .9; }
-.reels-phone-tile.sp-pick { outline: 3px solid #fff; outline-offset: -3px; z-index: 1; }
+/* edges drawn over the cover (an inset shadow or outline on the tile sits under its image) */
+.reels-phone-tile.sp-new::after, .reels-phone-tile.sp-pick::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 3px #4da3ff;
+}
+.reels-phone-tile.sp-pick::after { box-shadow: inset 0 0 0 3px #fff; }
+.reels-phone-tile .sp-dot { z-index: 1; }
 .reels-phone-tile.sp-live { display: block; }
 .reels-phone-tile.sp-live img { opacity: .55; }
 .sp-dot {

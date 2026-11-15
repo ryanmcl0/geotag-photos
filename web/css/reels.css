@@ -482,3 +482,15 @@
 .ip-dash { margin-top: 10px; }
 .ip-link { color: #8ab4ff; font-size: 13px; }
 .ip-frame { display: block; width: 100%; height: 720px; border: 1px solid #262626; border-radius: 8px; margin-top: 8px; background: #111; }
+
+/* the floating count of reels still to review (owner 2026-11-15: "a floating count of how many are left … that stays
+   fixed regardless of when I scroll") */
+.rvw-left {
+    position: fixed; right: 20px; bottom: 20px; z-index: 50;
+    padding: 8px 14px; border-radius: 999px;
+    background: rgba(20, 20, 20, .92); border: 1px solid #555; color: #fff;
+    font-size: 14px; font-variant-numeric: tabular-nums; box-shadow: 0 4px 14px rgba(0, 0, 0, .5);
+    pointer-events: none;
+}
+.rvw-left:empty { display: none; }
+.rvw-left.done { border-color: #5a9; color: #8d8; }

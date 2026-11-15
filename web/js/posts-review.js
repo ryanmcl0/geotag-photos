@@ -59,6 +59,7 @@ window.PostsReview = (function () {
     let listEl = null;
     let headEl = null;
     let chipsEl = null;
+    let leftEl = null;      // the floating 'N left' badge (owner 2026-11-15: stays put while scrolling)
     let moreEl = null;
     let listening = false;
     let notes = {};                  // reel id → its open feedback note (reel_feedback.json's item)
@@ -503,6 +504,10 @@ window.PostsReview = (function () {
         const all = pending(reelsDoc);
         const here = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
         headEl.textContent = `To review (${here.length}${trip === 'all' ? '' : ` of ${all.length}`})`;
+        if (leftEl) {
+            leftEl.textContent = `${here.length} left` + (trip === 'all' ? '' : ` in ${trip} · ${all.length} in all`);
+            leftEl.classList.toggle('done', !here.length);
+        }
         // the trip chips: every trip with reels to judge, and the one picked
         chipsEl.replaceChildren();
         const per = new Map();
@@ -590,6 +595,9 @@ window.PostsReview = (function () {
             keys.append(el('kbd', '', k), document.createTextNode(' ' + w + '  '));
         });
         rootEl.appendChild(keys);
+        leftEl = el('div', 'rvw-left');
+        leftEl.setAttribute('aria-live', 'polite');
+        rootEl.appendChild(leftEl);
         chipsEl = el('div', 'reel-chips rvw-trips');
         rootEl.appendChild(chipsEl);
         listEl = el('div', 'rvw-list');

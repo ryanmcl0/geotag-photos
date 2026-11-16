@@ -315,6 +315,9 @@
 .rvw-reject .pq-reject-btn { border-color: #7a3a33; color: #f08a7a; }
 .rvw-reject .pq-reason { max-width: 560px; }
 .rvw-busy:empty { display: none; }
+.rvw-fixed { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 2px; padding: 6px 10px; border-left: 3px solid #8fd18f; background: #1d231d; border-radius: 6px; }
+.rvw-fixed .pq-status { margin: 0; overflow-wrap: anywhere; }
+.reel-chip.rvw-fixchip:not(.active) { border-color: #8fd18f; color: #8fd18f; }
 .rvw-slim { display: flex; align-items: center; gap: 12px; }
 .rvw-thumb { width: 34px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 4px; flex: none; opacity: .7; }
 .rvw-slim-text { flex: 1; min-width: 0; }

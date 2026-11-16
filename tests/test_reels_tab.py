@@ -76,6 +76,20 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
             out.pending = window.PostsReview.pending(input.reels).map(r => r.id);
             out.reviewCount = window.PostsReview.count();
             out.tripNames = input.reels.reels.map(r => window.PostsReview.tripName(r));
+            if (input.feedback) {
+                await new Promise(r => setTimeout(r, 0));     // setDoc's own fetch of the notes settles first
+                const R = window.PostsReview;
+                const look = () => ({
+                    pending: R.pending(input.reels).map(r => r.id),
+                    kinds: Object.fromEntries(input.reels.reels.map(r => { const d = R.decision(r); return [r.id, d && d.kind]; })),
+                    fixOf: Object.fromEntries(input.reels.reels.map(r => { const d = R.decision(r); return [r.id, d && d.fix ? d.fix.fixed : null]; })),
+                    agent: R.agentText(R.reviewed(input.reels)),
+                    count: R.count() });
+                R.takeNotes(input.feedback);
+                out.fb = look();
+                R.takeNotes(input.feedback2);
+                out.fb2 = look();
+            }
         }
     }
     console.log(JSON.stringify(out));
@@ -192,7 +206,7 @@ class ReelsTab(unittest.TestCase):
                       {"id": "2", "path": "/Users/me/day/reels/c.mp4", "status": "posted"}],   # another copy of c
             "shortlist": [{"id": "3", "path": f"{sfc}/Trip B/2 Shoots/d.mp4"}]},
             "reel_rejects": {"items": [{"id": "4", "path": f"{sfc}/Trip B/2 Shoots/e.mp4", "reason": "too slow"}]}}
-        out = self.run_js(["posts-queue.js", "posts-review.js"], {
+        out = self.run_js(["review-kit.js", "posts-queue.js", "posts-review.js"], {
             "posts": posts, "reels": reels, "posted": {"h": "2026-11-12"},
             "paths": [r["path"] for r in reels["reels"]]})
         kinds = [d and d["kind"] for d in out["decisions"]]
@@ -205,6 +219,58 @@ class ReelsTab(unittest.TestCase):
         self.assertEqual(out["tripNames"][:3], ["Trip A", "Trip A", "Trip B"])
         self.assertEqual(out["tripNames"][6], "tc")
         self.assertEqual(out["counts"], {"loaded": True, "queue": 1, "shortlist": 1, "rejected": 1})
+
+    def test_fixed_reels_come_back_to_review(self):
+        """A shortlisted reel whose note the video project marked handled is undecided again (back to judge, first in
+        the list, with its fix on record); a carried change on a reel not judged yet is listed too; neither is open work
+        in "Feedback to agent". A new open note on a returned reel makes it a shortlisted one again; a reel put on the
+        shortlist again after the fix stays there; a handled Post + note never brings a reel back."""
+        sfc = "/Volumes/Crucial X9/Short Form Content"
+        reels = {"reels": [
+            {"id": "a", "path": f"{sfc}/Trip A/1 Days/a.mp4", "title": "A", "delivered": "2026-11-01", "trip": "ta"},
+            {"id": "b", "path": f"{sfc}/Trip A/1 Days/b.mp4", "title": "B", "delivered": "2026-11-08", "trip": "ta"},
+            {"id": "c", "path": f"{sfc}/Trip A/1 Days/c.mp4", "title": "C", "delivered": "2026-11-02", "trip": "ta"},
+            {"id": "d", "path": f"{sfc}/Trip A/1 Days/d.mp4", "title": "D", "delivered": "2026-11-03", "trip": "ta"},
+            {"id": "e", "path": f"{sfc}/Trip A/1 Days/e.mp4", "title": "E", "delivered": "2026-11-04", "trip": "ta"},
+            {"id": "f", "path": f"{sfc}/Trip A/1 Days/f.mp4", "title": "F", "delivered": "2026-11-05", "trip": "ta"},
+        ]}
+        posts = {"version": 3, "posts": [], "reel_queue": {
+            "items": [{"id": "1", "path": f"{sfc}/Trip A/1 Days/e.mp4", "status": "pending"}],
+            "shortlist": [{"id": "2", "path": f"{sfc}/Trip A/1 Days/a.mp4", "added": "2026-11-14T22:30:00.000Z"},
+                          {"id": "3", "path": f"{sfc}/Trip A/1 Days/d.mp4", "added": "2026-11-16T23:00:00.000Z"},
+                          {"id": "4", "path": f"{sfc}/Trip A/1 Days/f.mp4", "added": "2026-11-14T22:30:00.000Z"}]},
+            "reel_rejects": {"items": []}}
+        fixed_a = {"id": "a", "note": "last shot too slow", "kind": "fix", "status": "handled", "time": "2026-11-14T22:30:00",
+                   "fixed": "Last shot at real speed.", "fixed_time": "2026-11-16T20:00:00"}
+        feedback = {"items": [
+            fixed_a,
+            {"id": "c", "kind": "carried", "from": "a", "note": "last shot too slow", "status": "handled",
+             "fixed": "Ending shortened.", "fixed_time": "2026-11-16T20:05:00"},
+            # d went onto the shortlist again (pasted) after its fix: it stays on the shortlist
+            {"id": "d", "note": "x", "kind": "fix", "status": "handled", "fixed": "y", "fixed_time": "2026-11-16T20:00:00"},
+            {"id": "e", "note": "great", "kind": "post", "status": "handled"},
+            {"id": "f", "note": "swap the song", "kind": "fix", "status": "open", "time": "2026-11-14T22:30:00"}]}
+        feedback2 = {"items": [dict(fixed_a, note="still slow", status="open", time="2026-11-16T22:00:00",
+                                    history=[{k: v for k, v in fixed_a.items() if k != "id"}])] + feedback["items"][1:]}
+        out = self.run_js(["review-kit.js", "posts-queue.js", "posts-review.js"], {
+            "posts": posts, "reels": reels, "paths": [r["path"] for r in reels["reels"]],
+            "feedback": feedback, "feedback2": feedback2})
+        fb = out["fb"]
+        # the fixed ones first (latest fix first: c, then a), then the rest newest first
+        self.assertEqual(fb["pending"], ["c", "a", "b"])
+        self.assertEqual(fb["count"], 3)
+        self.assertEqual(fb["kinds"], {"a": None, "b": None, "c": None, "d": "shortlist", "e": "queue", "f": "shortlist"})
+        self.assertEqual(fb["fixOf"]["d"], "y")                        # Reviewed shows the fix on d
+        self.assertIsNone(fb["fixOf"]["e"])                            # a handled Post + note is no fix
+        agent = fb["agent"]
+        self.assertIn("## Shortlisted: fix these (2)", agent)          # d and f; a returned reel is not open work
+        self.assertNotIn("/a.mp4", agent)
+        self.assertIn('"fixed": "<what you changed', agent)
+        fb2 = out["fb2"]
+        self.assertEqual(fb2["pending"], ["c", "b"])
+        self.assertEqual(fb2["kinds"]["a"], "shortlist")
+        self.assertIn("Fix: still slow", fb2["agent"])
+
 
 
 if __name__ == "__main__":

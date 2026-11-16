@@ -32,11 +32,16 @@ const tokenFor = async (key: string | undefined, tier: string, secret: string) =
 // route: ./post.py pull renders one map card of the whole trip's GPS route for it.
 interface PhotoRef {
     trip: string; id: string; ar?: number; blur?: boolean;
-    map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; locText?: string; route?: boolean;
+    map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; locText?: string; route?: boolean; crop?: number[];
 }
 const MAP_STYLES = ['route', 'pin', 'china'];
 const LOC_STYLES = ['A', 'C'];
 const validLocText = (t: unknown) => t === undefined || (typeof t === 'string' && t.length > 0 && t.length <= 120);
+// crop: the framing chosen on the Posts page (✂), [x0, y0, x1, y1] as fractions of the upright photo;
+// ./post.py pull cuts exactly that (at the post's shape) instead of centring or leaving a portrait whole.
+const validCrop = (c: unknown) => c === undefined || (Array.isArray(c) && c.length === 4 &&
+    c.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1) &&
+    c[0] < c[2] && c[1] < c[3]);
 // Behind-the-scenes items from the local-only phone library: {trip, id}
 // photos or {trip, file} videos. Uncapped (not part of the IG carousel).
 interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
@@ -44,7 +49,7 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 // can offer them back; the client caps the list and drops re-added entries.
 interface HistoryRef {
     trip: string; id?: string; file?: string; ar?: number; blur?: boolean;
-    map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; locText?: string; route?: boolean; phone?: boolean; waitlist?: boolean; removed?: string;
+    map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; locText?: string; route?: boolean; crop?: number[]; phone?: boolean; waitlist?: boolean; removed?: string;
 }
 const MAX_HISTORY_PER_POST = 100;
 // Demoted photos: still attached to the post but outside the carousel, so they
@@ -227,7 +232,7 @@ function validPosts(posts: unknown): posts is Post[] {
             (ph.blur === undefined || typeof ph.blur === 'boolean') &&
             (ph.map === undefined || MAP_STYLES.includes(ph.map)) &&
             (ph.loc === undefined || LOC_STYLES.includes(ph.loc)) &&
-            validLocText(ph.locText) &&
+            validLocText(ph.locText) && validCrop(ph.crop) &&
             (ph.route === undefined || typeof ph.route === 'boolean')) &&
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
@@ -259,7 +264,7 @@ function validPosts(posts: unknown): posts is Post[] {
                 (ph.blur === undefined || typeof ph.blur === 'boolean') &&
                 (ph.map === undefined || MAP_STYLES.includes(ph.map)) &&
             (ph.loc === undefined || LOC_STYLES.includes(ph.loc)) &&
-            validLocText(ph.locText) &&
+            validLocText(ph.locText) && validCrop(ph.crop) &&
             (ph.route === undefined || typeof ph.route === 'boolean')))) &&
         ((p as Post).history === undefined || (
             Array.isArray((p as Post).history) &&
@@ -271,7 +276,7 @@ function validPosts(posts: unknown): posts is Post[] {
                 (h.blur === undefined || typeof h.blur === 'boolean') &&
                 (h.map === undefined || MAP_STYLES.includes(h.map)) &&
                 (h.loc === undefined || LOC_STYLES.includes(h.loc)) &&
-                validLocText(h.locText) &&
+                validLocText(h.locText) && validCrop(h.crop) &&
                 (h.route === undefined || typeof h.route === 'boolean') &&
                 (h.phone === undefined || typeof h.phone === 'boolean') &&
                 (h.waitlist === undefined || typeof h.waitlist === 'boolean') &&

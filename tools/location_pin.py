@@ -237,9 +237,36 @@ def _unit(style, head, sub, W, H):
     return u * min(1.0, W * MAX_W / w) if w else u
 
 
-def crop_box(W, H, ratio):
-    """The centred box of shape `ratio` (width / height) inside a W x H frame, or None when it is already that
-    shape (within 1%)."""
+def valid_frame(frame):
+    """A framing chosen on the Posts page: [x0, y0, x1, y1] as fractions of the upright photo, or None."""
+    try:
+        x0, y0, x1, y1 = (float(v) for v in frame)
+    except (TypeError, ValueError):
+        return None
+    return (x0, y0, x1, y1) if 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1 else None
+
+
+def crop_box(W, H, ratio, frame=None):
+    """The box of shape `ratio` (width / height) inside a W x H frame: centred, or the `frame` chosen on the
+    Posts page (fractions of the photo). A frame not quite at `ratio` (the post's first photo changed since)
+    keeps its centre and area at the right shape. None when nothing needs cutting."""
+    frame = valid_frame(frame)
+    if ratio and frame:
+        x0, y0, x1, y1 = frame
+        area = (x1 - x0) * W * (y1 - y0) * H
+        w = (area * ratio) ** 0.5
+        h = w / ratio
+        if w > W:
+            w, h = W, W / ratio
+        if h > H:
+            w, h = H * ratio, H
+        w, h = round(w), round(h)
+        cx, cy = (x0 + x1) / 2 * W, (y0 + y1) / 2 * H
+        left = min(max(0, round(cx - w / 2)), W - w)
+        top = min(max(0, round(cy - h / 2)), H - h)
+        if (left, top, w, h) == (0, 0, W, H):
+            return None
+        return left, top, left + w, top + h
     if not ratio or abs(W / H - ratio) / ratio <= 0.01:
         return None
     if W / H > ratio:                       # too wide: trim the sides
@@ -276,7 +303,7 @@ def render(img, head, sub, style='A', faces=()):
     return base.convert('RGB'), corner
 
 
-def stamp(src, dst, head, sub, style='A', trip=None, pid=None, ratio=None):
+def stamp(src, dst, head, sub, style='A', trip=None, pid=None, ratio=None, frame=None):
     """Label the photo at src into dst (may be the same file), keeping its EXIF and colour profile; with
     `ratio` it is first centre-cropped to that shape, so the label lands inside what gets posted.
     → the corner it went in."""
@@ -284,7 +311,7 @@ def stamp(src, dst, head, sub, style='A', trip=None, pid=None, ratio=None):
         exif, icc = im.info.get('exif'), im.info.get('icc_profile')
         img = ImageOps.exif_transpose(im).convert('RGB')
     faces = face_boxes(trip, pid, img.size[0]) if trip and pid else []
-    box = crop_box(*img.size, ratio)
+    box = crop_box(*img.size, ratio, frame)
     if box:
         img = img.crop(box)
         faces = [(x - box[0], y - box[1], w, h) for x, y, w, h in faces]

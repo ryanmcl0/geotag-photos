@@ -1101,8 +1101,10 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
     and a re-edit exported over a labelled copy is labelled again in place.
 
     shape (width / height, from post_ratio) crops every copy to the post's one
-    shape, centred, before its label goes on; a changed shape regenerates the
-    copies the same way, and a re-edit exported over a copy is cropped again."""
+    shape before its label goes on: at the framing chosen on the Posts page
+    (ref['crop']), else centred; a portrait photo with no framing is left whole
+    (photo_shape). A changed shape or framing regenerates the copy the same
+    way, and a re-edit exported over a copy is cropped again."""
     found = [] if found is None else found
     planned = {dst.name for _, _, _, dst in plan}
 
@@ -1134,22 +1136,27 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
     located = state.setdefault('located', {})   # source name -> the label baked into its copy
     shaped = state.setdefault('shaped', {})     # source name -> the post shape its copy was cropped to
     locs = locs or {}
-    want_shape = f'{shape:.4f}' if shape else None
+    post_shape = shape
+    # source name -> (shape, chosen frame); (None, None) = an unframed portrait photo, posted whole
+    own_shape = {src.name: photo_shape(ref, src, post_shape) for _, ref, src, _ in plan}
 
     def label(ref, src, dst):
-        """Crop dst to the post's shape and bake the wanted location label into it (after any blur);
-        remember what went in."""
+        """Crop dst to the post's shape (portrait photos stay whole) and bake the wanted location label into
+        it (after any blur); remember what went in."""
         sig = locs.get(src.name)
+        shape, frame = own_shape.get(src.name, (None, None))
+        want_shape = shape_sig(shape, frame)
+        how = 'your framing' if frame else "the post's shape"
         if want_shape:
             if sig:
                 style, head, sub = sig.split('|')[:3]
                 # cropped first (in the same step, so the face boxes line up) and the label lands inside
-                cut = shape_change(dst, shape)
-                corner = stamp_location(dst, ref, style, head, sub, shape)
+                cut = shape_change(dst, shape, frame)
+                corner = stamp_location(dst, ref, style, head, sub, shape, frame)
             else:
-                cut = crop_to_shape(dst, shape)
+                cut = crop_to_shape(dst, shape, frame)
             if cut:
-                print(f'   ✂️  {dst.name}: cropped {cut[0]} → {cut[1]} (the post\'s shape)')
+                print(f'   ✂️  {dst.name}: cropped {cut[0]} → {cut[1]} ({how})')
             shaped[src.name] = want_shape
         else:
             shaped.pop(src.name, None)
@@ -1191,6 +1198,8 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
 
     copied = renamed = adopted_n = 0
     for i, ref, src, dst in plan:
+        shape, frame = own_shape.get(src.name, (None, None))
+        want_shape = shape_sig(shape, frame)
         want_blur = bool(ref.get('blur'))
         have_blur = bool(blurred.get(src.name, False))
         if src.name in adopted:
@@ -1273,9 +1282,10 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
             continue
         if shape_only and dst.exists() and not want_loc and not want_blur and have_shape is None and want_shape:
             # never cropped and nothing baked in: crop it where it is, so a re-edit in it survives
-            cut = crop_to_shape(dst, shape)
+            cut = crop_to_shape(dst, shape, frame)
             if cut:
-                print(f'   ✂️  {dst.name}: cropped {cut[0]} → {cut[1]} (the post\'s shape)')
+                print(f'   ✂️  {dst.name}: cropped {cut[0]} → {cut[1]} ' +
+                      ('(your framing)' if frame else "(the post's shape)"))
             shaped[src.name] = want_shape
             fit(src, dst)
             continue
@@ -1435,31 +1445,64 @@ def sync_route_cards(dest_dir, plan, size):
 
 # ---------------------------------------------------------------- location pins
 
-def stamp_location(path, ref, style, head, sub, ratio=None):
+def stamp_location(path, ref, style, head, sub, ratio=None, frame=None):
     """Bake the place name into the copy at path (tools/location_pin.py), after cropping it to `ratio` when
     given → the corner it went in."""
     sys.path.insert(0, str(ROOT / 'tools'))
     import location_pin
-    return location_pin.stamp(path, path, head, sub, style, ref['trip'], ref['id'], ratio)
+    return location_pin.stamp(path, path, head, sub, style, ref['trip'], ref['id'], ratio, frame)
 
 
-def shape_change(path, ratio):
-    """(old shape, new shape) labels when the image at path needs cropping to `ratio`, else None. Reads only
-    the header."""
-    from PIL import Image, ImageOps
-    sys.path.insert(0, str(ROOT / 'tools'))
-    import location_pin
+def image_size(path):
+    """(width, height) as displayed (EXIF orientation applied). Reads only the header."""
+    from PIL import Image
     if Path(path).suffix.lower() in ('.heic', '.heif'):
         from pillow_heif import register_heif_opener
         register_heif_opener()
     with Image.open(path) as im:
-        w, h = im.size[::-1] if im.getexif().get(0x0112) in (5, 6, 7, 8) else im.size
-    return (ratio_label(w / h), ratio_label(ratio)) if location_pin.crop_box(w, h, ratio) else None
+        return im.size[::-1] if im.getexif().get(0x0112) in (5, 6, 7, 8) else im.size
 
 
-def crop_to_shape(path, ratio):
-    """Centre-crop the copy at path to `ratio` (width / height) in place, keeping its EXIF and colour
-    profile → (old shape, new shape) as labels, or None when it already has that shape."""
+def is_portrait(path):
+    w, h = image_size(path)
+    return h > w
+
+
+def photo_shape(ref, src, shape):
+    """(shape, frame) this photo's copy is cut to. A framing chosen on the Posts page (✂, ref['crop']) is
+    cut exactly; a portrait photo without one is posted whole (None, None), never cropped automatically;
+    anything else is centre-cropped to the post's shape."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    if not shape:
+        return None, None
+    frame = location_pin.valid_frame(ref.get('crop'))
+    if frame:
+        return shape, frame
+    return (None, None) if is_portrait(src) else (shape, None)
+
+
+def shape_sig(shape, frame):
+    """What the copy was cut to, as remembered in .pull_state.json ('shaped'): a changed frame redoes it."""
+    if not shape:
+        return None
+    return f'{shape:.4f}' + ('@' + ','.join(f'{v:.4f}' for v in frame) if frame else '')
+
+
+def shape_change(path, ratio, frame=None):
+    """(old shape, new shape) labels when the image at path needs cropping to `ratio`, else None. Reads only
+    the header."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import location_pin
+    if not ratio:
+        return None
+    w, h = image_size(path)
+    return (ratio_label(w / h), ratio_label(ratio)) if location_pin.crop_box(w, h, ratio, frame) else None
+
+
+def crop_to_shape(path, ratio, frame=None):
+    """Crop the copy at path to `ratio` (width / height) in place, centred or at the chosen `frame`, keeping
+    its EXIF and colour profile → (old shape, new shape) as labels, or None when nothing was cut."""
     from PIL import Image, ImageOps
     sys.path.insert(0, str(ROOT / 'tools'))
     import location_pin
@@ -1471,7 +1514,7 @@ def crop_to_shape(path, ratio):
         exif, icc = im.info.get('exif'), im.info.get('icc_profile')
         img = ImageOps.exif_transpose(im)
         img.load()
-    box = location_pin.crop_box(*img.size, ratio)
+    box = location_pin.crop_box(*img.size, ratio, frame)
     if not box:
         return None
     before = ratio_label(img.size[0] / img.size[1])
@@ -1583,9 +1626,9 @@ def post_ratio(post, plan):
 
     A carousel shows every slide at the shape of the first, so the post follows
     its first photo, clamped to what Instagram allows (4:5 to 1.91:1; the same
-    folder goes to Xiaohongshu): a 9:16 frame becomes 4:5. Pull crops every carousel
-    photo to it (crop_box) and renders the map cards at it, so the post folder
-    is exactly what goes out."""
+    folder goes to Xiaohongshu): a 9:16 frame becomes 4:5. Pull crops carousel
+    photos to it (at their ✂ framing, see photo_shape) and renders the map cards
+    at it, so the post folder is exactly what goes out."""
     ar = 1.5
     for _, ref, _, _ in plan:
         cand = ref.get('ar')
@@ -1934,7 +1977,8 @@ def cmd_pull(args):
         if args.list or args.dry_run:
             size = post_card_size(post, plan)
             if shape:
-                print(f"   ✂️  every photo cropped to {ratio_label(shape)} (the post's shape, from its first photo)")
+                print(f"   ✂️  photos cut to {ratio_label(shape)} (the post's shape, from its first photo): at "
+                      "your ✂ framing, else centred; unframed portrait photos are kept whole")
             if cap_what:
                 print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
             sigs, notes = location_sigs(dest_dir, plan)
@@ -1942,8 +1986,11 @@ def cmd_pull(args):
                 print(f"   {n}")
             for i, ref, src, dst in plan:
                 big = '  (over 32 MB, shrunk to fit)' if _too_big(src) else ''
-                cut = shape_change(src, shape) if shape else None
-                print(f"   {i:02d} {src}  →  {dst}{big}" + (f"  (cropped {cut[0]} → {cut[1]})" if cut else ''))
+                own, frame = photo_shape(ref, src, shape)
+                cut = shape_change(src, own, frame)
+                print(f"   {i:02d} {src}  →  {dst}{big}" + (f"  (cropped {cut[0]} → {cut[1]}" +
+                      (", your framing)" if frame else ")") if cut else '') +
+                      ("  (portrait, kept whole: frame it with ✂ on the Posts page)" if not own and shape else ''))
                 if src.name in sigs:
                     style, head, sub = sigs[src.name].split('|', 2)
                     print(f"      📍 {head}" + (f" / {sub}" if sub else '') + f"  ({style})")

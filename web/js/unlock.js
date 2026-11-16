@@ -74,6 +74,10 @@ window.Unlock = (function () {
     function refreshLocks() {
         const u = unlocked();
         document.querySelectorAll('.lock-badge').forEach(l => { l.style.display = u ? 'none' : ''; });
+        // A label with a See All wording (data-unlocked-label) switches to it once unlocked.
+        if (u) document.querySelectorAll('[data-unlocked-label]').forEach(el => {
+            if (el.textContent !== el.dataset.unlockedLabel) el.textContent = el.dataset.unlockedLabel;
+        });
         // Static pages (e.g. Blogs) hard-code `tile--locked` in markup; once unlocked,
         // drop it so the cover un-dims and the padlock overlay disappears. (Locked
         // visitors keep it; re-locking reloads the page, restoring the markup.)

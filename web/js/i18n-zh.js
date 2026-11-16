@@ -510,6 +510,7 @@ window.I18N_ZH = {
  "Unlocking…": "正在解锁…",
  "Unnamed clusters": "未命名分组",
  "Unposted vault": "未发布存档",
+ "Architecture": "建筑",
  "Urbex": "城市探险",
  "Mountains": "山峰",
  "Mountains · Ryan's Travels": "山峰 · Ryan的旅行",

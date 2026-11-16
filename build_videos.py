@@ -70,7 +70,7 @@ NAV = '''    <nav class="topnav">
             <a href="galleries.html">Galleries</a>
             <a href="china.html">China</a>
             <a href="blogs.html">Blogs</a>
-            <a href="rooftopping.html" data-gated>Urbex</a>
+            <a href="rooftopping.html" data-gated data-unlocked-label="Urbex">Architecture</a>
             <div class="nav-more">
                 <button class="nav-more-toggle active" type="button">More</button>
                 <div class="nav-more-menu">

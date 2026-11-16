@@ -27,7 +27,15 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  2026-11-14; the note is required there)
     POST /reels/feedback         {"id", "note", "kind": "fix"|"post"} → the reel's open note (a new one replaces it); {"id", "undo": true}
                                  withdraws it. Kept in web/phone/reels/reel_feedback.json for the video project to
-                                 act on (it marks a note "handled"); the reel's path and title come from reels.json
+                                 act on; the reel's path and title come from reels.json. The video project writes:
+                                   a fixed reel: its item gets "status": "handled", "fixed": "<what changed>",
+                                     "fixed_time": "<ISO time>" (the reel comes back to Review, marked with both)
+                                   a reel changed because of a note on ANOTHER reel: a new item {"id", "path", "title",
+                                     "trip", "kind": "carried", "from": "<id of the noted reel>", "note": "<that note>",
+                                     "status": "handled", "fixed", "fixed_time"}
+                                 A new Shortlist note on a fixed reel reopens its item and keeps the round before in
+                                 the item's "history" (oldest first, each the item as it was); undo puts that back.
+                                 Nothing the browser sends ever writes "fixed", "fixed_time", "from" or "history".
     GET  /reels/ratings          his 1–5 stars on reels he posted from Posts ▸ Reels ▸ Review (2026-11-14: "as well as
                                  p for post i want to be able to give a 1-5 star rating. those count as 'post'")
     POST /reels/rating           {"id", "stars": 1–5} → the reel's rating (a new one replaces it); {"id", "undo": true}
@@ -177,29 +185,62 @@ def reel_rating(body, now=None):
     return 200, doc
 
 
+FEEDBACK_LOCK = threading.Lock()                 # one page write at a time (read, change, write back)
+
+
 def reel_feedback(body, now=None):
     """Apply one POST /reels/feedback to reel_feedback.json; → (code, response). One open note per reel: writing
-    again replaces it, "undo" withdraws it. A note the video project has acted on ("handled") is never touched."""
+    again replaces it, "undo" withdraws it. A note the video project has acted on ("handled", with its "fixed" text)
+    is never changed by the page: a new Shortlist note on that reel reopens the item and moves the handled round,
+    whole, into the item's "history" (oldest first), and undo puts it back exactly as it was. A Post + note (kind
+    "post") is a separate item and leaves a handled one alone. Every other item, and every field the video project
+    wrote, is written back as it was read."""
     rid = body.get("id")
     reel = next((r for r in read(ROOT / "reels.json", {}).get("reels", [])
                  if isinstance(r, dict) and r.get("id") == rid), None)
     if not reel:
         return 400, {"error": "unknown reel"}
-    fb = read(FEEDBACK, {"items": []})
-    items = [it for it in fb.get("items") or [] if not (it.get("id") == rid and it.get("status") == "open")]
-    if not body.get("undo"):
-        note = body.get("note")
-        if not isinstance(note, str) or not note.strip():
-            return 400, {"error": "the note is empty"}
-        items.append({"id": rid, "path": reel.get("path"), "title": reel.get("title"), "trip": reel.get("trip"),
-                      "note": note.strip()[:NOTE_MAX],
-                      # "fix" (Shortlist…: fix this reel) or "post" (Post + note…: the reel stays as it is, the note
-                      # is for the next reels)
-                      "kind": "post" if body.get("kind") == "post" else "fix",
-                      "time": (now or dt.datetime.now()).isoformat(timespec="seconds"), "status": "open"})
-    fb["items"] = items
-    fb["updated"] = (now or dt.datetime.now()).isoformat(timespec="seconds")
-    write(FEEDBACK, fb)
+    kind = "post" if body.get("kind") == "post" else "fix"
+    note = body.get("note")
+    if not body.get("undo") and (not isinstance(note, str) or not note.strip()):
+        return 400, {"error": "the note is empty"}
+    with FEEDBACK_LOCK:
+        fb = read(FEEDBACK, {"items": []})
+        if not isinstance(fb, dict):
+            fb = {"items": []}
+        items = [it for it in fb.get("items") or [] if isinstance(it, dict)]
+        mine = [it for it in items if it.get("id") == rid]
+        was_open = [it for it in mine if it.get("status") == "open"]
+        # the rounds before the open note (kept on it when it reopened a handled one)
+        history = next((it["history"] for it in was_open if isinstance(it.get("history"), list) and it["history"]), [])
+        items = [it for it in items if not any(it is o for o in was_open)]
+        if body.get("undo"):
+            if history:                               # the reopened round goes back to how the video project left it
+                back = dict(history[-1], id=rid)
+                if history[:-1]:
+                    back["history"] = history[:-1]
+                items.append(back)
+        else:
+            new = {"id": rid, "path": reel.get("path"), "title": reel.get("title"), "trip": reel.get("trip"),
+                   "note": note.strip()[:NOTE_MAX],
+                   # "fix" (Shortlist…: fix this reel) or "post" (Post + note…: the reel stays as it is, the note
+                   # is for the next reels)
+                   "kind": kind,
+                   "time": (now or dt.datetime.now()).isoformat(timespec="seconds"), "status": "open"}
+            if kind == "fix":
+                # a fixed reel shortlisted again: its handled round(s) become the new note's history
+                done = [it for it in items if it.get("id") == rid and it.get("status") == "handled"
+                        and it.get("kind") != "post"]
+                for it in done:
+                    prev = [h for h in it.get("history") or [] if isinstance(h, dict)]
+                    history = history + prev + [{k: v for k, v in it.items() if k not in ("id", "history")}]
+                items = [it for it in items if not any(it is d for d in done)]
+            if history:
+                new["history"] = history
+            items.append(new)
+        fb["items"] = items
+        fb["updated"] = (now or dt.datetime.now()).isoformat(timespec="seconds")
+        write(FEEDBACK, fb)
     return 200, fb
 
 

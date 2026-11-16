@@ -31,6 +31,17 @@
  *              'post'"): Post with how good it is. Keys 1–5. The stars are kept by the local helper (POST /reels/rating
  *              → web/phone/reels/reel_ratings.json) for the reel builders to learn from; Undo withdraws them too.
  *
+ * Fixed, to recheck (owner 2026-11-16: "put everything that's been fixed back into the review queue and I'll recheck
+ * it. And it should be marked with what the feedback was and what's been fixed"). The video project fixes a
+ * shortlisted reel, re-renders it to the same path and sets its note in reel_feedback.json to "status": "handled" with
+ * "fixed" (what changed, in a plain sentence) and "fixed_time". Such a reel is undecided again (its shortlist line is
+ * ignored, like Business ▸ Review's handled shortlist) and comes back to judge, first in the list, with "Your note: …"
+ * and "Fixed: …" on its card. A reel he has not judged that was changed because of a note on ANOTHER reel gets an item
+ * "kind": "carried", "from": <that reel's id> ("Changed after your note on <its title>: …", "What changed: …"). The
+ * chip "Fixed, to recheck (N)" shows only those. Post / stars / Post + note take the old shortlist line away first (a
+ * reel on the shortlist can't be queued); Shortlist… again writes a new open note and the helper keeps the fixed round
+ * in the item's "history"; Reject… as usual. Reviewed shows the same two lines on the reel.
+ *
  * Reviewed also replaces the old Queue page (owner 2026-11-15): Post puts a reel in the post queue, the bot's schedule is
  * made from those, and this page shows it (the spread slider, the schedule table, each posted reel's planned time).
  * "Feedback to agent" copies the shortlisted and rejected reels (paths, notes, reasons) and the notes on posted reels,
@@ -71,6 +82,7 @@ window.PostsReview = (function () {
     let moreEl = null;
     let listening = false;
     let notes = {};                  // reel id → its open feedback note (reel_feedback.json's item)
+    let fixes = {};                  // reel id → its latest handled note, the video project's fix ("fixed" says what)
     let notesP = null;
     let ratings = {};                // reel id → {stars, time} (reel_ratings.json's item)
     let ratingsP = null;
@@ -104,9 +116,17 @@ window.PostsReview = (function () {
 
     // ── feedback notes (the local helper keeps them) ──
     const api = () => (window.ReelsSite && ReelsSite.api) || '';
+    const fixTime = it => String(it.fixed_time || it.time || '');
     function takeNotes(doc) {
         notes = {};
-        ((doc && doc.items) || []).forEach(it => { if (it && it.status === 'open' && it.id) notes[it.id] = it; });
+        fixes = {};
+        ((doc && doc.items) || []).forEach(it => {
+            if (!it || !it.id) return;
+            if (it.status === 'open') notes[it.id] = it;
+            // a fix the video project made (a note on a posted reel is taste for the next reels, nothing to recheck)
+            else if (it.status === 'handled' && it.kind !== 'post' &&
+                (!fixes[it.id] || fixTime(it) >= fixTime(fixes[it.id]))) fixes[it.id] = it;
+        });
     }
     function loadNotes() {
         if (!notesP) {
@@ -146,9 +166,22 @@ window.PostsReview = (function () {
     }
     const starText = n => ReviewKit.starText(n);
 
-    // what has been decided about a reel, or null
+    // a shortlisted reel the video project has fixed since: back to judge, unless it went onto the shortlist again
+    // after the fix (pasted on the Queue page)
+    function returned(d0, fx) {
+        if (!d0 || d0.kind !== 'shortlist' || !fx) return false;
+        const added = Date.parse(d0.added || ''), fixed = Date.parse(fx.fixed_time || '');
+        return !(added && fixed && added > fixed);
+    }
+
+    // what has been decided about a reel, or null; a reel with a fix on record carries it as d.fix (for Reviewed)
     function decision(r) {
+        const d = decided(r);
+        return d && fixes[r.id] ? Object.assign({}, d, { fix: fixes[r.id] }) : d;
+    }
+    function decided(r) {
         const d0 = window.PostsQueue ? PostsQueue.decisionOf(r.path) : null;
+        if (!notes[r.id] && returned(d0, fixes[r.id])) return null;
         const d = d0 && (d0.kind === 'queue' || d0.kind === 'posted') && ratings[r.id]
             ? Object.assign({}, d0, { stars: ratings[r.id].stars, rated: ratings[r.id].time }) : d0;
         if (d) return ((d.kind === 'shortlist' || d.kind === 'queue' || d.kind === 'posted') && notes[r.id])
@@ -165,9 +198,34 @@ window.PostsReview = (function () {
             tripName(a).localeCompare(tripName(b)) || (a.day || 0) - (b.day || 0) || String(a.id).localeCompare(String(b.id));
     }
 
+    // a reel back from a fix (or changed after a note on another reel) to recheck
+    const isFixed = r => !!fixes[r.id];
+
+    // the fixed ones first (latest fix first), then newest first
     function pending(doc, decide) {
         decide = decide || decision;
-        return ((doc && doc.reels) || []).filter(r => r.path && !decide(r)).sort(newestFirst);
+        return ((doc && doc.reels) || []).filter(r => r.path && !decide(r)).sort((a, b) =>
+            (isFixed(b) - isFixed(a)) || (isFixed(a) && fixTime(fixes[b.id]).localeCompare(fixTime(fixes[a.id]))) ||
+            newestFirst(a, b));
+    }
+
+    // "Your note: …" / "Fixed: …" (or, carried from another reel's note, "Changed after your note on …" / "What
+    // changed: …"), with any earlier rounds on the same reel → an element
+    function fixBox(fx) {
+        const box = el('div', 'rvw-fixed');
+        const said = fx.fixed || 'Re-made (no description of the change was given)';
+        if (fx.kind === 'carried') {
+            const from = ((reelsDoc && reelsDoc.reels) || []).find(x => x.id === fx.from);
+            box.appendChild(el('div', 'pq-status warn', `Changed after your note on ${(from && from.title) || fx.from || 'another reel'}: ${fx.note || ''}`));
+            box.appendChild(el('div', 'pq-status ok', `What changed: ${said}`));
+        } else {
+            box.appendChild(el('div', 'pq-status warn', `Your note: ${fx.note || ''}`));
+            box.appendChild(el('div', 'pq-status ok', `Fixed: ${said}`));
+        }
+        (fx.history || []).forEach(h => {
+            if (h && h.note) box.appendChild(el('div', 'reel-meta', `Earlier: ${h.note}` + (h.fixed ? ` → ${h.fixed}` : '')));
+        });
+        return box;
     }
 
     // the section button's number: reels still to judge (all trips), or null before the reject list is loaded
@@ -241,6 +299,7 @@ window.PostsReview = (function () {
         }
         const st = window.ReelsSite && ReelsSite.state();
         if (st && st.queue && st.queue.includes(r.id)) body.appendChild(el('div', 'pq-status done', 'On your Profile list'));
+        if (fixes[r.id]) body.appendChild(fixBox(fixes[r.id]));
         const p = el('div', 'pq-path', r.path);
         p.title = r.path;
         body.appendChild(p);
@@ -318,7 +377,12 @@ window.PostsReview = (function () {
                             refresh();
                             return null;
                         }
-                        return PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false, { hold: isVlog(row.r) }).then(() => { row.busy = null; refresh(); });
+                        // a fixed reel shortlisted again keeps its old shortlist line (the new note is what counts)
+                        const d0 = PostsQueue.decisionOf(row.r.path);
+                        if (!post && d0 && d0.kind === 'shortlist') { row.busy = null; refresh(); return null; }
+                        return (post ? offShortlist(row.r) : Promise.resolve())
+                            .then(() => PostsQueue.addPaths([row.r.path], post ? 'queue' : 'shortlist', false, { hold: isVlog(row.r) }))
+                            .then(() => { row.busy = null; refresh(); });
                     });
             }
         });
@@ -339,8 +403,17 @@ window.PostsReview = (function () {
                 refresh();
                 return null;
             }
-            return PostsQueue.addPaths([row.r.path], where, false, { hold: isVlog(row.r) }).then(() => { row.busy = null; refresh(); });
+            return (where === 'queue' ? offShortlist(row.r) : Promise.resolve())
+                .then(() => PostsQueue.addPaths([row.r.path], where, false, { hold: isVlog(row.r) }))
+                .then(() => { row.busy = null; refresh(); });
         });
+    }
+
+    // a reel back from a fix still has its old shortlist line, and a reel on the shortlist can't be queued: Post takes
+    // the line away first (Shortlist… again keeps it; Reject… takes it away itself)
+    function offShortlist(r) {
+        const d0 = window.PostsQueue ? PostsQueue.decisionOf(r.path) : null;
+        return d0 && d0.kind === 'shortlist' ? PostsQueue.removeFromShortlist(d0.at) : Promise.resolve();
     }
 
     // a decision taken back (the reel goes back to To review): off the queue / shortlist / reject list, its stars or
@@ -474,7 +547,7 @@ window.PostsReview = (function () {
         if (!headEl) return;
         const all = pending(reelsDoc);
         const here = shown();
-        const filtered = trip !== 'all' || kindSel === 'vlog';
+        const filtered = trip !== 'all' || kindSel !== 'all';
         headEl.textContent = `To review (${here.length}${filtered ? ` of ${all.length}` : ''})`;
         if (leftEl) {
             leftEl.textContent = `${here.length} left` + (filtered ? ` here · ${all.length} in all` : '');
@@ -507,9 +580,15 @@ window.PostsReview = (function () {
         const inTrip = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
         const vl = inTrip.filter(isVlog);
         typeEl.replaceChildren();
-        [['all', `All reels (${inTrip.length})`], ['vlog', `Vlog reels by day (${vl.length})`]].forEach(([k, label]) => {
+        const fx = inTrip.filter(isFixed);
+        [['all', `All reels (${inTrip.length})`], ['fixed', `Fixed, to recheck (${fx.length})`],
+            ['vlog', `Vlog reels by day (${vl.length})`]].filter(([k]) => k !== 'fixed' || fx.length || kindSel === 'fixed').forEach(([k, label]) => {
             const c = el('button', 'reel-chip' + (k === kindSel ? ' active' : ''), label);
             c.type = 'button';
+            if (k === 'fixed') {
+                c.classList.add('rvw-fixchip');
+                c.title = 'The reels the reel builders fixed after your Shortlist note (or changed after a note on another reel): check them again';
+            }
             c.addEventListener('click', () => {
                 if (k === kindSel) return;
                 kindSel = k;
@@ -570,6 +649,7 @@ window.PostsReview = (function () {
     function shown() {
         const all = pending(reelsDoc);
         let here = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
+        if (kindSel === 'fixed') here = here.filter(isFixed);
         if (kindSel === 'vlog') {
             here = here.filter(isVlog).sort(byDay);
             if (vday !== 'all') here = here.filter(r => dayKey(r) === vday);
@@ -585,7 +665,8 @@ window.PostsReview = (function () {
         focusAt = -1;
         listEl.replaceChildren();
         if (!list.length) {
-            listEl.appendChild(el('p', 'reels-empty', trip === 'all'
+            listEl.appendChild(el('p', 'reels-empty', kindSel === 'fixed' ? 'No fixed reels left to recheck' +
+                (trip === 'all' ? '.' : ' from this trip.') : trip === 'all'
                 ? 'Nothing to review: every reel has been posted, queued, shortlisted or rejected.'
                 : 'Nothing to review from this trip.'));
         }
@@ -714,6 +795,7 @@ window.PostsReview = (function () {
         p.title = r.path;
         txt.appendChild(p);
         txt.appendChild(verdictLine(d));
+        if (d.fix) txt.appendChild(fixBox(d.fix));
         const busy = el('div', 'pq-status wait rvw-busy');
         txt.appendChild(busy);
         top.appendChild(txt);
@@ -772,7 +854,8 @@ window.PostsReview = (function () {
     function rvDraw(force) {
         if (!rv || !rv.root.isConnected) return;
         const all = reviewed(reelsDoc);
-        const sig = JSON.stringify([all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason, x.d.status, x.d.when, x.d.held]),
+        const sig = JSON.stringify([all.map(x => [x.r.id, x.d.kind, x.d.stars, x.d.note, x.d.reason, x.d.status, x.d.when, x.d.held,
+            x.d.fix && [x.d.fix.fixed, x.d.fix.fixed_time]]),
             window.PostsQueue && PostsQueue.counts()]);
         // the schedule box follows the document, except while its slider is in the hand
         if (window.PostsQueue && rv.sched && !rv.sched.contains(document.activeElement)) rv.sched.replaceChildren(PostsQueue.scheduleBox());
@@ -863,9 +946,13 @@ window.PostsReview = (function () {
             '1. First run the queue sync: cd ~/Documents/Projects/video-editor-r4 && .venv/bin/python tools/reelbot/queue_sync.py',
             '2. SHORTLISTED = good, but fix exactly what my note says and keep everything else as it is. Before changing a ' +
             'reel, look up my earlier notes on that same reel and apply them too. Re-render it to the same path (move the ' +
-            'old file to the archive, never delete it), check the new one on its frames yourself, then set its note to ' +
-            '"status": "handled" in ~/Documents/Projects/geotag-photos/web/phone/reels/reel_feedback.json so it comes ' +
-            'back to my Review list. A shortlisted reel with no note: ask me what to fix.',
+            'old file to the archive, never delete it), check the new one on its frames yourself, then in ' +
+            '~/Documents/Projects/geotag-photos/web/phone/reels/reel_feedback.json give its note "status": "handled", ' +
+            '"fixed": "<what you changed, one plain sentence>" and "fixed_time": "<ISO time>" (keep every other field, ' +
+            'including "history") so it comes back to my Review list marked with my note and your fix. A reel I have not ' +
+            'judged yet that you changed because of a note on another reel: add an item {"id", "path", "title", "trip", ' +
+            '"kind": "carried", "from": "<id of the reel the note was on>", "note": "<that note>", "status": "handled", ' +
+            '"fixed", "fixed_time"}. A shortlisted reel with no note: ask me what to fix.',
             '3. REJECTED = a hard no. Never re-make, re-post or delete them. Read the reasons as my taste: when a reason ' +
             'repeats, turn it into a rule or a check for future reels.',
             '4. POSTED = good as it is (stars say how good, 5 = best): never change those reels. They are the record of ' +

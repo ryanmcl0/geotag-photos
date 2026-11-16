@@ -494,8 +494,8 @@ def prepare(post, manifest, folder, staging, probe=probe_video, progress=None):
                 notes.append(f"{it['label']}: {note}")
             if not MIN_RATIO - RATIO_SLACK <= w / h <= MAX_RATIO + RATIO_SLACK:
                 it['problems'].append(f'shape {ratio_name(w, h)} ({w}×{h}) is outside the 4:5 to 1.91:1 '
-                                      'Instagram takes: crop it in Lightroom, re-export into the post folder, '
-                                      'run again (nothing is cropped automatically)')
+                                      'Instagram takes: frame it with ✂ on the Posts page and pull again (or crop it '
+                                      'in Lightroom and re-export into the post folder)')
             if staged_bytes > JPEG_MAX:
                 it['problems'].append(f'still {staged_bytes / 1e6:.1f} MB as a JPEG; Instagram takes at most 8 MB')
         else:

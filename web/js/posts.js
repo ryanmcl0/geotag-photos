@@ -838,6 +838,10 @@ window.Posts = (function () {
         const map = button('Map card: press for the next style', cycleMap);
         const loc = button('Location pin: the place name baked into a corner on pull (press for the next style)', cycleLoc);
         const route = button('Trip route: one map card of the whole trip\'s route on pull (needs a GPX)', toggleRoute);
+        const frame = button('Frame it: choose which part of the photo fills the post\'s shape on pull', (r, id, ref) => {
+            gallery.close();
+            frameFromViewer(r, id, ref, set);
+        });
         const wait = set === 'main' ? button('Move to the waitlist (keeps it on this post, out of the carousel or Phone section)', demoteToWaitlist) : null;
         // Phone photos only: switch between the Phone section and the carousel.
         const swap = set === 'main' ? button('Move between the Phone section and the post carousel',
@@ -867,6 +871,8 @@ window.Posts = (function () {
             loc.classList.toggle('is-on', !!ph.loc);
             route.textContent = ph.route ? '🛣 Route on' : '🛣 Route';
             route.classList.toggle('is-on', !!ph.route);
+            frame.textContent = ph.crop ? '✂ Framed' : '✂ Frame';
+            frame.classList.toggle('is-on', !!ph.crop);
             if (wait) wait.textContent = '⇩ Waitlist';
             rm.textContent = '✕ Remove';
             // Off the carousel, the actions don't apply: show where it went instead.
@@ -874,6 +880,7 @@ window.Posts = (function () {
             map.hidden = !inCarousel || phoneRef;
             loc.hidden = !inCarousel || phoneRef;
             route.hidden = !inCarousel || phoneRef;
+            frame.hidden = !inCarousel || !(ph.crop || needsFrame(st.post, ph));
             if (swap) {
                 swap.textContent = inPhone ? '⇧ Into post' : '📱 Back to Phone';
                 swap.hidden = !phoneRef || !(inCarousel || inPhone) || !(ref && ref.id);
@@ -2512,6 +2519,176 @@ window.Posts = (function () {
     const toggleRoute = (root, postId, ref, set) =>
         editPhoto(root, postId, ref, set, ph => { if (ph.route) delete ph.route; else ph.route = true; });
 
+    // ---------- ✂ Framing ----------
+    // A carousel shows every slide at the first photo's shape (clamped to the
+    // 4:5 .. 1.91:1 Instagram takes), the same rule as post_ratio in post.py.
+    // ✂ lets the owner choose which part of a photo fills that shape; it is
+    // saved on the photo as crop: [x0, y0, x1, y1] (fractions of the photo) and
+    // ./post.py pull cuts exactly that. Unframed: landscape photos are centred,
+    // portrait photos are pulled whole.
+    function postShapeOf(post) {
+        const first = ((post && post.photos) || []).find(ph => typeof ph.ar === 'number');
+        return Math.min(1.91, Math.max(0.8, first ? first.ar : 1.5));
+    }
+    const needsFrame = (post, ref) => !!ref && !!ref.id && typeof ref.ar === 'number' &&
+        Math.abs(ref.ar - postShapeOf(post)) / postShapeOf(post) > 0.01;
+    const shapeName = r => ({ '0.80': '4:5', '1.00': '1:1', '0.75': '3:4', '1.50': '3:2', '1.33': '4:3',
+        '1.78': '16:9', '1.91': '1.91:1' })[r.toFixed(2)] || `${r.toFixed(2)}:1`;
+
+    function openCropper(root, post, ref, set) {
+        if (!post || !ref || !ref.id || !window.Gallery) return;
+        const shape = postShapeOf(post);
+        const ov = document.createElement('div');
+        ov.className = 'posts-crop';
+        ov.innerHTML = '<div class="posts-crop-head"></div>' +
+            '<div class="posts-crop-stage"><img alt="" draggable="false">' +
+            '<div class="posts-crop-frame"><i class="t1"></i><i class="t2"></i><i class="t3"></i><i class="t4"></i>' +
+            '<b data-c="nw"></b><b data-c="ne"></b><b data-c="sw"></b><b data-c="se"></b></div></div>' +
+            '<div class="posts-crop-bar"></div>';
+        const head = ov.querySelector('.posts-crop-head');
+        const stage = ov.querySelector('.posts-crop-stage');
+        const img = ov.querySelector('img');
+        const frameEl = ov.querySelector('.posts-crop-frame');
+        const bar = ov.querySelector('.posts-crop-bar');
+        head.textContent = `Frame this photo for the post (${shapeName(shape)}): drag to move, corners to resize. ` +
+            'Pull cuts exactly this.';
+        const btn = (text, cls, fn) => {
+            const b = document.createElement('button');
+            b.type = 'button'; b.textContent = text;
+            if (cls) b.className = cls;
+            b.addEventListener('click', fn);
+            bar.appendChild(b);
+            return b;
+        };
+        // f: the frame as fractions of the photo; its pixel shape is always `shape`.
+        let W = 1, H = 1, f = null;
+        const maxFrame = () => {
+            const w = Math.min(W, H * shape), h = w / shape;
+            return { w: w / W, h: h / H };
+        };
+        const clampPos = () => {
+            f.x = Math.min(Math.max(0, f.x), 1 - f.w);
+            f.y = Math.min(Math.max(0, f.y), 1 - f.h);
+        };
+        const centred = () => {
+            const m = maxFrame();
+            f = { x: (1 - m.w) / 2, y: (1 - m.h) / 2, w: m.w, h: m.h };
+        };
+        const fromSaved = c => {
+            // Same rule as crop_box in tools/location_pin.py: keep the saved
+            // frame's centre and area, at the post's current shape.
+            const area = (c[2] - c[0]) * W * (c[3] - c[1]) * H;
+            let w = Math.sqrt(area * shape), h = w / shape;
+            if (w > W) { w = W; h = W / shape; }
+            if (h > H) { h = H; w = H * shape; }
+            f = { w: w / W, h: h / H, x: (c[0] + c[2]) / 2 - w / W / 2, y: (c[1] + c[3]) / 2 - h / H / 2 };
+            clampPos();
+        };
+        const paint = () => {
+            frameEl.style.left = `${f.x * 100}%`; frameEl.style.top = `${f.y * 100}%`;
+            frameEl.style.width = `${f.w * 100}%`; frameEl.style.height = `${f.h * 100}%`;
+        };
+        // The stage is the photo's own shape, as big as the window allows, so the
+        // frame's percentages are percentages of the photo.
+        const fit = () => {
+            const k = Math.min((window.innerWidth - 32) / W, (window.innerHeight - 150) / H);
+            stage.style.width = `${Math.floor(W * k)}px`;
+            stage.style.height = `${Math.floor(H * k)}px`;
+        };
+        const close = () => {
+            ov.remove();
+            document.removeEventListener('keydown', onKey, true);
+            window.removeEventListener('resize', fit);
+        };
+        const save = () => {
+            const r = v => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
+            const crop = [r(f.x), r(f.y), r(f.x + f.w), r(f.y + f.h)];
+            close();
+            editPhoto(root, post.id, ref, set, ph => { ph.crop = crop; });
+        };
+        btn('Centre', '', () => { centred(); paint(); });
+        btn('Cancel', '', close);
+        if (ref.crop) btn(ref.ar < 1 ? 'Clear (post it whole)' : 'Clear (centre it)', '',
+            () => { close(); editPhoto(root, post.id, ref, set, ph => { delete ph.crop; }); });
+        btn('Save framing', 'is-on', save);
+
+        // Drag the frame to move it; drag a corner to resize it about the
+        // opposite corner, keeping the post's shape.
+        let drag = null;
+        frameEl.addEventListener('pointerdown', e => {
+            e.preventDefault(); e.stopPropagation();
+            frameEl.setPointerCapture(e.pointerId);
+            const rect = img.getBoundingClientRect();
+            drag = { c: e.target.dataset.c || null, x0: e.clientX, y0: e.clientY, f0: { ...f },
+                     rw: rect.width, rh: rect.height, left: rect.left, top: rect.top };
+        });
+        frameEl.addEventListener('pointermove', e => {
+            if (!drag) return;
+            const { c, f0 } = drag;
+            if (!c) {
+                f.x = f0.x + (e.clientX - drag.x0) / drag.rw;
+                f.y = f0.y + (e.clientY - drag.y0) / drag.rh;
+                clampPos();
+            } else {
+                // the fixed corner, in fractions
+                const ax = c.includes('w') ? f0.x + f0.w : f0.x;
+                const ay = c.includes('n') ? f0.y + f0.h : f0.y;
+                const px = (e.clientX - drag.left) / drag.rw, py = (e.clientY - drag.top) / drag.rh;
+                // width the pointer asks for: both axes count, so a sideways or an
+                // up/down drag alone resizes it too
+                let w = (Math.abs(px - ax) + Math.abs(py - ay) * H * shape / W) / 2;
+                const room = Math.min(c.includes('w') ? ax : 1 - ax,
+                                      (c.includes('n') ? ay : 1 - ay) * H * shape / W);
+                const m = maxFrame();
+                w = Math.max(m.w * 0.2, Math.min(w, room, m.w));
+                const h = w * W / shape / H;
+                f = { w, h, x: c.includes('w') ? ax - w : ax, y: c.includes('n') ? ay - h : ay };
+                clampPos();
+            }
+            paint();
+        });
+        const end = () => { drag = null; };
+        frameEl.addEventListener('pointerup', end);
+        frameEl.addEventListener('pointercancel', end);
+        // Keys win over the page (and an open lightbox) while the framer is up.
+        function onKey(e) {
+            e.stopPropagation();
+            if (e.key === 'Escape') { e.preventDefault(); close(); }
+            else if (e.key === 'Enter') { e.preventDefault(); save(); }
+            else if (e.key.startsWith('Arrow')) {
+                e.preventDefault();
+                const step = e.shiftKey ? 0.05 : 0.01;
+                if (e.key === 'ArrowLeft') f.x -= step;
+                if (e.key === 'ArrowRight') f.x += step;
+                if (e.key === 'ArrowUp') f.y -= step;
+                if (e.key === 'ArrowDown') f.y += step;
+                clampPos(); paint();
+            }
+        }
+        document.addEventListener('keydown', onKey, true);
+        ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+        img.addEventListener('load', () => {
+            W = img.naturalWidth || 1; H = img.naturalHeight || 1;
+            fit();
+            window.addEventListener('resize', fit);
+            const c = Array.isArray(ref.crop) && ref.crop.length === 4 ? ref.crop : null;
+            if (c) fromSaved(c); else centred();
+            paint();
+            frameEl.style.display = '';
+        });
+        frameEl.style.display = 'none';
+        img.src = Gallery.photoUrl(ref, 'display');
+        document.body.appendChild(ov);
+    }
+
+    // From the lightbox: close it, then frame the photo that was showing.
+    const frameFromViewer = (root, postId, ref, set) => {
+        const st = photoState(postId, ref, set);
+        if (st.where !== 'carousel') return;
+        openCropper(root, st.post, st.ph, set);
+    };
+
     // The place names pull will bake in, one field per 📍 photo, under the strip.
     // Empty field = the automatic name (worked out by the local sync, ./post.py
     // mirror, from the same rosters and place lists pull uses); anything typed is
@@ -2986,6 +3163,17 @@ window.Posts = (function () {
         if (ref.route) routeBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
         routeBtn.addEventListener('click', () => toggleRoute(root, post.id, ref, set));
 
+        // ✂ only where there is a choice: the photo's shape differs from the post's.
+        const frameBtn = (ref.crop || needsFrame(post, ref)) ? document.createElement('button') : null;
+        if (frameBtn) {
+            frameBtn.type = 'button';
+            frameBtn.textContent = '✂';
+            frameBtn.title = ref.crop ? `Framed for the post (${shapeName(postShapeOf(post))}): click to change`
+                : `Frame it: choose which part fills the post's ${shapeName(postShapeOf(post))} on pull`;
+            if (ref.crop) frameBtn.style.cssText = 'background:#1d4ed8;border-radius:4px';
+            frameBtn.addEventListener('click', () => openCropper(root, post, ref, set));
+        }
+
         const demote = document.createElement('button');
         demote.type = 'button';
         demote.textContent = '⇩';
@@ -3041,6 +3229,10 @@ window.Posts = (function () {
         });
 
         controls.insertBefore(blurBtn, rm);
+        if (frameBtn) {
+            controls.insertBefore(frameBtn, rm);
+            controls.classList.add('has-frame');
+        }
         // A phone photo moved into the carousel has no trip GPS or route on
         // record, so the map, place-name and route marks are left off it.
         const phoneRef = isPhoneRef(ref);
@@ -3065,6 +3257,9 @@ window.Posts = (function () {
             ref.map && ['🗺 ' + MAP_SHORT[ref.map], `Map card on pull: ${MAP_LABELS[ref.map]}`],
             ref.loc && ['📍 ' + ref.loc, `Place name on pull: ${LOC_LABELS[ref.loc]}`],
             ref.route && ['🛣', 'Trip route card on pull'],
+            ref.crop && ['✂', 'Cut at your framing on pull'],
+            !ref.crop && needsFrame(post, ref) && ref.ar < 1 && ['⬚ whole', 'Portrait, not framed: pulled whole. '
+                + `Instagram's API takes ${shapeName(postShapeOf(post))} at most, so frame it with ✂ to post it from ./post.py ig`],
         ].filter(Boolean);
         if (pullMarks.length) {
             const stack = document.createElement('div');

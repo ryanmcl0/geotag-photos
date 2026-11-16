@@ -310,6 +310,43 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   height: 26px; font-size: 12px; cursor: pointer;
 }
 .posts-thumb-controls button:disabled { opacity: .3; cursor: default; }
+/* With ✂ there are nine: five to a row. */
+.posts-thumb-controls.has-frame button { flex-basis: calc(20% - 3px); max-width: calc(20% - 2px); }
+
+/* ---------- ✂ framing editor ---------- */
+.posts-crop {
+  position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,.92);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  padding: 16px; box-sizing: border-box;
+}
+.posts-crop-head { color: #ddd; font-size: 13px; text-align: center; max-width: 640px; }
+.posts-crop-stage {
+  position: relative; overflow: hidden; touch-action: none; user-select: none; flex: none;
+}
+.posts-crop-stage img { display: block; width: 100%; height: 100%; pointer-events: none; }
+.posts-crop-frame {
+  position: absolute; box-sizing: border-box; border: 2px solid #fff; cursor: move; touch-action: none;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.6);
+}
+.posts-crop-frame i { position: absolute; background: rgba(255,255,255,.35); pointer-events: none; }
+.posts-crop-frame .t1, .posts-crop-frame .t2 { top: 0; bottom: 0; width: 1px; }
+.posts-crop-frame .t1 { left: 33.33%; } .posts-crop-frame .t2 { left: 66.67%; }
+.posts-crop-frame .t3, .posts-crop-frame .t4 { left: 0; right: 0; height: 1px; }
+.posts-crop-frame .t3 { top: 33.33%; } .posts-crop-frame .t4 { top: 66.67%; }
+.posts-crop-frame b {
+  /* inside the frame: the stage clips anything past the photo's edge */
+  position: absolute; width: 20px; height: 20px; border: 0 solid #fff;
+}
+.posts-crop-frame b[data-c="nw"] { left: 0; top: 0; border-width: 5px 0 0 5px; cursor: nwse-resize; }
+.posts-crop-frame b[data-c="ne"] { right: 0; top: 0; border-width: 5px 5px 0 0; cursor: nesw-resize; }
+.posts-crop-frame b[data-c="sw"] { left: 0; bottom: 0; border-width: 0 0 5px 5px; cursor: nesw-resize; }
+.posts-crop-frame b[data-c="se"] { right: 0; bottom: 0; border-width: 0 5px 5px 0; cursor: nwse-resize; }
+.posts-crop-bar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.posts-crop-bar button {
+  background: rgba(255,255,255,.1); color: #fff; border: 1px solid rgba(255,255,255,.2);
+  border-radius: 8px; padding: 9px 14px; font-size: 13px; cursor: pointer;
+}
+.posts-crop-bar button.is-on { background: #1d4ed8; border-color: #1d4ed8; }
 
 @media (max-width: 640px) {
   .posts-thumb { width: calc((100% - 16px) / 3); height: auto; aspect-ratio: 1; }

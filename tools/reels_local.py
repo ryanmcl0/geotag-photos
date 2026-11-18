@@ -25,6 +25,8 @@ Endpoints (CORS open to the local site; listens on 127.0.0.1 only, so nothing el
                                  withdraws that reel's rejections the pipeline hasn't acted on yet
     GET  /reels/feedback         his notes on reels from Posts ▸ Reels ▸ Review (Shortlist… = "good, but fix this",
                                  2026-11-14; the note is required there)
+                                 The top-level "agent_seen" (a time the video project's agent writes once it has acted on
+                                 a pasted "Feedback to agent") is kept as it is: the page counts what is new from it.
     POST /reels/feedback         {"id", "note", "kind": "fix"|"post"} → the reel's open note (a new one replaces it); {"id", "undo": true}
                                  withdraws it. Kept in web/phone/reels/reel_feedback.json for the video project to
                                  act on; the reel's path and title come from reels.json. The video project writes:

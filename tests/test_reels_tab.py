@@ -250,7 +250,9 @@ class ReelsTab(unittest.TestCase):
             {"id": "d", "note": "x", "kind": "fix", "status": "handled", "fixed": "y", "fixed_time": "2026-11-16T20:00:00"},
             {"id": "e", "note": "great", "kind": "post", "status": "handled"},
             {"id": "f", "note": "swap the song", "kind": "fix", "status": "open", "time": "2026-11-14T22:30:00"}]}
-        feedback2 = {"items": [dict(fixed_a, note="still slow", status="open", time="2026-11-16T22:00:00",
+        # the second round also carries the agent's mark: feedback judged up to then has been acted on
+        feedback2 = {"agent_seen": "2026-11-15T12:00:00.000Z",
+                     "items": [dict(fixed_a, note="still slow", status="open", time="2026-11-16T22:00:00",
                                     history=[{k: v for k, v in fixed_a.items() if k != "id"}])] + feedback["items"][1:]}
         out = self.run_js(["review-kit.js", "posts-queue.js", "posts-review.js"], {
             "posts": posts, "reels": reels, "paths": [r["path"] for r in reels["reels"]],
@@ -270,6 +272,20 @@ class ReelsTab(unittest.TestCase):
         self.assertEqual(fb2["pending"], ["c", "b"])
         self.assertEqual(fb2["kinds"]["a"], "shortlist")
         self.assertIn("Fix: still slow", fb2["agent"])
+        # no mark from the agent yet: one whole list, and the copy tells the agent which time to write back
+        self.assertNotIn("### New", agent)
+        self.assertIn('set "agent_seen": "2026-11-1', agent)
+        # with the mark: what he judged after it comes first as new (a's new note, d shortlisted again); f's older
+        # note is still open work; the posted reel with no note of its own is counted, not listed
+        agent2 = fb2["agent"]
+        self.assertIn("2 of these 4 reels are NEW", agent2)
+        short2 = agent2[agent2.index("## Shortlisted"):agent2.index("## Rejected")]
+        self.assertIn("### New (2)", short2)
+        self.assertLess(short2.index("/a.mp4"), short2.index("### You have had these before (1)"))
+        self.assertLess(short2.index("### You have had these before (1)"), short2.index("/f.mp4"))
+        posted2 = agent2[agent2.index("## Posted"):]
+        self.assertIn("(and 1 more with stars only", posted2)
+        self.assertNotIn("/e.mp4", posted2)
 
 
 

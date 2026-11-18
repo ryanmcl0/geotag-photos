@@ -58,7 +58,7 @@ JPEG_MAX = 8 * 1024 * 1024
 MAX_WIDTH = 1440
 CAPTION_MAX, HASHTAG_MAX, MENTION_MAX = 2200, 30, 20
 # Instagram announced a cap of 5 hashtags per post (Dec 2025) while the API docs still say 30: past 5 is a note,
-# past 30 still blocks. The Posts page's Suggest tags button stops at 5 too.
+# past 30 still blocks. The Posts page's automatic hashtags stop at 5 too.
 HASHTAG_SOFT = 5
 # Trial reels (shown to non-followers first): post.trial → the IG User Media trial_params graduation_strategy.
 # auto = Instagram shares it to followers if it performs well, manual = he shares it from the app.

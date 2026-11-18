@@ -117,9 +117,12 @@ window.Posts = (function () {
         }
     });
 
-    // ---------- Hashtag suggestions (a Xiaohongshu card's "Suggest tags") ----------
+    // ---------- Hashtag suggestions (Xiaohongshu cards, filled in automatically) ----------
+    // A Xiaohongshu draft's caption gets its tags once, by itself, as soon as it
+    // has a caption and photos (autoFillTags); post.tags_suggested then keeps
+    // tags taken out by hand from coming back.
     // Instagram capped posts at 5 hashtags in Dec 2025 (tools/instagram_post.py
-    // HASHTAG_SOFT), so the button only ever fills a caption up to 5. Place tags
+    // HASHTAG_SOFT), so it only ever fills a caption up to 5. Place tags
     // come from the site's own place data for the draft's photos: each photo's
     // country section and city/region tile in collections/places.json, and for
     // China its province tile in collections/china.json (the See All variants
@@ -131,6 +134,7 @@ window.Posts = (function () {
         tags: ['#roadtrip', '#travelphotography', '#landscapephotography', '#dronephotography',
                '#documentaryphotography', '#overlanding'],
         by_country: { china: ['#chinatravel'], kyrgyzstan: ['#visitkyrgyzstan'], mongolia: ['#mongolia'] },
+        sony: ['#sonyalpha'],
     };
     const TAG_RE = /(?<![\p{L}\p{N}_#])#[\p{L}\p{N}_]+/gu;
     // "Issyk-Kul" → #issykkul, "Ömnögovĭ" → #omnogovi: lowercase letters and digits only.
@@ -140,10 +144,11 @@ window.Posts = (function () {
     /** The tags to append to `caption` (pure). places: one {country, region}
      *  per photo, either may be missing; cfg: {tags, by_country}; drone: true /
      *  false when the photo files tell, null when unknown (drone tags then stay
-     *  in their place). Order: the most common country, its most common region
-     *  (at most 2 place tags), that country's extras, the theme list; never one
+     *  in their place); sony: a Sony camera file (_RM…) is in it. Order: the
+     *  most common country, its most common region (at most 2 place tags),
+     *  cfg.sony when sony, that country's extras, the theme list; never one
      *  already in the caption, never past 5 hashtags in all. */
-    function suggestHashtags(caption, places, cfg, drone) {
+    function suggestHashtags(caption, places, cfg, drone, sony) {
         const have = new Set((caption.match(TAG_RE) || []).map(t => t.toLowerCase()));
         const most = vals => {
             const n = new Map();
@@ -159,6 +164,7 @@ window.Posts = (function () {
         };
         if (country) add(country);
         if (region && hashTag(region) !== hashTag(country)) add(region);
+        if (sony) (cfg.sony || DEFAULT_HASHTAGS.sony).forEach(add);
         if (country) ((cfg.by_country || {})[hashTag(country).slice(1)] || []).forEach(add);
         (cfg.tags || []).forEach(t => { if (!(drone === false && /drone/i.test(t))) add(t); });
         return out.slice(0, Math.max(0, HASHTAG_SOFT - have.size));
@@ -207,6 +213,40 @@ window.Posts = (function () {
             .then(r => (r.ok ? r.json() : DEFAULT_HASHTAGS)).catch(() => DEFAULT_HASHTAGS);
         return hashtagsP;
     }
+
+    /** Once per unposted Xiaohongshu draft: append the suggested hashtags to its
+     *  caption as soon as it has a caption and photos, and remember that it was
+     *  done (post.tags_suggested), so tags removed by hand stay removed. */
+    async function autoFillTags(post, caption, M) {
+        const media = (post.photos || []).length + (post.phone || []).length;
+        if (post.posted || post.tags_suggested || !caption.value.trim() || !media) return;
+        post.tags_suggested = true;               // no second run while this one saves
+        try {
+            const [places, cfg] = await Promise.all([draftPlaces(post), hashtagConfig()]);
+            const photos = post.photos || [];
+            // Drone files keep DJI's name (DJI_<date>_<n>_D...); Sony files are _RM<n>
+            const drone = photos.length ? photos.some(r => /^DJI_/i.test(r.id)) : null;
+            const sony = photos.some(r => /(^|_)RM\d/i.test(r.id));
+            const cur = caption.value.trim();
+            const add = suggestHashtags(cur, places, cfg, drone, sony);
+            let next = cur;
+            if (add.length) {
+                const last = cur.split('\n').pop();
+                next = cur + (last.replace(TAG_RE, '').trim() ? '\n\n' : ' ') + add.join(' ');
+                caption.value = next;
+                fitCaption(caption);
+            }
+            M(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                if (add.length && (p.caption || '').trim() === cur) p.caption = next;
+                p.tags_suggested = true;
+            });
+        } catch (e) {
+            delete post.tags_suggested;           // try again next time
+        }
+    }
+
 
     // Current-post chip inside the pill: shows which post "+ Post" / "Add"
     // target, with name and count; clicking it opens the post switcher.
@@ -2065,35 +2105,8 @@ window.Posts = (function () {
             if (platformOf(post) === 'xhs') {
                 const row = document.createElement('div');
                 row.className = 'posts-meta-row';
-                const tagsBtn = document.createElement('button');
-                tagsBtn.type = 'button';
-                tagsBtn.className = 'posts-delete posts-tags-btn';
-                tagsBtn.textContent = 'Suggest tags';
-                tagsBtn.title = `Add hashtags for Instagram: the photos' country and region, then the theme ` +
-                    `list (config/hashtags.json), up to ${HASHTAG_SOFT} in the caption`;
-                tagsBtn.addEventListener('click', async () => {
-                    tagsBtn.disabled = true;
-                    try {
-                        const [places, cfg] = await Promise.all([draftPlaces(post), hashtagConfig()]);
-                        // Drone files keep DJI's name (DJI_<date>_<n>_D...)
-                        const drone = post.photos.length ? post.photos.some(r => /^DJI_/i.test(r.id)) : null;
-                        const cur = caption.value.trim();
-                        const add = suggestHashtags(cur, places, cfg, drone);
-                        if (!add.length) {
-                            toast(`Already ${HASHTAG_SOFT} or more hashtags (Instagram's cap)`);
-                            return;
-                        }
-                        const last = cur.split('\n').pop();
-                        const sep = !cur ? '' : last.replace(TAG_RE, '').trim() ? '\n\n' : ' ';
-                        caption.value = cur + sep + add.join(' ');
-                        fitCaption(caption);
-                        caption.dispatchEvent(new Event('change'));
-                    } catch (e) {
-                        toast('Could not suggest tags: ' + e.message);
-                    } finally {
-                        tagsBtn.disabled = false;
-                    }
-                });
+                autoFillTags(post, caption, M);
+                caption.addEventListener('change', () => autoFillTags(post, caption, M));
 
                 const trialWrap = document.createElement('label');
                 trialWrap.className = 'posts-trial';
@@ -2115,7 +2128,6 @@ window.Posts = (function () {
                 // Only a draft that goes out as one video can be a trial reel: no carousel photos and a single
                 // Phone video (tools/instagram_post.py post_items). Kept while set, so it can be switched off.
                 const oneVideo = !(post.photos || []).length && (post.phone || []).length === 1 && !!post.phone[0].file;
-                row.append(tagsBtn);
                 if (oneVideo || post.trial) row.append(trialWrap);
                 meta.appendChild(row);
             }

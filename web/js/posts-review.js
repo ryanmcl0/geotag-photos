@@ -84,6 +84,7 @@ window.PostsReview = (function () {
     let notes = {};                  // reel id → its open feedback note (reel_feedback.json's item)
     let fixes = {};                  // reel id → its latest handled note, the video project's fix ("fixed" says what)
     let notesP = null;
+    let agentSeen = '';              // reel_feedback.json's "agent_seen": feedback judged up to then has been acted on by the agent
     let ratings = {};                // reel id → {stars, time} (reel_ratings.json's item)
     let ratingsP = null;
 
@@ -120,6 +121,7 @@ window.PostsReview = (function () {
     function takeNotes(doc) {
         notes = {};
         fixes = {};
+        agentSeen = String((doc && doc.agent_seen) || '');
         ((doc && doc.items) || []).forEach(it => {
             if (!it || !it.id) return;
             if (it.status === 'open') notes[it.id] = it;
@@ -134,6 +136,13 @@ window.PostsReview = (function () {
                 .then(r => (r.ok ? r.json() : null)).then(takeNotes).catch(() => {});
         }
         return notesP;
+    }
+    // the notes and stars again from the helper (the agent writes its fixes and "agent_seen" there while the page is
+    // open); an answer that fails leaves what the page has
+    function refreshJudged() {
+        const get = (u, take) => fetch(api() + u, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+            .then(doc => { if (doc) take(doc); }).catch(() => {});
+        return Promise.all([get('/reels/feedback', takeNotes), get('/reels/ratings', takeRatings)]);
     }
     // {id, note} saves the reel's note, {id, undo: true} withdraws it → true when the helper took it
     function sendNote(body) {
@@ -928,10 +937,21 @@ window.PostsReview = (function () {
 
     // "Feedback to agent": the text he pastes to his AI agent. Shortlisted reels (fix this), rejected reels (a hard no:
     // taste for the next reels) and posted reels with a note (posted as is: taste for the next reels), each with its
-    // full path, plus what to do with them.
-    function agentText(items) {
+    // full path, plus what to do with them. It is built from the page's lists at the moment of the click, so it is
+    // never older than the page. What is NEW is counted from "agent_seen" (the time the agent writes into
+    // reel_feedback.json once it has acted on a paste), never from the last copy: a copy he did not paste loses nothing.
+    const judgedMs = d => { const x = new Date(judgedAt(d)).getTime(); return isNaN(x) ? 0 : x; };
+    function agentNew(items, seen) {
+        const s = new Date(seen === undefined ? agentSeen : seen).getTime();
+        return isNaN(s) ? items.slice() : items.filter(x => judgedMs(x.d) > s);
+    }
+    function agentText(items, seen) {
+        if (seen === undefined) seen = agentSeen;
         const fmt = t => { const x = new Date(t); return isNaN(x) ? '' : x.toISOString().slice(0, 10); };
         const line = (x, extra) => `- ${x.r.path}\n  ${extra}` + (fmt(judgedAt(x.d)) ? ` (${fmt(judgedAt(x.d))})` : '');
+        const split = !isNaN(new Date(seen).getTime());
+        const fresh = new Set(agentNew(items, seen));
+        const newest = Math.max(0, ...items.map(x => judgedMs(x.d)));
         const short = items.filter(x => x.d.kind === 'shortlist');
         const rej = items.filter(x => x.d.kind === 'rejected');
         // every Post (P, stars, F): the good ones, best first, so the agent knows what to make more of
@@ -959,20 +979,46 @@ window.PostsReview = (function () {
             'what works: look at the 4–5 star ones (their footage, hook, text, song, pace, length) and write down what ' +
             'they share, then make more reels like them. A note on a posted reel is taste for the next reels.',
             '5. Never use private clips. When you want me to look at something, give me its full file path on its own line.',
-            '6. Tell me in plain words, reel by reel, what you did, and anything you could not do.',
-            ''
+            '6. Tell me in plain words, reel by reel, what you did, and anything you could not do.'
         ];
-        out.push(`## Shortlisted: fix these (${short.length})`);
-        short.forEach(x => out.push(line(x, 'Fix: ' + (x.d.note || '(no note given: ask me)'))));
-        if (!short.length) out.push('(none)');
-        out.push('', `## Rejected (${rej.length})`);
-        rej.forEach(x => out.push(line(x, 'Why: ' + (x.d.reason || 'No reason given'))));
-        if (!rej.length) out.push('(none)');
-        out.push('', `## Posted: the good ones, get more of these (${posted.length}, best first)`);
-        posted.forEach(x => out.push(line(x, (x.d.stars ? `${x.d.stars}/5 stars` : 'Posted, no stars') +
-            (x.d.note ? '. Note: ' + x.d.note : ''))));
-        if (!posted.length) out.push('(none)');
-        return out.join('\n') + '\n';
+        if (newest) {
+            out.push('7. When you have acted on this (or written down what has to wait), set "agent_seen": "' +
+                new Date(newest).toISOString() + '" at the top level of that same reel_feedback.json, beside "items" ' +
+                '(exactly this time, not the time you finish). My next copy then marks only what I judged after it as new.');
+        }
+        out.push('');
+        if (split) {
+            out.push(`${fresh.size} of these ${items.length} reels are NEW: judged after ${String(seen)}, the last feedback ` +
+                'you acted on. They come first in each section. The rest you have had before: it is repeated so the ' +
+                'record is whole (posted reels with stars only are counted, not listed). A shortlisted reel under ' +
+                '"had before" is still open work if you have not fixed it.', '');
+        }
+        const section = (title, list, text, starsOnly) => {
+            out.push(`## ${title}`);
+            if (!list.length) out.push('(none)');
+            else if (!split) list.forEach(x => out.push(line(x, text(x))));
+            else {
+                const a = list.filter(x => fresh.has(x)), b = list.filter(x => !fresh.has(x));
+                out.push(`### New (${a.length})`);
+                a.forEach(x => out.push(line(x, text(x))));
+                if (!a.length) out.push('(none)');
+                const listed = starsOnly ? b.filter(x => !starsOnly(x)) : b;
+                out.push(`### You have had these before (${b.length})`);
+                listed.forEach(x => out.push(line(x, text(x))));
+                if (b.length > listed.length) {
+                    out.push(`(and ${b.length - listed.length} more with stars only: every reel's stars are in ` +
+                        '~/Documents/Projects/geotag-photos/web/phone/reels/reel_ratings.json)');
+                }
+                if (!b.length) out.push('(none)');
+            }
+            out.push('');
+        };
+        section(`Shortlisted: fix these (${short.length})`, short, x => 'Fix: ' + (x.d.note || '(no note given: ask me)'));
+        section(`Rejected (${rej.length})`, rej, x => 'Why: ' + (x.d.reason || 'No reason given'));
+        section(`Posted: the good ones, get more of these (${posted.length}, best first)`, posted,
+            x => (x.d.stars ? `${x.d.stars}/5 stars` : 'Posted, no stars') + (x.d.note ? '. Note: ' + x.d.note : ''),
+            x => !x.d.note);
+        return out.join('\n').replace(/\n+$/, '') + '\n';
     }
 
     function reviewedPanel(doc) {
@@ -985,12 +1031,14 @@ window.PostsReview = (function () {
         const fb = el('button', 'reels-export-btn rvd-agent', 'Feedback to agent');
         fb.type = 'button';
         fb.title = 'Copy the shortlisted, rejected and posted reels (file paths, stars, your notes and reasons), with ' +
-            'instructions, to paste to your AI agent';
+            'instructions, to paste to your AI agent. Always your feedback as it is now; what is new is counted from ' +
+            'the last feedback the agent acted on, not from your last copy.';
         const fbSaid = el('span', 'pq-status ok rvd-agent-said');
         fb.addEventListener('click', () => {
-            const text = agentText(reviewed(reelsDoc));
-            const n = (text.match(/^- /gm) || []).length;
-            ReviewKit.copy(text, fbSaid, `Copied ${n} reel${n === 1 ? '' : 's'} with instructions: paste it to your agent.`);
+            const items = reviewed(reelsDoc);
+            const n = items.length, fresh = agentSeen ? agentNew(items).length : n;
+            ReviewKit.copy(agentText(items), fbSaid, `Copied ${n} reel${n === 1 ? '' : 's'} with instructions` +
+                (agentSeen ? ` (${fresh} new since your agent last acted on your feedback)` : '') + ': paste it to your agent.');
         });
         const bar = el('div', 'rvd-agentbar');
         bar.append(fb, fbSaid);
@@ -1024,12 +1072,13 @@ window.PostsReview = (function () {
         rv.timer = setInterval(() => {
             if (!root.isConnected) { clearInterval(rv.timer); return; }
             if (window.PostsQueue && PostsQueue.refresh) PostsQueue.refresh();
+            refreshJudged().then(() => rvDraw(false));
         }, 30000);
         return root;
     }
 
     function setDoc(doc) { reelsDoc = doc; loadNotes(); loadRatings(); }
 
-    return { panel, reviewedPanel, agentText, count, reviewedCount, setDoc, pending, reviewed, judgedAt, tripName, newestFirst,
+    return { panel, reviewedPanel, agentText, agentNew, count, reviewedCount, setDoc, pending, reviewed, judgedAt, tripName, newestFirst,
         takeNotes, takeRatings, decision };
 })();

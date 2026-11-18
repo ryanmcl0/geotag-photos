@@ -247,6 +247,137 @@ window.Posts = (function () {
         }
     }
 
+    // ---------- "Post to IG" (localhost Xiaohongshu cards) ----------
+    // Runs ./post.py ig through the sync server (post.py start_ig_job): a dry run
+    // first, its output shown here, and the real post only after "Post".
+    let igOpen = false, igReloadWanted = false, igReattachTried = false;
+    const IG_SEEN_KEY = 'posts_ig_seen';
+    // After a reload of the browser tab that started it (sessionStorage is per tab, so other tabs never show
+    // it): reopen the window for a run still going, or a dry run that finished in the last 15 minutes and was
+    // not closed yet, so its "Post to Instagram" is still one click away.
+    async function igReattach() {
+        if (igReattachTried || !SYNC_URL || !doc) return;
+        igReattachTried = true;
+        try {
+            const r = await fetch(SYNC_URL + '/ig/job', { cache: 'no-store' });
+            if (!r.ok) return;
+            const st = await r.json();
+            let seen = null;
+            try { seen = localStorage.getItem(IG_SEEN_KEY); } catch (e) { /* private mode */ }
+            const fresh = !st.done || (st.age_s != null && st.age_s < 900);
+            let mine = null;
+            try { mine = sessionStorage.getItem(IG_SEEN_KEY + '_mine'); } catch (e) { /* private mode */ }
+            if (st.id !== mine) return;
+            const post = doc.posts.find(p => p.id === st.post);
+            if (post && fresh && st.id !== seen && !igOpen) igDialog(post, st);
+        } catch (e) { /* no sync server */ }
+    }
+
+    function igDialog(post, attach) {
+        const overlay = document.createElement('div');
+        overlay.className = 'posts-picker-overlay posts-ig-overlay';
+        const box = document.createElement('div');
+        box.className = 'posts-ig';
+        const h = document.createElement('h3');
+        h.textContent = `Post ${post.num ? '#' + post.num + ' ' : ''}${post.name || ''} to @ryanmcl0`;
+        const status = document.createElement('div');
+        status.className = 'posts-ig-status';
+        const out = document.createElement('pre');
+        out.className = 'posts-ig-out';
+        const btns = document.createElement('div');
+        btns.className = 'posts-ig-btns';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'posts-ig-cancel';
+        cancel.textContent = 'Close';
+        const go = document.createElement('button');
+        go.type = 'button';
+        go.className = 'posts-ig-go';
+        go.textContent = 'Post to Instagram';
+        go.disabled = true;
+        btns.append(cancel, go);
+        box.append(h, status, out, btns);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        let running = false, closed = false, posted = false, jobId = null;
+        igOpen = true;
+        const close = () => {
+            if (running && !confirm('It is still running and carries on without this window. Close it?')) return;
+            closed = true;
+            igOpen = false;
+            overlay.remove();
+            if (jobId) try { localStorage.setItem(IG_SEEN_KEY, jobId); } catch (e) { /* private mode */ }
+            if (igReloadWanted) location.reload();
+            else if (posted) syncNow(false);     // brings the Posted mark onto this page
+        };
+        cancel.addEventListener('click', close);
+        overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+        // Terminal output → text: a "\r" progress line keeps only its last state; colour/erase codes go.
+        const clean = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n')
+            .map(l => l.split('\r').filter(Boolean).pop() || '').join('\n');
+
+        async function run(real) {
+            running = true;
+            go.disabled = true;
+            status.textContent = real ? 'Posting…' : 'Dry run: pulling the draft and checking it…';
+            out.textContent = '';
+            let job;
+            try {
+                const r = await fetch(SYNC_URL + '/ig/start', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ post: post.id, real }),
+                });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+                job = j.job;
+            } catch (e) {
+                running = false;
+                status.textContent = 'Could not start: ' + e.message +
+                    ' (the sync server runs with ./serve.sh or the desktop app)';
+                return;
+            }
+            follow(job, real);
+        }
+        async function follow(job, real) {
+            running = true;
+            jobId = job;
+            try { sessionStorage.setItem(IG_SEEN_KEY + '_mine', job); } catch (e) { /* private mode */ }
+            let st;
+            for (;;) {
+                await new Promise(res => setTimeout(res, 800));
+                try {
+                    st = await (await fetch(`${SYNC_URL}/ig/job?id=${job}`, { cache: 'no-store' })).json();
+                } catch (e) { continue; }
+                if (closed) { if (st.done) break; continue; }
+                const atEnd = out.scrollTop + out.clientHeight >= out.scrollHeight - 20;
+                out.textContent = clean(st.output);
+                if (atEnd) out.scrollTop = out.scrollHeight;
+                if (st.done) break;
+            }
+            running = false;
+            const text = clean(st.output);
+            if (real) {
+                posted = st.code === 0 && /✅ Posted/.test(text);
+                status.textContent = posted ? 'Posted ✓' : 'Not posted: see below.';
+                if (posted && closed) syncNow(false);
+                return;
+            }
+            const problems = st.code !== 0 || /⛔/.test(text);
+            status.textContent = problems ? 'Dry run found problems: nothing can go out yet.'
+                : 'Dry run done. This is exactly what goes out.';
+            go.disabled = problems;
+        }
+        go.addEventListener('click', () => run(true));
+        if (attach) {
+            status.textContent = attach.real ? 'Posting…' : 'Dry run: pulling the draft and checking it…';
+            out.textContent = clean(attach.output || '');
+            follow(attach.id, attach.real);
+        } else {
+            run(false);
+        }
+    }
 
     // Current-post chip inside the pill: shows which post "+ Post" / "Add"
     // target, with name and count; clicking it opens the post switcher.
@@ -1224,7 +1355,8 @@ window.Posts = (function () {
             const res = st.results || {};
             if (doc && (res.main === 'down' || res.main === 'both' || res.auto === 'down' || res.auto === 'both' ||
                         (v && v !== doc.version))) {
-                location.reload();           // newer posts came down: show them
+                // newer posts came down: show them (after the Post to IG window closes, which a reload would kill)
+                if (igOpen) igReloadWanted = true; else location.reload();
             } else if (manual) {
                 toast(st.state === 'in_sync' ? 'In sync with the live site' : st.message);
             }
@@ -1257,7 +1389,8 @@ window.Posts = (function () {
     let reelsDoc = null;
     let businessDoc = null;
     try {
-        activeTab = localStorage.getItem('posts_tab') || 'ig';
+        // Per browser tab first (a duplicated tab on Reels must not move this one), then the last one used anywhere.
+        activeTab = sessionStorage.getItem('posts_tab') || localStorage.getItem('posts_tab') || 'ig';
         if (activeTab === 'main') activeTab = 'ig';   // pre-platform value
     } catch (e) { /* private mode */ }
     // A link to a Reels section (posts.html#reels/footage, posts-reels.js) opens that tab.
@@ -1266,6 +1399,7 @@ window.Posts = (function () {
 
     function renderManager(root) {
         updatePill();
+        igReattach();
         // An open viewer's photo-action bar repaints from the same state (an Undo
         // from a toast lands here too).
         document.dispatchEvent(new Event('posts:rendered'));
@@ -1321,7 +1455,7 @@ window.Posts = (function () {
             b.textContent = label;
             b.addEventListener('click', () => {
                 activeTab = id;
-                try { localStorage.setItem('posts_tab', id); } catch (e) { /* private mode */ }
+                try { sessionStorage.setItem('posts_tab', id); localStorage.setItem('posts_tab', id); } catch (e) { /* private mode */ }
                 // the Reels tab keeps its section in the address; another tab drops it
                 if (id !== 'reels' && reelsHash()) {
                     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* file: */ }
@@ -2107,6 +2241,16 @@ window.Posts = (function () {
                 row.className = 'posts-meta-row';
                 autoFillTags(post, caption, M);
                 caption.addEventListener('change', () => autoFillTags(post, caption, M));
+                // Localhost only (it runs ./post.py ig on this Mac): dry run, then post on a yes.
+                if (SYNC_URL && !post.posted) {
+                    const igBtn = document.createElement('button');
+                    igBtn.type = 'button';
+                    igBtn.className = 'posts-delete posts-tags-btn posts-ig-btn';
+                    igBtn.textContent = 'Post to IG';
+                    igBtn.title = 'Dry run of ./post.py ig for this draft, then post it to @ryanmcl0 once you confirm';
+                    igBtn.addEventListener('click', () => igDialog(post));
+                    row.append(igBtn);
+                }
 
                 const trialWrap = document.createElement('label');
                 trialWrap.className = 'posts-trial';

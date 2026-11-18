@@ -2648,6 +2648,8 @@ class RemoteMirror:
                 if origin in allowed:
                     self.send_header('Access-Control-Allow-Origin', origin)
                     self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+                    self.send_header('Access-Control-Allow-Headers', 'Content-Type')   # /ig/start's JSON body
+                    self.send_header('Vary', 'Origin')
                 self.end_headers()
 
             def do_GET(self):
@@ -2656,12 +2658,33 @@ class RemoteMirror:
                 elif self.path.startswith('/labels'):
                     q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                     self._send(200, place_labels(q.get('r', [])[:60]))
+                elif self.path.startswith('/ig/job'):
+                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    wanted = (q.get('id') or [''])[0]
+                    # no id: the latest run (the page reattaches to it after a reload)
+                    job = IG_JOBS.get(wanted) if wanted else next(reversed(IG_JOBS.values()), None)
+                    self._send(200 if job else 404, ig_job_status(job) if job else {'error': 'no such job'})
                 else:
                     self._send(404, {'error': 'not found'})
 
             def do_POST(self):
                 if self.path.startswith('/sync'):
                     self._send(200, mirror.sync(force_remote=True))
+                elif self.path.startswith('/ig/start'):
+                    # Posting is the one thing here another web page must never trigger: only the localhost
+                    # Posts page (its Origin) with a JSON body, which a cross-site form cannot send.
+                    if (self.headers.get('Origin', '') not in allowed
+                            or not self.headers.get('Content-Type', '').startswith('application/json')):
+                        self._send(403, {'error': 'forbidden'})
+                        return
+                    try:
+                        n = int(self.headers.get('Content-Length') or 0)
+                        body = json.loads(self.rfile.read(n) or b'{}')
+                    except ValueError:
+                        self._send(400, {'error': 'bad request'})
+                        return
+                    code, out = start_ig_job(str(body.get('post', '')), bool(body.get('real')))
+                    self._send(code, out)
                 else:
                     self._send(404, {'error': 'not found'})
 
@@ -2862,6 +2885,44 @@ def cmd_status(args):
 # One line per Instagram post made by `ig` (ids, name, permalink; no secrets).
 IG_LOG = ROOT / 'local_browse' / 'instagram_posts.jsonl'
 POSTS_DEST = '/Volumes/RYAN/Edits/Posts'
+
+
+# The localhost Posts page's "Post to IG" button: the sync server (serve_control) runs `./post.py ig` as a
+# child process, exactly as typed in a terminal, and the page polls its output. One run at a time.
+IG_JOBS = {}
+_IG_LOCK = threading.Lock()
+
+
+def start_ig_job(post_id, real):
+    """Start `./post.py ig <post_id>` (a dry run) or `... --post --yes` (real: the page asked first).
+    Returns (http code, body)."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', post_id):
+        return 400, {'error': 'bad post id'}
+    with _IG_LOCK:
+        if any(j['proc'].poll() is None for j in IG_JOBS.values()):
+            return 409, {'error': 'another Instagram run is still going'}
+        cmd = [sys.executable, str(ROOT / 'post.py'), 'ig', post_id] + (['--post', '--yes'] if real else [])
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env={**os.environ, 'PYTHONUNBUFFERED': '1'})
+        job_id = f'{int(time.time() * 1000):x}'
+        job = {'id': job_id, 'post': post_id, 'real': real, 'proc': proc, 'out': [], 'code': None}
+        IG_JOBS.clear()                     # only the latest run is ever asked about
+        IG_JOBS[job_id] = job
+
+    def read():
+        for chunk in iter(lambda: proc.stdout.read1(4096), b''):
+            job['out'].append(chunk.decode('utf-8', 'replace'))
+        job['code'] = proc.wait()
+        job['ended'] = time.time()
+    threading.Thread(target=read, daemon=True).start()
+    return 200, {'job': job_id}
+
+
+def ig_job_status(job):
+    done = job['code'] is not None
+    return {'id': job['id'], 'post': job['post'], 'real': job['real'], 'output': ''.join(job['out']),
+            'done': done, 'code': job['code'],
+            'age_s': round(time.time() - job['ended']) if job.get('ended') else None}
 
 
 def _ask_mirror():

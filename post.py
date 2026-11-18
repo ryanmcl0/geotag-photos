@@ -2648,6 +2648,8 @@ class RemoteMirror:
                 if origin in allowed:
                     self.send_header('Access-Control-Allow-Origin', origin)
                     self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+                    self.send_header('Access-Control-Allow-Headers', 'Content-Type')   # /ig/start's JSON body
+                    self.send_header('Vary', 'Origin')
                 self.end_headers()
 
             def do_GET(self):
@@ -2656,12 +2658,33 @@ class RemoteMirror:
                 elif self.path.startswith('/labels'):
                     q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                     self._send(200, place_labels(q.get('r', [])[:60]))
+                elif self.path.startswith('/ig/job'):
+                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    wanted = (q.get('id') or [''])[0]
+                    # no id: the latest run (the page reattaches to it after a reload)
+                    job = IG_JOBS.get(wanted) if wanted else next(reversed(IG_JOBS.values()), None)
+                    self._send(200 if job else 404, ig_job_status(job) if job else {'error': 'no such job'})
                 else:
                     self._send(404, {'error': 'not found'})
 
             def do_POST(self):
                 if self.path.startswith('/sync'):
                     self._send(200, mirror.sync(force_remote=True))
+                elif self.path.startswith('/ig/start'):
+                    # Posting is the one thing here another web page must never trigger: only the localhost
+                    # Posts page (its Origin) with a JSON body, which a cross-site form cannot send.
+                    if (self.headers.get('Origin', '') not in allowed
+                            or not self.headers.get('Content-Type', '').startswith('application/json')):
+                        self._send(403, {'error': 'forbidden'})
+                        return
+                    try:
+                        n = int(self.headers.get('Content-Length') or 0)
+                        body = json.loads(self.rfile.read(n) or b'{}')
+                    except ValueError:
+                        self._send(400, {'error': 'bad request'})
+                        return
+                    code, out = start_ig_job(str(body.get('post', '')), bool(body.get('real')))
+                    self._send(code, out)
                 else:
                     self._send(404, {'error': 'not found'})
 
@@ -2864,6 +2887,81 @@ IG_LOG = ROOT / 'local_browse' / 'instagram_posts.jsonl'
 POSTS_DEST = '/Volumes/RYAN/Edits/Posts'
 
 
+# The localhost Posts page's "Post to IG" button: the sync server (serve_control) runs `./post.py ig` as a
+# child process, exactly as typed in a terminal, and the page polls its output. One run at a time.
+IG_JOBS = {}
+_IG_LOCK = threading.Lock()
+
+
+def start_ig_job(post_id, real):
+    """Start `./post.py ig <post_id>` (a dry run) or `... --post --yes` (real: the page asked first).
+    Returns (http code, body)."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', post_id):
+        return 400, {'error': 'bad post id'}
+    with _IG_LOCK:
+        if any(j['proc'].poll() is None for j in IG_JOBS.values()):
+            return 409, {'error': 'another Instagram run is still going'}
+        cmd = [sys.executable, str(ROOT / 'post.py'), 'ig', post_id] + (['--post', '--yes'] if real else [])
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env={**os.environ, 'PYTHONUNBUFFERED': '1'})
+        job_id = f'{int(time.time() * 1000):x}'
+        job = {'id': job_id, 'post': post_id, 'real': real, 'proc': proc, 'out': [], 'code': None}
+        IG_JOBS.clear()                     # only the latest run is ever asked about
+        IG_JOBS[job_id] = job
+
+    def read():
+        for chunk in iter(lambda: proc.stdout.read1(4096), b''):
+            job['out'].append(chunk.decode('utf-8', 'replace'))
+        job['code'] = proc.wait()
+        job['ended'] = time.time()
+    threading.Thread(target=read, daemon=True).start()
+    return 200, {'job': job_id}
+
+
+def ig_job_status(job):
+    done = job['code'] is not None
+    return {'id': job['id'], 'post': job['post'], 'real': job['real'], 'output': ''.join(job['out']),
+            'done': done, 'code': job['code'],
+            'age_s': round(time.time() - job['ended']) if job.get('ended') else None}
+
+
+IG_STAGED = ROOT / 'local_browse' / 'ig_staged'
+KEPT_MAX_AGE = 30 * 60        # seconds a clean dry run's staging stays reusable by --post
+
+
+def save_kept(staging, plan, folder, seen):
+    """A clean dry run's plan, next to the files it staged, for --post to reuse (load_kept)."""
+    (staging / 'plan.json').write_text(json.dumps(
+        {'time': time.time(), 'folder': str(folder), 'seen': seen, 'plan': plan}, default=str))
+
+
+def load_kept(staging, post):
+    """(plan, folder, seen, age seconds) from a clean dry run of this exact draft, or None (and why) when it
+    is missing, older than KEPT_MAX_AGE, the draft changed since, or a staged file is gone or different."""
+    try:
+        kept = json.loads((staging / 'plan.json').read_text())
+    except (OSError, ValueError):
+        return None
+    age = int(time.time() - kept.get('time', 0))
+    why = None
+    if age > KEPT_MAX_AGE:
+        why = f'the dry run is {age // 60} min old'
+    elif kept.get('seen') != json.dumps(post, sort_keys=True):
+        why = 'the draft changed since the dry run'
+    plan = kept.get('plan') or {}
+    for it in plan.get('items', []):
+        for k in ('path', 'staged'):
+            if it.get(k):
+                it[k] = Path(it[k])
+        st = it.get('staged')
+        if not why and (not st or not st.exists() or st.stat().st_size != it.get('staged_bytes')):
+            why = f"{it.get('label')} changed or is gone since the dry run"
+    if why:
+        print(f'↻ Not reusing the dry run ({why}): pulling and checking again.')
+        return None
+    return plan, Path(kept['folder']), kept['seen'], age
+
+
 def _ask_mirror():
     """POST /sync to the running mirror (./serve.sh or ./post.py serve started it) → its status, or None
     when none runs."""
@@ -2990,33 +3088,43 @@ def cmd_ig(args):
         sys.exit(f"❌ \"{post['name']}\" is already marked posted"
                  + (f" ({post['permalink']})" if post.get('permalink') else '') + '.')
 
-    # 1. A fresh pull of this one post: his latest order and re-edits.
-    try:
-        cmd_pull(argparse.Namespace(
-            dest=args.dest, url=url, local=True, num=None, post=None, id=post['id'], list=False,
-            dry_run=False, reblur=False, waitlist=False, skip_waitlist=True))
-    except SystemExit as e:
-        if 'could not be resolved' not in str(e.code):
-            raise
-        print(e.code)                       # the folder check below names what is missing
-    doc = fetch_posts(url, env)
-    post = _find(doc, post['id'])
-    if post is None:
-        sys.exit('❌ The draft was deleted during the pull.')
-    folder = post_dir(Path(args.dest), post, doc.get('posts', []), move=False, quiet=True)
-    try:
-        manifest = json.loads((folder / 'manifest.json').read_text())
-    except (OSError, ValueError):
-        sys.exit(f'❌ No pulled folder at {folder}.')
-    seen = json.dumps(post, sort_keys=True)
+    # A clean dry run keeps what it staged (IG_STAGED/<draft id>): --post then reuses it when the draft is
+    # unchanged and it is recent, instead of pulling and staging everything again.
+    staging = IG_STAGED / post['id']
+    kept = None if (args.fresh or not args.real) else load_kept(staging, post)
+    keep = False
+    if kept:
+        plan, folder, seen, age = kept
+        print(f"↺ Using the dry run from {age // 60} min ago (the draft is unchanged): no new pull or checks.")
+    else:
+        # 1. A fresh pull of this one post: his latest order and re-edits.
+        try:
+            cmd_pull(argparse.Namespace(
+                dest=args.dest, url=url, local=True, num=None, post=None, id=post['id'], list=False,
+                dry_run=False, reblur=False, waitlist=False, skip_waitlist=True))
+        except SystemExit as e:
+            if 'could not be resolved' not in str(e.code):
+                raise
+            print(e.code)                       # the folder check below names what is missing
+        doc = fetch_posts(url, env)
+        post = _find(doc, post['id'])
+        if post is None:
+            sys.exit('❌ The draft was deleted during the pull.')
+        folder = post_dir(Path(args.dest), post, doc.get('posts', []), move=False, quiet=True)
+        try:
+            manifest = json.loads((folder / 'manifest.json').read_text())
+        except (OSError, ValueError):
+            sys.exit(f'❌ No pulled folder at {folder}.')
+        seen = json.dumps(post, sort_keys=True)
 
     # 2. What goes out, checked before anything is uploaded.
-    staging = Path(tempfile.mkdtemp(prefix='ig-post-'))
     try:
-        plan = IG.prepare(post, manifest, folder, staging,
-                          progress=lambda n, total: print(f'\r⚙️  Preparing {n}/{total} for Instagram...',
-                                                          end='', flush=True))
-        print('\r\033[K', end='')                  # the plan below replaces the progress line
+        if not kept:
+            shutil.rmtree(staging, ignore_errors=True)
+            plan = IG.prepare(post, manifest, folder, staging,
+                              progress=lambda n, total: print(f'\r⚙️  Preparing {n}/{total} for Instagram...',
+                                                              end='', flush=True))
+            print('\r\033[K', end='')                  # the plan below replaces the progress line
         setup = IG.Setup()
         problems = IG.blocking(plan) + ([f"not set up: {', '.join(setup.missing)}"]
                                         if setup.enabled and setup.missing else [])
@@ -3027,6 +3135,9 @@ def cmd_ig(args):
             ref = ref if isinstance(ref, int) or ' ' not in str(ref) else f'"{ref}"'
             print(('Once they are fixed, post' if problems else 'To post it for real') +
                   f': ./post.py ig {ref} --post')
+            if not problems:
+                save_kept(staging, plan, folder, seen)
+                keep = True
             return
         if problems:
             sys.exit(f'\n⛔ Not posted: {len(problems)} problem(s) above. Fix them, then run ./post.py ig {post.get("num") or args.post} --post again.')
@@ -3071,7 +3182,8 @@ def cmd_ig(args):
                      'so the draft is NOT marked posted: tick Posted on the Posts page by hand.')
         print(f"✅ Posted: {res['permalink']}  ({res['left']} posts left in Instagram's 24 h limit)")
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if not keep:
+            shutil.rmtree(staging, ignore_errors=True)
 
     # 5. The Posted mark (+ permalink), where the Posts pages read it.
     try:
@@ -3172,6 +3284,8 @@ def main():
     g.add_argument('--post', dest='real', action='store_true',
                    help='post for real (without it: a dry run that pulls, shows what would go out and stops)')
     g.add_argument('--yes', action='store_true', help='with --post: post without asking')
+    g.add_argument('--fresh', action='store_true',
+                   help="with --post: pull and check again even when a recent dry run's staging can be reused")
     g.add_argument('--dry', action='store_true', help=argparse.SUPPRESS)   # the default now; kept for old habits
     g.add_argument('--dest', default=POSTS_DEST, help=f'Post folders root (default: {POSTS_DEST})')
     g.set_defaults(func=cmd_ig)

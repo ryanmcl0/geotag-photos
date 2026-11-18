@@ -1971,7 +1971,7 @@ def emit_gallery_descriptions(echo):
 
 
 def emit_hashtags(echo):
-    """Theme hashtags for the Posts page's Suggest tags button (config/hashtags.json)
+    """Theme hashtags the Posts page fills into Xiaohongshu captions (config/hashtags.json)
     → web/collections/hashtags.json. Nothing private in it (a tag list), so it is
     published as is, normalised to lowercase #letters/digits."""
     cfg_path = ROOT / 'config' / 'hashtags.json'
@@ -1986,7 +1986,7 @@ def emit_hashtags(echo):
 
     def tags(ts):
         return list(dict.fromkeys(x for x in map(tag, ts or []) if x))
-    out = {'tags': tags(cfg.get('tags')),
+    out = {'tags': tags(cfg.get('tags')), 'sony': tags(cfg.get('sony', ['#sonyalpha'])),
            'by_country': {(tag(k) or '#')[1:]: tags(v) for k, v in (cfg.get('by_country') or {}).items() if tag(k)}}
     (OUT_DIR / 'hashtags.json').write_text(json.dumps(out, indent=2, ensure_ascii=False))
     echo(f"✓ Wrote web/collections/hashtags.json ({len(out['tags'])} tag(s), "

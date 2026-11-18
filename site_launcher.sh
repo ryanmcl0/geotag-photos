@@ -32,14 +32,17 @@ sync_posts() {
     say "posts synced"
   else
     say "posts sync not running — starting it"
-    ( cd "$REPO" && nohup ./post.py mirror --port "$PORT" >>local_browse/serve_site.log 2>&1 & )
+    ( cd "$REPO" && nohup ./post.py mirror --port "$PORT" >>local_browse/serve_site.log 2>&1 & ) </dev/null >/dev/null 2>&1
   fi
 }
+# Every background helper below is cut off from the launcher's stdin/stdout/stderr (the trailing
+# redirects): otherwise the subshell that waits on it keeps the app's pipe open and the desktop app
+# never finishes, so the next double-click only re-activates that hung copy.
 # Posts ▸ Reels helper (tools/reels_local.py): start it if a server that was
 # already up predates it.
 reels_helper() {
   curl -s -o /dev/null --max-time 2 "http://127.0.0.1:8791/reels/state" && return 0
-  ( cd "$REPO" && nohup python3 tools/reels_local.py --port 8791 >>local_browse/serve_site.log 2>&1 & )
+  ( cd "$REPO" && nohup python3 tools/reels_local.py --port 8791 >>local_browse/serve_site.log 2>&1 & ) </dev/null >/dev/null 2>&1
   say "reels helper started"
 }
 # The vlog pipeline's dashboard (the video project's tools/vlog/status.py serve, port 8770): Posts ▸ Reels ▸ In
@@ -51,7 +54,7 @@ vlog_dashboard() {
   [ -d "$ve" ] || ve="$HOME/Documents/Projects/video-editor"
   local trip="/Volumes/Crucial X9/editor/vlog/china-summer-2026/trip.json"
   [ -x "$ve/.venv/bin/python" ] && [ -f "$trip" ] || return 0
-  ( cd "$ve" && nohup .venv/bin/python tools/vlog/status.py serve "$trip" --port 8770 >>"$REPO/local_browse/serve_site.log" 2>&1 & )
+  ( cd "$ve" && nohup .venv/bin/python tools/vlog/status.py serve "$trip" --port 8770 >>"$REPO/local_browse/serve_site.log" 2>&1 & ) </dev/null >/dev/null 2>&1
   say "vlog dashboard started"
 }
 if curl -s -o /dev/null --max-time 2 "$URL"; then

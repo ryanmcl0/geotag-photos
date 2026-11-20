@@ -318,6 +318,14 @@
 .rvw-fixed { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 2px; padding: 6px 10px; border-left: 3px solid #8fd18f; background: #1d231d; border-radius: 6px; }
 .rvw-fixed .pq-status { margin: 0; overflow-wrap: anywhere; }
 .reel-chip.rvw-fixchip:not(.active) { border-color: #8fd18f; color: #8fd18f; }
+/* who edited the reel (AI-edited / Machine-only): the badge before the title, and the chips that filter by it */
+.rvw-made { display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; vertical-align: 2px; white-space: nowrap; }
+.rvw-made-ai { background: #1c2a40; color: #9cc3ff; border: 1px solid #9cc3ff; }
+.rvw-made-machine { background: #3a2d14; color: #ffcf7a; border: 1px solid #ffcf7a; }
+.pq-title .rvw-made { font-size: 10px; padding: 1px 6px; vertical-align: 1px; }
+.reel-chip.rvw-madechip-ai:not(.active) { border-color: #9cc3ff; color: #9cc3ff; }
+.reel-chip.rvw-madechip-machine:not(.active) { border-color: #ffcf7a; color: #ffcf7a; }
+.rvw-pair { color: #d8d8d8; font-weight: 600; }
 .rvw-slim { display: flex; align-items: center; gap: 12px; }
 .rvw-thumb { width: 34px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 4px; flex: none; opacity: .7; }
 .rvw-slim-text { flex: 1; min-width: 0; }

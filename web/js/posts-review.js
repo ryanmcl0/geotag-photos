@@ -104,6 +104,36 @@ window.PostsReview = (function () {
         return m ? m[1] : (r.trip || 'Other');
     }
     const isVlog = r => r.kind === 'vlog_cut';
+    // who edited the reel, where the reel list says so (the video project's reel_site.py, a folder's
+    // reel_labels.json): 'ai' | 'machine' (owner 2026-11-20: "make it clear on my posts review page which ones
+    // these are and ensure they are categorised"); a pair = the reels of one folder to compare with each other
+    const MADE = { ai: 'AI-edited', machine: 'Machine-only' };
+    const madeOf = r => (MADE[r.made] ? r.made : null);
+    const pairKey = r => (r.pair ? `${tripName(r)}|${r.pair}` : null);
+    // the title with the "AI-edited" / "Machine-only" badge in front of it
+    function titleEl(cls, r) {
+        const t = el('div', cls);
+        const m = madeOf(r);
+        if (m) t.appendChild(el('span', 'rvw-made rvw-made-' + m, r.made_label || MADE[m]));
+        t.appendChild(document.createTextNode(r.title || r.id));
+        return t;
+    }
+    // a pair's reels next to each other, at the place of the first of them; the AI-edited one first, then by title
+    function pairUp(reels) {
+        const groups = new Map();
+        reels.forEach(r => { const k = pairKey(r); if (k) groups.set(k, (groups.get(k) || []).concat([r])); });
+        const out = [];
+        const done = new Set();
+        reels.forEach(r => {
+            const k = pairKey(r);
+            if (!k) { out.push(r); return; }
+            if (done.has(k)) return;
+            done.add(k);
+            out.push(...groups.get(k).slice().sort((a, b) => (madeOf(a) === 'ai' ? 0 : 1) - (madeOf(b) === 'ai' ? 0 : 1) ||
+                String(a.title || a.id).localeCompare(String(b.title || b.id))));
+        });
+        return out;
+    }
     const dayKey = r => `${tripName(r)}|${r.day || 0}`;
     function dayLabel(k, oneTrip) {
         const [t, d] = k.split('|');
@@ -213,9 +243,9 @@ window.PostsReview = (function () {
     // the fixed ones first (latest fix first), then newest first
     function pending(doc, decide) {
         decide = decide || decision;
-        return ((doc && doc.reels) || []).filter(r => r.path && !decide(r)).sort((a, b) =>
+        return pairUp(((doc && doc.reels) || []).filter(r => r.path && !decide(r)).sort((a, b) =>
             (isFixed(b) - isFixed(a)) || (isFixed(a) && fixTime(fixes[b.id]).localeCompare(fixTime(fixes[a.id]))) ||
-            newestFirst(a, b));
+            newestFirst(a, b)));
     }
 
     // "Your note: …" / "Fixed: …" (or, carried from another reel's note, "Changed after your note on …" / "What
@@ -294,9 +324,10 @@ window.PostsReview = (function () {
         box.appendChild(row.video);
         full.appendChild(box);
         const body = el('div', 'rvw-body');
-        body.appendChild(el('div', 'rvw-title', r.title || r.id));
+        body.appendChild(titleEl('rvw-title', r));
         const meta = [tripName(r), r.day_name || (r.day ? `Day ${r.day}` : 'Whole trip'), r.kind_label, r.aspect,
             r.dur ? ReelsSite.fmtDur(r.dur) : null].filter(Boolean);
+        if (r.pair) body.appendChild(el('div', 'reel-meta rvw-pair', `Compare pair: ${r.pair}`));
         body.appendChild(el('div', 'reel-meta', meta.join(' · ')));
         if (r.song) body.appendChild(el('div', 'reel-meta', '♪ ' + r.song));
         if (r.places && r.places.length && r.places_from !== 'day') {
@@ -590,10 +621,19 @@ window.PostsReview = (function () {
         const vl = inTrip.filter(isVlog);
         typeEl.replaceChildren();
         const fx = inTrip.filter(isFixed);
+        const made = k => inTrip.filter(r => madeOf(r) === k).length;
+        // a chip the list has nothing for is left out (Fixed, AI-edited, Machine-only), unless it is the one picked
+        const has = { fixed: fx.length, ai: made('ai'), machine: made('machine') };
         [['all', `All reels (${inTrip.length})`], ['fixed', `Fixed, to recheck (${fx.length})`],
-            ['vlog', `Vlog reels by day (${vl.length})`]].filter(([k]) => k !== 'fixed' || fx.length || kindSel === 'fixed').forEach(([k, label]) => {
+            ['ai', `${MADE.ai} (${has.ai})`], ['machine', `${MADE.machine} (${has.machine})`],
+            ['vlog', `Vlog reels by day (${vl.length})`]].filter(([k]) => !(k in has) || has[k] || kindSel === k).forEach(([k, label]) => {
             const c = el('button', 'reel-chip' + (k === kindSel ? ' active' : ''), label);
             c.type = 'button';
+            if (MADE[k]) {
+                c.classList.add('rvw-madechip-' + k);
+                c.title = k === 'ai' ? 'Reels an AI editor cut by eye (it chose the shots, the order and the song)'
+                    : 'Reels the script put together by its rules, with no AI judgement';
+            }
             if (k === 'fixed') {
                 c.classList.add('rvw-fixchip');
                 c.title = 'The reels the reel builders fixed after your Shortlist note (or changed after a note on another reel): check them again';
@@ -659,6 +699,7 @@ window.PostsReview = (function () {
         const all = pending(reelsDoc);
         let here = trip === 'all' ? all : all.filter(r => tripName(r) === trip);
         if (kindSel === 'fixed') here = here.filter(isFixed);
+        if (MADE[kindSel]) here = here.filter(r => madeOf(r) === kindSel);
         if (kindSel === 'vlog') {
             here = here.filter(isVlog).sort(byDay);
             if (vday !== 'all') here = here.filter(r => dayKey(r) === vday);
@@ -675,6 +716,7 @@ window.PostsReview = (function () {
         listEl.replaceChildren();
         if (!list.length) {
             listEl.appendChild(el('p', 'reels-empty', kindSel === 'fixed' ? 'No fixed reels left to recheck' +
+                (trip === 'all' ? '.' : ' from this trip.') : MADE[kindSel] ? `No ${MADE[kindSel]} reels left to review` +
                 (trip === 'all' ? '.' : ' from this trip.') : trip === 'all'
                 ? 'Nothing to review: every reel has been posted, queued, shortlisted or rejected.'
                 : 'Nothing to review from this trip.'));
@@ -796,9 +838,9 @@ window.PostsReview = (function () {
             top.appendChild(img);
         }
         const txt = el('div', 'rvw-slim-text');
-        txt.appendChild(el('div', 'pq-title', r.title || r.id));
+        txt.appendChild(titleEl('pq-title', r));
         const meta = [tripName(r), r.day_name || (r.day ? `Day ${r.day}` : 'Whole trip'), r.kind_label, r.aspect,
-            r.dur ? ReelsSite.fmtDur(r.dur) : null, fmtJudged(d)].filter(Boolean);
+            r.pair ? `Compare pair: ${r.pair}` : null, r.dur ? ReelsSite.fmtDur(r.dur) : null, fmtJudged(d)].filter(Boolean);
         txt.appendChild(el('div', 'reel-meta', meta.join(' · ')));
         const p = el('div', 'pq-path', r.path);
         p.title = r.path;
@@ -1080,5 +1122,5 @@ window.PostsReview = (function () {
     function setDoc(doc) { reelsDoc = doc; loadNotes(); loadRatings(); }
 
     return { panel, reviewedPanel, agentText, agentNew, count, reviewedCount, setDoc, pending, reviewed, judgedAt, tripName, newestFirst,
-        takeNotes, takeRatings, decision };
+        takeNotes, takeRatings, decision, pairUp, madeOf };
 })();

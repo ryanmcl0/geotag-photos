@@ -74,6 +74,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
             window.ReelsSite = { state: () => ({ queue: [], posted: input.posted || {}, captions: {} }) };
             window.PostsReview.setDoc(input.reels);
             out.pending = window.PostsReview.pending(input.reels).map(r => r.id);
+            out.made = window.PostsReview.pending(input.reels).map(r => window.PostsReview.madeOf(r));
             out.reviewCount = window.PostsReview.count();
             out.tripNames = input.reels.reels.map(r => window.PostsReview.tripName(r));
             if (input.feedback) {
@@ -219,6 +220,26 @@ class ReelsTab(unittest.TestCase):
         self.assertEqual(out["tripNames"][:3], ["Trip A", "Trip A", "Trip B"])
         self.assertEqual(out["tripNames"][6], "tc")
         self.assertEqual(out["counts"], {"loaded": True, "queue": 1, "shortlist": 1, "rejected": 1})
+
+    def test_pairs_stand_together_ai_first(self):
+        """Reels the reel list marks as a pair (the same folder and pair name) are listed next to each other, at the
+        place of the first of them, the AI-edited one first; the others keep their order (newest first)."""
+        sfc = "/Volumes/Crucial X9/Short Form Content"
+        new = f"{sfc}/New (AI vs machine)"
+        reels = {"reels": [
+            {"id": "mach_canyon", "path": f"{new}/mach_canyon.mp4", "delivered": "2026-11-20", "made": "machine", "pair": "Canyon"},
+            {"id": "ai_plan", "path": f"{new}/ai_plan.mp4", "delivered": "2026-11-20", "made": "ai", "pair": "Plan"},
+            {"id": "ai_solo", "path": f"{new}/ai_solo.mp4", "delivered": "2026-11-20", "made": "ai"},
+            {"id": "ai_canyon", "path": f"{new}/ai_canyon.mp4", "delivered": "2026-11-20", "made": "ai", "pair": "Canyon"},
+            {"id": "mach_plan", "path": f"{new}/mach_plan.mp4", "delivered": "2026-11-20", "made": "machine", "pair": "Plan"},
+            {"id": "old", "path": f"{sfc}/Trip A/1 Days/old.mp4", "delivered": "2026-11-01", "pair": "Canyon"},
+            {"id": "newer", "path": f"{sfc}/Trip A/1 Days/newer.mp4", "delivered": "2026-11-21", "made": "robot"},
+        ]}
+        out = self.run_js(["review-kit.js", "posts-queue.js", "posts-review.js"], {
+            "posts": {"version": 3, "posts": []}, "reels": reels, "paths": [r["path"] for r in reels["reels"]]})
+        # by id: ai_canyon, ai_plan, ai_solo, mach_canyon, mach_plan; each pair gathers where its first reel stands
+        self.assertEqual(out["pending"], ["newer", "ai_canyon", "mach_canyon", "ai_plan", "mach_plan", "ai_solo", "old"])
+        self.assertEqual(out["made"], [None, "ai", "machine", "ai", "machine", "ai", None])
 
     def test_fixed_reels_come_back_to_review(self):
         """A shortlisted reel whose note the video project marked handled is undecided again (back to judge, first in

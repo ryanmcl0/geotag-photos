@@ -478,11 +478,20 @@ class PostDir(unittest.TestCase):
         (self.root / 'IG Trip' / 'manifest.json').write_text('{}')
         self.ig['posted'] = True
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(P.post_dir(self.root, self.ig, [self.ig]).name, 'Posted IG Trip')
-            self.assertTrue((self.root / 'Posted IG Trip' / 'manifest.json').exists())
+            self.assertEqual(P.post_dir(self.root, self.ig, [self.ig]), self.root / 'Posted' / 'IG Trip')
+            self.assertTrue((self.root / 'Posted' / 'IG Trip' / 'manifest.json').exists())
             self.ig['posted'] = False
             P.post_dir(self.root, self.ig, [self.ig])
         self.assertTrue((self.root / 'IG Trip' / 'manifest.json').exists())
+        self.assertFalse((self.root / 'Posted' / 'IG Trip').exists())
+
+    def test_old_flat_posted_folder_moves_into_posted_dir(self):
+        (self.root / 'Posted IG Trip').mkdir()
+        (self.root / 'Posted IG Trip' / 'manifest.json').write_text('{}')
+        self.ig['posted'] = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            P.post_dir(self.root, self.ig, [self.ig])
+        self.assertTrue((self.root / 'Posted' / 'IG Trip' / 'manifest.json').exists())
         self.assertFalse((self.root / 'Posted IG Trip').exists())
 
     def test_old_plain_folder_goes_straight_to_posted(self):
@@ -491,7 +500,7 @@ class PostDir(unittest.TestCase):
         self.ig['posted'] = True
         with contextlib.redirect_stdout(io.StringIO()):
             P.post_dir(self.root, self.ig, [self.ig])
-        self.assertTrue((self.root / 'Posted IG Trip' / 'manifest.json').exists())
+        self.assertTrue((self.root / 'Posted' / 'IG Trip' / 'manifest.json').exists())
 
 if __name__ == '__main__':
     unittest.main()

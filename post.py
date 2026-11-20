@@ -4,9 +4,9 @@ Everything for working with post drafts. Always takes a subcommand:
 
   ./post.py serve     local site + phone photos, kept in sync with the remote
   ./post.py pull      pull the drafts from the remote and copy their files
-                      into "IG <name>" or "XHS <name>" by platform, with
-                      "Posted " in front once marked posted (every pull
-                      renames all folders to match, even a one-post pull)
+                      into "IG <name>" or "XHS <name>" by platform, moved
+                      into the Posted/ subfolder once marked posted (every
+                      pull moves all folders to match, even a one-post pull)
                       (plus a location card beside every photo marked with
                       the map button, NN_<photo>_map.jpg — see tools/map_card.py)
                       A trip with a photo marked 🛣 gets one route card
@@ -715,21 +715,25 @@ def sanitize(name):
 
 
 
+POSTED_SUBDIR = 'Posted'   # posted drafts' folders live in <root>/Posted/
+
+
 def post_dir(root, post, all_posts, move=True, quiet=False):
-    """<root>/IG <name> or <root>/XHS <name>, with "Posted " in front once the
+    """<root>/IG <name> or <root>/XHS <name>, or <root>/Posted/<that> once the
     draft is marked posted on the site. The platform prefix keeps an
     Instagram draft and its Xiaohongshu copy (same name) out of each other's
     folder. An existing folder under another of the draft's names is renamed
     to fit, so its re-edits and pull state carry over: the same draft
-    before/after being marked posted, or one pulled before prefixes (plain
+    before/after being marked posted (including the older flat
+    "Posted <plat> <name>" folders), or one pulled before prefixes (plain
     <name>), which goes to the IG draft of that name, or the XHS one when
     there is no IG draft; any other draft starts fresh."""
     name = sanitize(post['name'])
     plat = f"{'XHS' if post.get('platform') == 'xhs' else 'IG'} {name}"
-    new = root / (f'Posted {plat}' if post.get('posted') else plat)
+    new = (root / POSTED_SUBDIR / plat) if post.get('posted') else (root / plat)
     if new.exists():
         return new
-    olds = [root / plat, root / f'Posted {plat}']
+    olds = [root / plat, root / POSTED_SUBDIR / plat, root / f'Posted {plat}']
     same = [q for q in all_posts if sanitize(q['name']) == name]
     heir = next((q for q in same if q.get('platform') != 'xhs'), same[0] if same else None)
     if heir is post:
@@ -740,12 +744,13 @@ def post_dir(root, post, all_posts, move=True, quiet=False):
         if quiet:
             break
         if move:
+            new.parent.mkdir(exist_ok=True)
             old.rename(new)
             if old.name == name:
                 (new / f'{name}.lrsmcol').unlink(missing_ok=True)   # rewritten under the new name
-            print(f'   ↷ {old.name}/ renamed to {new.name}/')
+            print(f'   ↷ {old.relative_to(root)}/ moved to {new.relative_to(root)}/')
         else:
-            print(f'   ↷ {old.name}/ will be renamed to {new.name}/')
+            print(f'   ↷ {old.relative_to(root)}/ will be moved to {new.relative_to(root)}/')
         break
     return new
 
@@ -2233,7 +2238,7 @@ def cmd_backfill(args):
     if not root.exists():
         sys.exit(f'⚠️  {root} is not available. Is the RYAN drive mounted?')
     cands, blurred_reedits, stamped, found = {}, [], 0, []
-    for man in sorted(root.glob('*/manifest.json')):
+    for man in sorted([*root.glob('*/manifest.json'), *root.glob(f'{POSTED_SUBDIR}/*/manifest.json')]):
         folder = man.parent
         try:
             m = json.loads(man.read_text())
@@ -3198,7 +3203,7 @@ def cmd_ig(args):
                      f"; the live site gets it with the next sync ({st.get('message', '')})."))
         else:
             print('✓ Marked posted on the live site; the localhost Posts page picks it up when it next syncs.')
-        print('   The next ./post.py pull renames the folder "Posted …".')
+        print('   The next ./post.py pull moves the folder into Posted/.')
     except Exception as e:                                      # noqa: BLE001 — the post itself is out
         print(f'⚠️  Posted, but the Posted mark was not saved ({e}): tick Posted on the Posts page.')
 

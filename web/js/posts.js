@@ -120,7 +120,8 @@ window.Posts = (function () {
     // ---------- Hashtag suggestions (Xiaohongshu cards, filled in automatically) ----------
     // A Xiaohongshu draft's caption gets its tags once, by itself, as soon as it
     // has a caption and photos (autoFillTags); post.tags_suggested then keeps
-    // tags taken out by hand from coming back.
+    // tags taken out by hand from coming back. The card's "# Hashtags" button
+    // appends them on demand (appendTags). #sonyalpha is always one of them.
     // Instagram capped posts at 5 hashtags in Dec 2025 (tools/instagram_post.py
     // HASHTAG_SOFT), so it only ever fills a caption up to 5. Place tags
     // come from the site's own place data for the draft's photos: each photo's
@@ -144,9 +145,9 @@ window.Posts = (function () {
     /** The tags to append to `caption` (pure). places: one {country, region}
      *  per photo, either may be missing; cfg: {tags, by_country}; drone: true /
      *  false when the photo files tell, null when unknown (drone tags then stay
-     *  in their place); sony: a Sony camera file (_RM…) is in it. Order: the
-     *  most common country, its most common region (at most 2 place tags),
-     *  cfg.sony when sony, that country's extras, the theme list; never one
+     *  in their place); sony: add cfg.sony (the callers always do). Order:
+     *  cfg.sony, the most common country, its most common region (at most 2
+     *  place tags), that country's extras, the theme list; never one
      *  already in the caption, never past 5 hashtags in all. */
     function suggestHashtags(caption, places, cfg, drone, sony) {
         const have = new Set((caption.match(TAG_RE) || []).map(t => t.toLowerCase()));
@@ -162,9 +163,9 @@ window.Posts = (function () {
             const tag = hashTag(t);
             if (tag.length > 1 && !have.has(tag) && !out.includes(tag)) out.push(tag);
         };
+        if (sony) (cfg.sony || DEFAULT_HASHTAGS.sony).forEach(add);   // first, so the cut to 5 keeps it
         if (country) add(country);
         if (region && hashTag(region) !== hashTag(country)) add(region);
-        if (sony) (cfg.sony || DEFAULT_HASHTAGS.sony).forEach(add);
         if (country) ((cfg.by_country || {})[hashTag(country).slice(1)] || []).forEach(add);
         (cfg.tags || []).forEach(t => { if (!(drone === false && /drone/i.test(t))) add(t); });
         return out.slice(0, Math.max(0, HASHTAG_SOFT - have.size));
@@ -214,34 +215,42 @@ window.Posts = (function () {
         return hashtagsP;
     }
 
+    /** Append the suggested hashtags to `caption` (the textarea) and save it.
+     *  #sonyalpha (cfg.sony) is always one of them. Returns how many were added. */
+    async function appendTags(post, caption, M) {
+        const [places, cfg] = await Promise.all([draftPlaces(post), hashtagConfig()]);
+        const photos = post.photos || [];
+        // Drone files keep DJI's name (DJI_<date>_<n>_D...)
+        const drone = photos.length ? photos.some(r => /^DJI_/i.test(r.id)) : null;
+        const cur = caption.value.trim();
+        const add = suggestHashtags(cur, places, cfg, drone, true);
+        let next = cur;
+        if (add.length) {
+            const last = cur.split('\n').pop();
+            next = !cur ? add.join(' ')
+                : cur + (last.replace(TAG_RE, '').trim() ? '\n\n' : ' ') + add.join(' ');
+            caption.value = next;
+            fitCaption(caption);
+        }
+        M(posts => {
+            const p = posts.find(x => x.id === post.id);
+            if (!p) return;
+            if (add.length && (p.caption || '').trim() === cur) p.caption = next;
+            p.tags_suggested = true;
+        });
+        return add.length;
+    }
+
     /** Once per unposted Xiaohongshu draft: append the suggested hashtags to its
      *  caption as soon as it has a caption and photos, and remember that it was
-     *  done (post.tags_suggested), so tags removed by hand stay removed. */
+     *  done (post.tags_suggested), so tags removed by hand stay removed. The
+     *  "# Hashtags" button on the card does the same on demand, any time. */
     async function autoFillTags(post, caption, M) {
         const media = (post.photos || []).length + (post.phone || []).length;
         if (post.posted || post.tags_suggested || !caption.value.trim() || !media) return;
         post.tags_suggested = true;               // no second run while this one saves
         try {
-            const [places, cfg] = await Promise.all([draftPlaces(post), hashtagConfig()]);
-            const photos = post.photos || [];
-            // Drone files keep DJI's name (DJI_<date>_<n>_D...); Sony files are _RM<n>
-            const drone = photos.length ? photos.some(r => /^DJI_/i.test(r.id)) : null;
-            const sony = photos.some(r => /(^|_)RM\d/i.test(r.id));
-            const cur = caption.value.trim();
-            const add = suggestHashtags(cur, places, cfg, drone, sony);
-            let next = cur;
-            if (add.length) {
-                const last = cur.split('\n').pop();
-                next = cur + (last.replace(TAG_RE, '').trim() ? '\n\n' : ' ') + add.join(' ');
-                caption.value = next;
-                fitCaption(caption);
-            }
-            M(posts => {
-                const p = posts.find(x => x.id === post.id);
-                if (!p) return;
-                if (add.length && (p.caption || '').trim() === cur) p.caption = next;
-                p.tags_suggested = true;
-            });
+            await appendTags(post, caption, M);
         } catch (e) {
             delete post.tags_suggested;           // try again next time
         }
@@ -2241,6 +2250,25 @@ window.Posts = (function () {
                 row.className = 'posts-meta-row';
                 autoFillTags(post, caption, M);
                 caption.addEventListener('change', () => autoFillTags(post, caption, M));
+                if (!post.posted) {
+                    const tagBtn = document.createElement('button');
+                    tagBtn.type = 'button';
+                    tagBtn.className = 'posts-delete posts-tags-btn';
+                    tagBtn.textContent = '# Hashtags';
+                    tagBtn.title = 'Append suggested hashtags to the caption (#sonyalpha always, then the ' +
+                        "photos' country and region, then theme tags; up to 5 in all, none already there)";
+                    tagBtn.addEventListener('click', async () => {
+                        tagBtn.disabled = true;
+                        try {
+                            const n = await appendTags(post, caption, M);
+                            tagBtn.textContent = n ? `+${n} hashtag${n === 1 ? '' : 's'}` : 'Already 5 tags';
+                        } catch (e) {
+                            tagBtn.textContent = 'Hashtags failed';
+                        }
+                        setTimeout(() => { tagBtn.textContent = '# Hashtags'; tagBtn.disabled = false; }, 1800);
+                    });
+                    row.append(tagBtn);
+                }
                 // Localhost only (it runs ./post.py ig on this Mac): dry run, then post on a yes.
                 if (SYNC_URL && !post.posted) {
                     const igBtn = document.createElement('button');

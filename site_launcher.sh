@@ -32,7 +32,10 @@ sync_posts() {
     say "posts synced"
   else
     say "posts sync not running — starting it"
-    ( cd "$REPO" && nohup ./post.py mirror --port "$PORT" >>local_browse/serve_site.log 2>&1 & ) </dev/null >/dev/null 2>&1
+    # the venv: the system python3 may lack numpy/OpenCV (the place-name lookups need them)
+    local py=python3
+    [ -x "$REPO/venv/bin/python" ] && "$REPO/venv/bin/python" -c 'import numpy' 2>/dev/null && py="$REPO/venv/bin/python"
+    ( cd "$REPO" && nohup "$py" post.py mirror --port "$PORT" >>local_browse/serve_site.log 2>&1 & ) </dev/null >/dev/null 2>&1
   fi
 }
 # Every background helper below is cut off from the launcher's stdin/stdout/stderr (the trailing
@@ -57,7 +60,53 @@ vlog_dashboard() {
   ( cd "$ve" && nohup .venv/bin/python tools/vlog/status.py serve "$trip" --port 8770 >>"$REPO/local_browse/serve_site.log" 2>&1 & ) </dev/null >/dev/null 2>&1
   say "vlog dashboard started"
 }
-if curl -s -o /dev/null --max-time 2 "$URL"; then
+# Only one launcher at a time: an older copy still waiting (on a server that
+# never came up, say) would race this one. It is ours to stop.
+mine=" $$ "; a=$PPID
+while [ -n "$a" ] && [ "$a" -gt 1 ]; do mine+="$a "; a=$(ps -o ppid= -p "$a" | tr -d ' '); done
+for pid in $(pgrep -f 'site_launcher\.sh'); do
+  case "$mine" in *" $pid "*) continue ;; esac   # this launch (and the app's shell running it)
+  kill "$pid" 2>/dev/null && say "stopped an older launcher ($pid)"
+done
+
+# A stuck server: something still holds the port but no longer answers (seen
+# after days of uptime). serve.sh can't start while it does, so stop it, the
+# whole tree that started it (serve.sh, npm exec, wrangler, workerd) and the
+# posts mirror, then cold-start below. Only our own dev server is stopped:
+# anything else on the port is named in a notification instead.
+answers() { curl -s -o /dev/null --max-time "${1:-5}" "${URL}robots.txt"; }
+stop_tree() {   # TERM the pid and its dev-server ancestors, KILL what's left after 5 s
+  local pid=$1 pids=() cmd
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+    cmd=$(ps -o command= -p "$pid" 2>/dev/null) || break
+    case "$cmd" in
+      *workerd*|*wrangler*|*serve.sh*|*"npm exec"*) pids+=("$pid") ;;
+      *) break ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+  [ ${#pids[@]} -eq 0 ] && return 1
+  kill "${pids[@]}" 2>/dev/null
+  for _ in $(seq 1 10); do kill -0 "${pids[@]}" 2>/dev/null || return 0; sleep 0.5; done
+  kill -9 "${pids[@]}" 2>/dev/null
+  return 0
+}
+holder=$(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+if [ -n "$holder" ] && ! answers 5 && ! answers 5; then
+  what=$(ps -o command= -p "$holder" 2>/dev/null | cut -c1-120)
+  if stop_tree "$holder"; then
+    say "server on :$PORT stuck (pid $holder) — stopped it, restarting"
+    alert "The local server had frozen. Restarting it…"
+    pkill -f 'post.py mirror' 2>/dev/null
+    for _ in $(seq 1 10); do lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1 || break; sleep 0.5; done
+  else
+    say "port $PORT held by something else: $what"
+    alert "Port $PORT is in use by another program ($(basename "${what%% *}")). Quit it, then open Photo Map again."
+    exit 1
+  fi
+fi
+
+if answers 2; then
   sync_posts
   reels_helper
   vlog_dashboard
@@ -80,15 +129,18 @@ if ! { : >>local_browse/serve_site.log; } 2>>"$LOG"; then
   alert "No access to Documents — allow Photo Map (Local) in System Settings > Privacy & Security > Files & Folders"
   exit 1
 fi
-nohup ./serve.sh >>local_browse/serve_site.log 2>&1 &
-# wrangler takes a while on a cold start (bundling the middleware + Functions)
+nohup ./serve.sh >>local_browse/serve_site.log 2>&1 </dev/null &
+serve_pid=$!
+# wrangler takes a while on a cold start (bundling the middleware + Functions).
+# If serve.sh dies (port taken, wrangler error) stop waiting and say so at once.
 for _ in $(seq 1 120); do
   curl -s -o /dev/null --max-time 1 "$URL" && break
+  kill -0 "$serve_pid" 2>/dev/null || { say "serve.sh exited early"; break; }
   sleep 0.5
 done
 if ! curl -s -o /dev/null --max-time 2 "$URL"; then
   say "server did not start"
-  alert "Server did not start — see local_browse/serve_site.log"
+  alert "Server did not start. The log is opening: send it to Claude if it isn't obvious."
   open -a Console "$REPO/local_browse/serve_site.log" 2>/dev/null || open "$REPO/local_browse/serve_site.log"
   exit 1
 fi

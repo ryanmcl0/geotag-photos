@@ -2987,6 +2987,7 @@ window.Posts = (function () {
     // mirror, from the same rosters and place lists pull uses); anything typed is
     // saved on the photo as locText ("Name" or "Name / Region", "off" = none).
     const autoNames = {};          // "trip/id" -> [name, region] | 'pending' | 'missing'
+    let autoNamesError = '';       // why the sync could not work names out (it says, e.g. a missing package)
     const autoKey = ref => `${ref.trip}/${ref.id}`;
     const autoText = v => Array.isArray(v) && v[0] ? v[0] + (v[1] ? ' / ' + v[1] : '') : '';
     function fetchAutoNames(refs, onDone) {
@@ -2997,6 +2998,7 @@ window.Posts = (function () {
             .then(r => (r.ok ? r.json() : {}))
             .catch(() => ({}))
             .then(got => {
+                autoNamesError = got._error || '';
                 want.forEach(k => { autoNames[k] = got[k] || 'missing'; });
                 onDone();
             });
@@ -3071,7 +3073,8 @@ window.Posts = (function () {
             const [tn, tr] = typedOf(ref);
             nameIn.placeholder = !SYNC_URL ? 'automatic name (shown on the local site)'
                 : !auto && a !== 'missing' ? 'working out the automatic name…'
-                : !auto ? 'automatic name: restart the local site (the sync) to see it'
+                : !auto ? (autoNamesError ? 'automatic name unavailable: ' + autoNamesError
+                                          : 'automatic name: restart the local site (the sync) to see it')
                 : auto[0] ? auto[0] : 'no position on record: type a name';
             lineIn.placeholder = 'line under the name';
             // Filled in as it will print, ready to edit; a field being typed in is left alone.

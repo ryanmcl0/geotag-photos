@@ -1602,7 +1602,12 @@ def place_labels(keys):
     """{"trip/id": [name, region]} for the localhost Posts page: the place name pull would bake into each
     photo when nothing is typed for it ([null, null] when it has no position on record)."""
     sys.path.insert(0, str(ROOT / 'tools'))
-    import location_pin
+    try:
+        import location_pin
+    except ImportError as e:
+        # Say why instead of dropping the request (the page then reads it as "the sync isn't running").
+        print(f'⚠️  place names unavailable: {e} (run the sync with venv/bin/python)')
+        return {'_error': f'place names need {e.name}: this Python ({sys.executable}) lacks it'}
     out = {}
     for key in keys:
         trip, _, pid = key.partition('/')
@@ -3406,5 +3411,20 @@ def main():
     args.func(args)
 
 
+def use_venv():
+    """Re-run under the project venv when this Python lacks its packages (numpy, OpenCV: place names,
+    face blur, map cards). ./post.py's shebang is the system python3, which a Homebrew upgrade can leave
+    without them."""
+    venv_py = ROOT / 'venv' / 'bin' / 'python'
+    if os.environ.get('POST_PY_REEXEC') or not venv_py.exists():
+        return
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        os.environ['POST_PY_REEXEC'] = '1'      # never loop
+        os.execv(str(venv_py), [str(venv_py), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+
 if __name__ == '__main__':
+    use_venv()
     main()

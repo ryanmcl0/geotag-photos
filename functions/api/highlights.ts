@@ -98,6 +98,7 @@ export const onRequest: PagesFunction<{ PHOTOS_BUCKET: R2Bucket; CF_ALL_PASSWORD
         for (const ph of post.photos || []) {
             if (!ph || typeof ph.trip !== 'string' || typeof ph.id !== 'string') continue;
             if (ph.trip.startsWith('phone-')) continue;   // local-only library, never on R2
+            if (ph.trip === 'device') continue;           // owner-only upload (/api/uploads)
             const level = classify(ph.trip, ph.id);
             if (level === 'blocked') continue;
             if (level === 'private' && !unlocked) continue;

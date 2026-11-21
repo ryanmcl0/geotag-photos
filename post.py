@@ -990,8 +990,8 @@ STAGED = '.reedits_staged'   # clean exports of blur-flagged re-edits, awaiting 
 def _reedit_ok(ref, src, edited):
     """Whether a re-edit exported into a post folder may go back over its
     original in Edits. Warns about the refusals worth knowing about."""
-    if ref['trip'].startswith('phone-'):
-        return False   # phone originals are backups, never edits
+    if ref['trip'].startswith('phone-') or ref['trip'] == 'device':
+        return False   # phone originals are backups, device uploads have no Edits file
     if _magic(edited) != _magic(src):
         print(f'   ⚠️  {edited.name}: not the same file type as {src.name}, '
               'Edits left alone')
@@ -1795,8 +1795,57 @@ def resolve_phone(ref):
     return (src, None) if src.exists() else (None, f'missing: {src}')
 
 
+# ---- photos added to a draft from a device (functions/api/uploads) ----
+# {trip: 'device', id}: the original lives in R2 under _uploads/<id>/original,
+# reached through /api/uploads. Uploads never change, so one download is kept.
+DEVICE_CACHE = ROOT / '.cache' / 'device_uploads'
+DEVICE_PARTS = ('thumbnails', 'display', 'original')
+_device_bases = []      # where pull looks, first hit wins (set by cmd_pull)
+
+
+def upload_request(base, env, uid, part, method='GET', data=None, headers=None, timeout=120):
+    """One /api/uploads call → (bytes, response headers). Raises HTTPError."""
+    req = urllib.request.Request(
+        f'{base}/api/uploads/{uid}/{part}', method=method, data=data,
+        headers={'Cookie': cookie_header(env), 'User-Agent': 'post-cli/1.0', **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(), r.headers
+
+
+def resolve_device(ref):
+    """Local copy of a device-added photo's original, downloading it once."""
+    uid = ref.get('id') or ''
+    if not re.fullmatch(r'd[0-9a-z]{8,40}', uid):
+        return None, 'bad device upload id'
+    folder = DEVICE_CACHE / uid
+    have = [f for f in folder.iterdir() if not f.name.startswith('.')] if folder.is_dir() else []
+    if have:
+        return have[0], None
+    env = load_env()
+    bases = _device_bases or [remote_base(env), LOCAL_BASE]
+    last = 'not found on the live site or localhost'
+    for base in dict.fromkeys(bases):
+        try:
+            data, hdrs = upload_request(base, env, uid, 'original')
+        except urllib.error.HTTPError as e:
+            last = f'HTTP {e.code} from {base}'
+            continue
+        except (urllib.error.URLError, OSError) as e:
+            last = f'{base} not reachable ({e})'
+            continue
+        name = Path(hdrs.get('X-Filename') or '').name or f'{uid}.jpg'
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / f'.{name}.part'
+        tmp.write_bytes(data)
+        os.replace(tmp, folder / name)
+        return folder / name, None
+    return None, last
+
+
 def resolve_wait(ref, hint=None):
     """Waitlist refs are carousel or phone photos; pick the right resolver."""
+    if ref['trip'] == 'device':
+        return resolve_device(ref)
     if ref['trip'].startswith('phone-'):
         return resolve_phone(ref)
     return resolve_source(ref['trip'], ref['id'], hint)
@@ -1921,6 +1970,8 @@ def cmd_pull(args):
         sys.exit('❌ --location needs the post: ./post.py pull <#> --location <photo> "Name"')
 
     print(f'⇣ Fetching drafts from {url} ...')
+    # Device-added photos come from the side being pulled first, then the other.
+    _device_bases[:] = [url.split('/api/posts')[0], remote_base(env), LOCAL_BASE]
     doc = fetch_posts(url, env)
     posts = doc.get('posts', [])
     if args.num is not None:
@@ -2254,7 +2305,7 @@ def cmd_backfill(args):
             hashes = state.setdefault('hashes', {})
             dirty = False
             for r in rows or []:
-                if r['trip'].startswith('phone-') or not r.get('source'):
+                if r['trip'].startswith('phone-') or r['trip'] == 'device' or not r.get('source'):
                     continue
                 src = Path(r['source'])
                 # by name inside THIS folder: a copied post folder keeps the
@@ -2597,6 +2648,41 @@ class RemoteMirror:
         print(f"   {arrow} the live site: {which} ({len(posts)} posts)")
         return what
 
+    def _sync_uploads(self):
+        """Device-added photos (/api/uploads) live in whichever R2 the page that added them talked to: the
+        dev server's simulated one or the live bucket. Copy each one the drafts use to the side missing it,
+        so it shows on both pages and pulls from either. Checked once per upload per run."""
+        done = self.__dict__.setdefault('uploads_ok', set())
+        ids = set()
+        for w in SETS:
+            for post in (self.base.get(w) or {}).get('posts', []):
+                for key in ('photos', 'waitlist', 'history'):
+                    ids.update(r.get('id') for r in post.get(key) or [] if r.get('trip') == 'device' and r.get('id'))
+        for uid in sorted(ids - done):
+            sides = {}
+            for name, base in (('local', self.local), ('live', self.remote)):
+                try:
+                    upload_request(base, self.env, uid, 'original', method='HEAD', timeout=30)
+                    sides[name] = True
+                except urllib.error.HTTPError as e:
+                    if e.code != 404:
+                        raise
+                    sides[name] = False
+            if all(sides.values()):
+                done.add(uid)
+                continue
+            if not any(sides.values()):
+                continue                         # still uploading, or gone: try again next tick
+            src, dst = (self.local, self.remote) if sides['local'] else (self.remote, self.local)
+            for part in DEVICE_PARTS:            # original last: its presence means complete
+                data, hdrs = upload_request(src, self.env, uid, part)
+                extra = {'Content-Type': hdrs.get('Content-Type') or 'application/octet-stream'}
+                if hdrs.get('X-Filename'):
+                    extra['X-Filename'] = hdrs['X-Filename']
+                upload_request(dst, self.env, uid, part, method='PUT', data=data, headers=extra, timeout=300)
+            done.add(uid)
+            print(f"   {'⇡ to' if src == self.local else '⇣ from'} the live site: device photo {uid}")
+
     def sync(self, force_remote=False):
         """Sync both sets now (thread-safe). Returns the status dict."""
         with self.lock:
@@ -2611,6 +2697,7 @@ class RemoteMirror:
                 return self.status
             try:
                 results = {w: self._sync_set(w) for w in SETS}
+                self._sync_uploads()
                 self.last_remote = time.time()
                 self.status.update(state='in_sync', last_sync=time.strftime('%Y-%m-%dT%H:%M:%S'),
                                    message='In sync with the live site', results=results)

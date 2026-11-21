@@ -186,6 +186,8 @@ window.Gallery = (function () {
   function photoUrl(ref, kind /* 'thumbnails' | 'display' */) {
     // "phone-" trips live in the local-only phone library (web/phone/, never
     // deployed); route them there on any host so mixed posts render locally.
+    // "device": a photo added to a post draft from a device (functions/api/uploads).
+    if (ref.trip === 'device') return `/api/uploads/${encodeURIComponent(ref.id)}/${kind}`;
     const base = ref.trip.startsWith('phone-') ? '/phone/trips' : PHOTO_BASE;
     return `${base}/${ref.trip}/${kind}/${encodeURIComponent(ref.id)}.webp`;
   }

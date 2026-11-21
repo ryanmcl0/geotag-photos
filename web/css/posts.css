@@ -272,6 +272,12 @@ body.posts-selecting .photo-cell.posts-in-target::after {
   padding: 6px 12px; font-size: 12px; cursor: pointer;
 }
 .posts-delete:hover { color: #f87171; border-color: #f87171; }
+.posts-device-btn {
+  background: none; border: 1px solid #2f6f4f; color: #7ad3a4; border-radius: 6px;
+  padding: 4px 10px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.posts-device-btn:hover { color: #fff; border-color: #4ade80; }
+.posts-device-btn:disabled { opacity: .6; cursor: progress; }
 
 .posts-strip { display: flex; flex-wrap: wrap; gap: 8px; }
 .posts-thumb { position: relative; width: 132px; height: 132px; }

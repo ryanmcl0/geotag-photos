@@ -46,6 +46,10 @@ fi
 # exist on this laptop — and then pushes local edits back up every few seconds.
 # That used to happen only when the server was started through ./post.py serve.
 # Set POSTS_MIRROR=0 to skip it (./post.py serve does, since it mirrors itself).
+# The project venv has the packages post.py's helpers need (numpy, OpenCV for the
+# place names and face blur); the system python3 may not, e.g. after a Homebrew upgrade.
+PY=python3
+[ -x venv/bin/python ] && venv/bin/python -c 'import numpy' 2>/dev/null && PY=venv/bin/python
 MIRROR_PID=""
 WRANGLER_PID=""
 REELS_PID=""
@@ -81,7 +85,7 @@ shutdown() {
 trap shutdown EXIT INT TERM
 
 if [ "${POSTS_MIRROR:-1}" != "0" ] && [ -n "$CF_POSTS_PASSWORD" ] && [ -n "$CF_PAGES_PROJECT" ]; then
-    ./post.py mirror --port "$PORT" &
+    "$PY" post.py mirror --port "$PORT" &
     MIRROR_PID=$!
 elif [ "${POSTS_MIRROR:-1}" != "0" ]; then
     echo "⚠️  posts not synced: CF_POSTS_PASSWORD / CF_PAGES_PROJECT missing from .env.deploy"

@@ -603,6 +603,114 @@ window.Posts = (function () {
         return out;
     }
 
+    // ---------- Add from device ----------
+    // Photos picked from this computer or phone (exports never processed onto
+    // the site). Each goes up to functions/api/uploads as the original plus a
+    // display and a thumbnail WebP made here, and joins the carousel as
+    // {trip: 'device', id}; ./post.py pull downloads the original into the
+    // post folder like any other photo.
+    const isDeviceRef = ref => !!(ref && ref.trip === 'device');
+    const DEVICE_TYPES = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+        heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff', avif: 'image/avif',
+    };
+    const DEVICE_ACCEPT = Object.keys(DEVICE_TYPES).map(e => '.' + e).join(',') + ',image/*';
+    const DEVICE_MAX_MB = 95;
+
+    function webpOf(bmp, longest, quality) {
+        const scale = Math.min(1, longest / Math.max(bmp.width, bmp.height));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(bmp.width * scale));
+        c.height = Math.max(1, Math.round(bmp.height * scale));
+        const g = c.getContext('2d');
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(bmp, 0, 0, c.width, c.height);
+        return new Promise((ok, fail) => c.toBlob(
+            b => (b && b.type === 'image/webp' ? ok(b) : fail(new Error('this browser cannot make WebP'))),
+            'image/webp', quality));
+    }
+
+    async function putPart(id, part, body, type, name) {
+        const headers = { 'Content-Type': type };
+        if (name) headers['X-Filename'] = name;
+        const r = await fetch(`/api/uploads/${id}/${part}`, { method: 'PUT', headers, body });
+        if (!r.ok) throw new Error(r.status === 413 ? 'too large' : `upload failed (${r.status})`);
+    }
+
+    /** One file → {trip: 'device', id, ar}, or throws with a short reason. */
+    async function uploadDeviceFile(file) {
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        const type = DEVICE_TYPES[ext] || (Object.values(DEVICE_TYPES).includes(file.type) ? file.type : null);
+        if (!type) throw new Error('not a photo');
+        if (file.size > DEVICE_MAX_MB * 1024 * 1024) throw new Error(`over ${DEVICE_MAX_MB} MB`);
+        let bmp;
+        try {
+            bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+        } catch (e) {
+            throw new Error(type === 'image/heic' || type === 'image/heif'
+                ? 'this browser cannot read HEIC (use Safari, or export a JPEG)' : 'could not read the image');
+        }
+        const ar = Math.round(bmp.width / bmp.height * 10000) / 10000;
+        const [display, thumb] = [await webpOf(bmp, 2160, 0.85), await webpOf(bmp, 400, 0.8)];
+        if (bmp.close) bmp.close();
+        const id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        // Header values must be plain ASCII; the server tidies the rest.
+        const name = file.name.replace(/[^\x20-\x7e]/g, '_');
+        await putPart(id, 'thumbnails', thumb, 'image/webp');
+        await putPart(id, 'display', display, 'image/webp');
+        await putPart(id, 'original', file, type, name);
+        return { trip: 'device', id, ar };
+    }
+
+    /** "＋ From device": pick files, upload them, add them to this draft. */
+    function addFromDevice(root, postId, btn) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.accept = DEVICE_ACCEPT;
+        input.addEventListener('change', async () => {
+            const post = doc && doc.posts.find(p => p.id === postId);
+            let files = [...(input.files || [])];
+            if (!post || !files.length) return;
+            const room = capOf(post) - countOf(post);
+            if (room <= 0) { toast(`${postLabel(post)} is full (${countOf(post)}/${capOf(post)})`); return; }
+            const skipped = Math.max(0, files.length - room);
+            files = files.slice(0, room);
+            btn.disabled = true;
+            const refs = [], failed = [];
+            try {
+                for (const [i, f] of files.entries()) {
+                    btn.textContent = `Uploading ${i + 1}/${files.length}...`;
+                    try {
+                        refs.push(await uploadDeviceFile(f));
+                    } catch (e) {
+                        failed.push(`${f.name}: ${e.message}`);
+                    }
+                }
+            } finally {
+                btn.disabled = false;
+                btn.textContent = DEVICE_LABEL;
+            }
+            if (failed.length) {
+                console.warn('[posts] not added from device:\n' + failed.join('\n'));
+                alert(`${failed.length} not added:\n\n${failed.join('\n')}`);
+            }
+            if (refs.length) addToPost(postId, refs, () => renderManager(root));
+            if (skipped) setTimeout(() => toast(`${skipped} left out: the post only had room for ${room}`), 2400);
+        });
+        input.click();
+    }
+    const DEVICE_LABEL = '＋ From device';
+    function deviceButton(root, post) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'posts-device-btn';
+        btn.textContent = DEVICE_LABEL;
+        btn.title = 'Add photos from this computer or phone (exports not on the site yet)';
+        btn.addEventListener('click', () => addFromDevice(root, post.id, btn));
+        return btn;
+    }
+
     function addRefsToPost(post, refs) {
         const cap = capOf(post);
         const xhs = platformOf(post) === 'xhs';
@@ -1056,7 +1164,7 @@ window.Posts = (function () {
             if (wait) wait.textContent = '⇩ Waitlist';
             rm.textContent = '✕ Remove';
             // Off the carousel, the actions don't apply: show where it went instead.
-            const phoneRef = isPhoneRef(ref);
+            const phoneRef = noPlace(ref);
             map.hidden = !inCarousel || phoneRef;
             loc.hidden = !inCarousel || phoneRef;
             route.hidden = !inCarousel || phoneRef;
@@ -2104,6 +2212,7 @@ window.Posts = (function () {
             });
             bar.appendChild(expand);
         }
+        if (set === 'main') bar.appendChild(deviceButton(root, post));
         bar.appendChild(del);
         // Local-only phone-library companion: shows phone photos taken around
         // the same time as this post's camera picks. No-op when the phone
@@ -2878,6 +2987,7 @@ window.Posts = (function () {
     // mirror, from the same rosters and place lists pull uses); anything typed is
     // saved on the photo as locText ("Name" or "Name / Region", "off" = none).
     const autoNames = {};          // "trip/id" -> [name, region] | 'pending' | 'missing'
+    let autoNamesError = '';       // why the sync could not work names out (it says, e.g. a missing package)
     const autoKey = ref => `${ref.trip}/${ref.id}`;
     const autoText = v => Array.isArray(v) && v[0] ? v[0] + (v[1] ? ' / ' + v[1] : '') : '';
     function fetchAutoNames(refs, onDone) {
@@ -2888,6 +2998,7 @@ window.Posts = (function () {
             .then(r => (r.ok ? r.json() : {}))
             .catch(() => ({}))
             .then(got => {
+                autoNamesError = got._error || '';
                 want.forEach(k => { autoNames[k] = got[k] || 'missing'; });
                 onDone();
             });
@@ -2962,7 +3073,8 @@ window.Posts = (function () {
             const [tn, tr] = typedOf(ref);
             nameIn.placeholder = !SYNC_URL ? 'automatic name (shown on the local site)'
                 : !auto && a !== 'missing' ? 'working out the automatic name…'
-                : !auto ? 'automatic name: restart the local site (the sync) to see it'
+                : !auto ? (autoNamesError ? 'automatic name unavailable: ' + autoNamesError
+                                          : 'automatic name: restart the local site (the sync) to see it')
                 : auto[0] ? auto[0] : 'no position on record: type a name';
             lineIn.placeholder = 'line under the name';
             // Filled in as it will print, ready to edit; a field being typed in is left alone.
@@ -3064,6 +3176,7 @@ window.Posts = (function () {
     }
 
     const isPhoneRef = ref => !!(ref && ref.trip && ref.trip.startsWith('phone-'));
+    const noPlace = ref => isPhoneRef(ref) || isDeviceRef(ref);
 
     /** Move a phone photo between the Phone section and the carousel of the
      *  same draft, marks kept. Into the carousel it goes on the end and counts
@@ -3417,10 +3530,11 @@ window.Posts = (function () {
             controls.insertBefore(frameBtn, rm);
             controls.classList.add('has-frame');
         }
-        // A phone photo moved into the carousel has no trip GPS or route on
-        // record, so the map, place-name and route marks are left off it.
+        // A phone photo moved into the carousel, or one added from a device, has
+        // no trip GPS or route on record, so the map, place-name and route marks
+        // are left off it.
         const phoneRef = isPhoneRef(ref);
-        if (!phoneRef) {
+        if (!noPlace(ref)) {
             controls.insertBefore(mapBtn, rm);
             controls.insertBefore(locBtn, rm);
             controls.insertBefore(routeBtn, rm);

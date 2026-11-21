@@ -176,7 +176,9 @@ PY
     done
     for p in /rooftopping /plans/ /videos; do expect "$V: $p" '302' -b "$J" "$B$p"; done
     expect "$V: /expeditions/" '404' -b "$J" "$B/expeditions/"
-    for p in /api/posts /api/people /api/source-index; do expect "$V: $p" '404' -b "$J" "$B$p"; done
+    for p in /api/posts /api/people /api/source-index /api/uploads/dtest0000000/thumbnails; do expect "$V: $p" '404' -b "$J" "$B$p"; done
+    expect "$V: upload PUT refused" '404' -b "$J" -X PUT -H 'Content-Type: image/webp' --data-binary x "$B/api/uploads/dtest0000000/thumbnails"
+    expect "$V: /photos/_uploads hidden" '404' -b "$J" "$B/photos/_uploads/dtest0000000/thumbnails"
     expect "$V: wrong all password" '401' -b "$J" -X POST -d password=wrong "$B/auth-all"
     expect "$V: wrong posts password" '404' -b "$J" -X POST -d password=wrong "$B/auth-posts"
 
@@ -190,15 +192,20 @@ PY
     expect "$M all: _state stays hidden" '404' -b "$J" "$(photo state)"
     expect "$M all: /rooftopping" '200' -b "$J" "$B/rooftopping"
     expect "$M all: /api/posts still owner-only" '404' -b "$J" "$B/api/posts"
+    expect "$M all: /api/uploads still owner-only" '404' -b "$J" "$B/api/uploads/dtest0000000/thumbnails"
     curl -s -o /dev/null -b "$J" -c "$J" -X POST -d tier=all "$B/auth-lock"
     expect "$M after lock: private trip" '404' -b "$J" "$(photo private_trip)"
 
     # Posts (owner).
     curl -s -o /dev/null -b "$J" -c "$J" -X POST --data-urlencode "password=$CF_POSTS_PASSWORD" "$B/auth-posts"
     expect "$M posts: /api/posts" '200' -b "$J" "$B/api/posts"
+    expect "$M posts: upload PUT" '200' -b "$J" -X PUT -H 'Content-Type: image/webp' --data-binary x "$B/api/uploads/dtest0000000/thumbnails"
+    expect "$M posts: upload GET" '200' -b "$J" "$B/api/uploads/dtest0000000/thumbnails"
+    expect "$M posts: upload bad type" '415' -b "$J" -X PUT -H 'Content-Type: text/html' --data-binary x "$B/api/uploads/dtest0000000/original"
     expect "$M posts: blocked stays hidden" '404' -b "$J" "$(photo blocked)"
     curl -s -o /dev/null -b "$J" -c "$J" -X POST -d tier=posts "$B/auth-lock"
     expect "$M after exit: /api/posts" '404' -b "$J" "$B/api/posts"
+    expect "$M after exit: /api/uploads" '404' -b "$J" "$B/api/uploads/dtest0000000/thumbnails"
 
     # Without the cookie key nobody can sign in, and a missing cookie never matches.
     stop; start no $g

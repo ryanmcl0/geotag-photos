@@ -54,6 +54,7 @@ window.PhoneCompanion = (function () {
         const byTrip = new Map();
         refs.forEach((ref, i) => {
             if (ref.trip.startsWith('phone-')) return;  // already a phone shot
+            if (ref.trip === 'device') return;          // added from a device: no manifest
             if (!byTrip.has(ref.trip)) byTrip.set(ref.trip, []);
             byTrip.get(ref.trip).push({ ref, order: i });
         });

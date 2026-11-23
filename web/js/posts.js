@@ -388,6 +388,68 @@ window.Posts = (function () {
         }
     }
 
+    // ---------- "Pull" (localhost Instagram-tab cards) ----------
+    // Runs ./post.py pull <#> through the sync server (post.py start_pull_job) and shows its output.
+    function pullDialog(post) {
+        const overlay = document.createElement('div');
+        overlay.className = 'posts-picker-overlay posts-ig-overlay';
+        const box = document.createElement('div');
+        box.className = 'posts-ig';
+        const h = document.createElement('h3');
+        h.textContent = `./post.py pull ${post.num}: ${post.name || ''}`;
+        const status = document.createElement('div');
+        status.className = 'posts-ig-status';
+        status.textContent = 'Starting…';
+        const out = document.createElement('pre');
+        out.className = 'posts-ig-out';
+        const btns = document.createElement('div');
+        btns.className = 'posts-ig-btns';
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'posts-ig-cancel';
+        closeBtn.textContent = 'Close';
+        btns.append(closeBtn);
+        box.append(h, status, out, btns);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        let closed = false;
+        const close = () => { closed = true; overlay.remove(); };
+        closeBtn.addEventListener('click', close);
+        overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+        const clean = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n')
+            .map(l => l.split('\r').filter(Boolean).pop() || '').join('\n');
+        (async () => {
+            let job;
+            try {
+                const r = await fetch(SYNC_URL + '/pull/start', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ num: post.num }),
+                });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+                job = j.job;
+            } catch (e) {
+                status.textContent = 'Could not start: ' + e.message +
+                    ' (the sync server runs with ./serve.sh or the desktop app)';
+                return;
+            }
+            status.textContent = 'Pulling… (it carries on if you close this)';
+            let st;
+            for (;;) {
+                await new Promise(res => setTimeout(res, 800));
+                if (closed) return;
+                try {
+                    st = await (await fetch(`${SYNC_URL}/pull/job?id=${job}`, { cache: 'no-store' })).json();
+                } catch (e) { continue; }
+                const atEnd = out.scrollTop + out.clientHeight >= out.scrollHeight - 20;
+                out.textContent = clean(st.output || '');
+                if (atEnd) out.scrollTop = out.scrollHeight;
+                if (st.done) break;
+            }
+            status.textContent = st.code === 0 ? 'Pulled ✓' : `Pull failed (exit ${st.code}): see below.`;
+        })();
+    }
+
     // Current-post chip inside the pill: shows which post "+ Post" / "Add"
     // target, with name and count; clicking it opens the post switcher.
     // Empty (hidden by CSS) until the posts doc has loaded.
@@ -2120,6 +2182,16 @@ window.Posts = (function () {
                     }).then(() => renderManager(root));
                 });
                 bar.appendChild(acct);
+                // Localhost only (it runs ./post.py pull <#> on this Mac, the same as from a terminal).
+                if (SYNC_URL && post.num) {
+                    const pullBtn = document.createElement('button');
+                    pullBtn.type = 'button';
+                    pullBtn.className = 'posts-copy-btn';
+                    pullBtn.textContent = '⇣ Pull';
+                    pullBtn.title = `Run ./post.py pull ${post.num}: copy this draft's photos into its Posts folder on the drive`;
+                    pullBtn.addEventListener('click', () => pullDialog(post));
+                    bar.appendChild(pullBtn);
+                }
             }
 
             // Duplicate this draft onto the other platform, keeping order,
@@ -3557,7 +3629,7 @@ window.Posts = (function () {
             ref.route && ['🛣', 'Trip route card on pull'],
             ref.crop && ['✂', 'Cut at your framing on pull'],
             !ref.crop && needsFrame(post, ref) && ref.ar < 1 && ['⬚ whole', 'Portrait, not framed: pulled whole. '
-                + `Instagram's API takes ${shapeName(postShapeOf(post))} at most, so frame it with ✂ to post it from ./post.py ig`],
+                + `./post.py ig centre-crops it to fit Instagram; frame it with ✂ to choose the part yourself`],
         ].filter(Boolean);
         if (pullMarks.length) {
             const stack = document.createElement('div');

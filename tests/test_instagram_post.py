@@ -298,13 +298,11 @@ class Refusals(IgCase):
         self.assertIn('Not posted', code)
         self.nothing_went_out()
 
-    def test_shape_outside_4_5_to_1_91_blocks_and_nothing_is_cropped(self):
-        self.shapes = {'b': (400, 600)}                      # 2:3
+    def test_shape_outside_4_5_to_1_91_is_centre_cropped_in_staging_only(self):
+        self.shapes = {'b': (400, 600)}                      # 2:3, no ✂ framing
         out, code = self.run_ig()
-        self.assertIn('Not posted', code)
-        self.assertIn('2:3', out)
-        self.assertIn('outside the 4:5 to 1.91:1', out)
-        self.nothing_went_out()
+        self.assertNotIn('outside the 4:5 to 1.91:1', out)
+        self.assertIn('centre-cropped 2:3', out)
         with Image.open(next(self.dest.glob('XHS */02_b.jpg'))) as im:
             self.assertEqual(im.size, (400, 600))                # the pulled copy untouched
 
@@ -415,10 +413,15 @@ class Checks(unittest.TestCase):
         self.assertLessEqual(size, IG.JPEG_MAX)
 
     def test_shape_edges(self):
-        for size, ok in (((1080, 1350), True), ((1080, 566), True), ((1080, 1440), False), ((1920, 1000), False)):
+        # Inside 4:5 to 1.91:1 goes as it is; outside is centre-cropped to the nearest edge, never blocked.
+        for size, staged in (((1080, 1350), (1080, 1350)), ((1080, 566), (1080, 566)),
+                             ((1080, 1440), (1080, 1350)), ((1920, 1000), (1910, 1000))):
             manifest, post = self.folder(1, size)
             plan = IG.prepare(post, manifest, self.tmp, self.tmp / f'stage{size}')
-            self.assertEqual(not IG.blocking(plan), ok, size)
+            self.assertEqual(IG.blocking(plan), [], size)
+            it = plan['items'][0]
+            self.assertEqual((it['width'], it['height']), staged, size)
+            self.assertEqual(bool(size != staged), any('centre-cropped' in n for n in plan['notes']), size)
 
     def test_needs_blur_copy_blocks(self):
         manifest, post = self.folder(1)

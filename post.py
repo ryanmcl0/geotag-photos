@@ -2761,6 +2761,10 @@ class RemoteMirror:
                     # no id: the latest run (the page reattaches to it after a reload)
                     job = IG_JOBS.get(wanted) if wanted else next(reversed(IG_JOBS.values()), None)
                     self._send(200 if job else 404, ig_job_status(job) if job else {'error': 'no such job'})
+                elif self.path.startswith('/pull/job'):
+                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    job = PULL_JOBS.get((q.get('id') or [''])[0])
+                    self._send(200 if job else 404, ig_job_status(job) if job else {'error': 'no such job'})
                 else:
                     self._send(404, {'error': 'not found'})
 
@@ -2781,6 +2785,21 @@ class RemoteMirror:
                         self._send(400, {'error': 'bad request'})
                         return
                     code, out = start_ig_job(str(body.get('post', '')), bool(body.get('real')))
+                    self._send(code, out)
+                elif self.path.startswith('/pull/start'):
+                    # Same guard as /ig/start: it writes to the drive, so only the localhost Posts page.
+                    if (self.headers.get('Origin', '') not in allowed
+                            or not self.headers.get('Content-Type', '').startswith('application/json')):
+                        self._send(403, {'error': 'forbidden'})
+                        return
+                    try:
+                        n = int(self.headers.get('Content-Length') or 0)
+                        body = json.loads(self.rfile.read(n) or b'{}')
+                    except ValueError:
+                        self._send(400, {'error': 'bad request'})
+                        return
+                    code, out = start_pull_job(body.get('num'),
+                                               before=lambda: mirror.sync(force_remote=True))
                     self._send(code, out)
                 else:
                     self._send(404, {'error': 'not found'})
@@ -2996,8 +3015,9 @@ def start_ig_job(post_id, real):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', post_id):
         return 400, {'error': 'bad post id'}
     with _IG_LOCK:
-        if any(j['proc'].poll() is None for j in IG_JOBS.values()):
-            return 409, {'error': 'another Instagram run is still going'}
+        if any(j['proc'] is None or j['proc'].poll() is None
+               for j in list(IG_JOBS.values()) + list(PULL_JOBS.values())):
+            return 409, {'error': 'another Instagram run or a pull is still going'}
         cmd = [sys.executable, str(ROOT / 'post.py'), 'ig', post_id] + (['--post', '--yes'] if real else [])
         proc = subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, env={**os.environ, 'PYTHONUNBUFFERED': '1'})
@@ -3012,6 +3032,46 @@ def start_ig_job(post_id, real):
         job['code'] = proc.wait()
         job['ended'] = time.time()
     threading.Thread(target=read, daemon=True).start()
+    return 200, {'job': job_id}
+
+
+# The localhost Posts page's "Pull" button (Instagram-tab cards): `./post.py pull <#>`, exactly as typed in a
+# terminal, after one sync with the live site so the page's latest edits are what it pulls. One at a time,
+# and never alongside an Instagram run (that pulls too).
+PULL_JOBS = {}
+
+
+def start_pull_job(num, before=None):
+    """Start `./post.py pull <num>`; before() (the mirror's sync) runs first in the job's thread.
+    Returns (http code, body)."""
+    if not isinstance(num, int) or isinstance(num, bool) or not 0 < num < 100000:
+        return 400, {'error': 'bad post number'}
+    with _IG_LOCK:
+        if any(j['proc'] is None or j['proc'].poll() is None
+               for j in list(IG_JOBS.values()) + list(PULL_JOBS.values())):
+            return 409, {'error': 'a pull or an Instagram run is still going'}
+        job_id = f'{int(time.time() * 1000):x}'
+        job = {'id': job_id, 'post': num, 'real': False, 'proc': None, 'out': [], 'code': None}
+        PULL_JOBS.clear()
+        PULL_JOBS[job_id] = job
+
+    def run():
+        if before:
+            job['out'].append('⇅ Syncing the localhost Posts page with the live site first...\n')
+            try:
+                job['out'].append(f"   ↳ {(before() or {}).get('message', '')}\n")
+            except Exception as e:                          # noqa: BLE001 — pull says if the two differ
+                job['out'].append(f'   ↳ sync failed ({e})\n')
+        cmd = [sys.executable, str(ROOT / 'post.py'), 'pull', str(num)]
+        job['out'].append(f"$ ./post.py pull {num}\n")
+        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env={**os.environ, 'PYTHONUNBUFFERED': '1'})
+        job['proc'] = proc
+        for chunk in iter(lambda: proc.stdout.read1(4096), b''):
+            job['out'].append(chunk.decode('utf-8', 'replace'))
+        job['code'] = proc.wait()
+        job['ended'] = time.time()
+    threading.Thread(target=run, daemon=True).start()
     return 200, {'job': job_id}
 
 

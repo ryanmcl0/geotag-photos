@@ -68,7 +68,7 @@ Posts ▸ Business (localhost only): ready-made posts for a second Instagram acc
 this repo. ~/.config/content-engine/business/config.json names it ("content_folder"; its instagram.username is shown
 on the tab). The folder holds content.json (the items, written by the tool that makes them, read only here) and
 state.json (the schedule, written here, by that tool's own post command and by the reel bot when it posts):
-    {"version": 1, "rev": n, "start": "YYYY-MM-DD", "every": days, "queue": [ids in posting order],
+    {"version": 1, "rev": n, "start": "YYYY-MM-DD", "every": days, "per_day": posts, "queue": [ids in posting order],
      "posted": {id: {"date", "permalink"?, "media_id"?, "via"}}, "captions": {id: text}, "skipped": {id: date}, ...}
     GET  /business               {"ok", "folder", "account", "content", "state"}; ok false with a reason when the folder
                                  isn't set up (the tab stays hidden) or can't be read (not mounted)
@@ -578,7 +578,7 @@ def business_doc(cfg=None):
 # The tab's changes (verdicts, order, start, gap, captions, hand ticks) are kept on this Mac in draft.json next to the
 # business config; the bot's state.json on the NAS changes only when he presses Send to NAS. What the bot and the post
 # command mark there (posted, skipped) always shows through.
-TAB_FIELDS = ("start", "every", "queue", "captions", "reviews")
+TAB_FIELDS = ("start", "every", "per_day", "queue", "captions", "reviews")
 
 
 def draft_path():
@@ -696,6 +696,11 @@ def clean_business_state(body, current, content):
     except (TypeError, ValueError):
         raise ValueError("every must be a number of days")
     out["every"] = min(max(every, 1), 30)
+    try:
+        per_day = int(body.get("per_day") or 1)
+    except (TypeError, ValueError):
+        raise ValueError("per_day must be a number of posts")
+    out["per_day"] = min(max(per_day, 1), 5)
     out["queue"] = list(dict.fromkeys(x for x in body.get("queue") or [] if x in ids))
     posted = {}
     for k, v in (body.get("posted") or {}).items():

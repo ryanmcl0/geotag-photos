@@ -67,18 +67,28 @@ window.PostsBusiness = (function () {
     function schedule(st) {
         const ids = new Set(items().map(it => it.id));
         const posted = st.posted || {};
+        // A slot is one day holding perDay posts (the same rule as the bot and the post command): the last posted
+        // day while it has room and isn't past, else the latest of today, start and last + every.
         const every = Math.max(1, parseInt(st.every, 10) || 1);
+        const perDay = Math.min(5, Math.max(1, parseInt(st.per_day, 10) || 1));
         const start = isDay(st.start) ? st.start : today();
         const done = Object.values(posted).map(p => p && p.date).filter(isDay).sort();
         const last = done.length ? done[done.length - 1] : null;
-        let slot = [today(), start, last ? addDays(last, every) : start].sort().pop();
+        const onLast = last ? done.filter(d => d === last).length : 0;
+        let slot, used;
+        if (last && last >= [today(), start].sort().pop() && onLast < perDay) {
+            slot = last; used = onLast;
+        } else {
+            slot = [today(), start, last ? addDays(last, every) : start].sort().pop(); used = 0;
+        }
         const out = [];
         const seen = new Set();
         (st.queue || []).forEach(id => {
             if (!ids.has(id) || posted[id] || seen.has(id)) return;
+            if (used >= perDay) { slot = addDays(slot, every); used = 0; }
             seen.add(id);
             out.push([id, slot]);
-            slot = addDays(slot, every);
+            used += 1;
         });
         return out;
     }
@@ -409,7 +419,7 @@ window.PostsBusiness = (function () {
         start.value = isDay(st.start) ? st.start : '';
         start.addEventListener('change', () => change(s => { s.start = start.value || null; }));
         startL.appendChild(start);
-        const everyL = el('label', '', 'One every ');
+        const everyL = el('label', '', 'every ');
         const every = el('input');
         every.type = 'number';
         every.min = '1';
@@ -417,7 +427,17 @@ window.PostsBusiness = (function () {
         every.value = String(st.every || 1);
         every.addEventListener('change', () => change(s => { s.every = Math.max(1, parseInt(every.value, 10) || 1); }));
         everyL.append(every, document.createTextNode(' day(s)'));
-        ctl.append(startL, everyL, el('span', 'biz-next', sch.length
+        const perL = el('label', '', '');
+        const per = el('input');
+        per.type = 'number';
+        per.min = '1';
+        per.max = '5';
+        per.value = String(st.per_day || 1);
+        per.addEventListener('change', () => change(s => {
+            s.per_day = Math.min(5, Math.max(1, parseInt(per.value, 10) || 1));
+        }));
+        perL.append(per, document.createTextNode(' a day'));
+        ctl.append(startL, perL, everyL, el('span', 'biz-next', sch.length
             ? `Next: ${fmtDay(sch[0][1])}, ${label(byId[sch[0][0]])}` : 'Nothing scheduled'));
         root.appendChild(ctl);
 

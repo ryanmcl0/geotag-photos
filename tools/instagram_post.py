@@ -372,10 +372,16 @@ def caption_problems(caption):
     return out
 
 
-def stage_image(src, dst):
-    """src → an sRGB JPEG at dst (at most MAX_WIDTH wide and JPEG_MAX bytes). Returns (width, height) of the
-    source as it displays (EXIF rotation applied), the staged size, and a note when the colour profile could not
-    be converted. Only reads src."""
+def in_shape(w, h):
+    return MIN_RATIO - RATIO_SLACK <= w / h <= MAX_RATIO + RATIO_SLACK
+
+
+def stage_image(src, dst, fit=None):
+    """src → an sRGB JPEG at dst (at most MAX_WIDTH wide and JPEG_MAX bytes). A photo outside the shapes
+    Instagram takes (e.g. a 2:3 portrait with no ✂ framing, pulled whole) is centre-cropped to `fit` (the post's
+    shape), or to the nearest shape Instagram takes. Returns (width, height) as staged (EXIF rotation applied,
+    before any downscale), the staged size, and a note (cropped, or the colour profile could not be converted).
+    Only reads src."""
     from PIL import Image, ImageCms, ImageOps
     if Path(src).suffix.lower() in ('.heic', '.heif'):
         from pillow_heif import register_heif_opener   # phone photos (carousel or Phone items)
@@ -390,6 +396,19 @@ def stage_image(src, dst):
             im.draft(im.mode, (math.ceil(im.width * k), math.ceil(im.height * k)))
         im = ImageOps.exif_transpose(im)
         icc = im.info.get('icc_profile')
+        if not in_shape(*size):
+            target = fit if fit and MIN_RATIO <= fit <= MAX_RATIO else min(MAX_RATIO, max(MIN_RATIO, size[0] / size[1]))
+            k = im.width / size[0]                   # a draft decode is smaller than `size`
+            if im.width / im.height > target:        # too wide: trim the sides
+                w = round(im.height * target)
+                box = ((im.width - w) // 2, 0, (im.width - w) // 2 + w, im.height)
+            else:                                    # too tall: trim top and bottom
+                h = round(im.width / target)
+                box = (0, (im.height - h) // 2, im.width, (im.height - h) // 2 + h)
+            im = im.crop(box)
+            old_name = ratio_name(*size)
+            size = (round(im.width / k), round(im.height / k))
+            note = f'no ✂ framing, so centre-cropped {old_name} → {ratio_name(*size)} for Instagram'
         if im.width > MAX_WIDTH and im.mode in ('RGB', 'L', 'CMYK'):
             # Shrink before the colour conversion, so it runs on the final pixels rather than all of them.
             im = im.resize((MAX_WIDTH, round(im.height * MAX_WIDTH / im.width)), Image.LANCZOS)
@@ -399,7 +418,7 @@ def stage_image(src, dst):
                 im = ImageCms.profileToProfile(im, ImageCms.ImageCmsProfile(io.BytesIO(icc)), srgb,
                                                outputMode='RGB')
             except (ImageCms.PyCMSError, OSError, ValueError):
-                note = 'its colour profile could not be converted, sent as plain RGB'
+                note = ((note + '; ') if note else '') + 'its colour profile could not be converted, sent as plain RGB'
         if im.mode != 'RGB':
             im = im.convert('RGB')
         if im.width > MAX_WIDTH:
@@ -467,6 +486,7 @@ def prepare(post, manifest, folder, staging, probe=probe_video, progress=None):
         problems.append(f'{len(items)} items; Instagram takes at most {MAX_ITEMS} in a carousel '
                         '(move some to the waitlist, location cards count too)')
     single = len(items) == 1
+    post_shape = None
     for n, it in enumerate(items, 1):
         if progress:
             progress(n, len(items))
@@ -485,14 +505,16 @@ def prepare(post, manifest, folder, staging, probe=probe_video, progress=None):
             dst = staging / f"{it['n']:02d}" / f'{src.stem}.jpg'
             dst.parent.mkdir(exist_ok=True)
             try:
-                (w, h), staged_bytes, note = stage_image(src, dst)
+                (w, h), staged_bytes, note = stage_image(src, dst, fit=post_shape)
             except Exception as e:                              # noqa: BLE001 — any unreadable file is a problem
                 it['problems'].append(f'could not read the image ({e})')
                 continue
             it.update(width=w, height=h, ratio=w / h, staged=dst, staged_bytes=staged_bytes)
+            if post_shape is None:
+                post_shape = w / h               # a carousel shows every slide at the first one's shape
             if note:
                 notes.append(f"{it['label']}: {note}")
-            if not MIN_RATIO - RATIO_SLACK <= w / h <= MAX_RATIO + RATIO_SLACK:
+            if not in_shape(w, h):
                 it['problems'].append(f'shape {ratio_name(w, h)} ({w}×{h}) is outside the 4:5 to 1.91:1 '
                                       'Instagram takes: frame it with ✂ on the Posts page and pull again (or crop it '
                                       'in Lightroom and re-export into the post folder)')

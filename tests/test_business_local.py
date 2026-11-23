@@ -100,9 +100,19 @@ class BusinessLocalTest(unittest.TestCase):
         s = json.loads((self.cfg.parent / "draft.json").read_text())
         self.assertEqual(s, json.loads(out))
         self.assertEqual((s["rev"], s["start"], s["every"], s["queue"]), (4, "2026-11-20", 2, ["car-a", "reel-1"]))
+        self.assertEqual(s["per_day"], 1)                                                    # absent: one a day
         self.assertEqual(s["posted"], {"reel-1": {"date": "2026-11-12", "via": "hand"}})
         self.assertEqual(s["captions"], {"car-a": "Edited."})
         self.assertEqual((s["skipped"], s["bot_note"]), ({"car-a": "2026-11-15"}, "kept"))   # not the tab's to change
+
+    def test_posts_a_day_is_kept_and_clamped(self):
+        for sent, kept in ((2, 2), (9, 5), (0, 1)):
+            body = {**self.state, "per_day": sent}
+            code, _, out = self.call("/business/state", "PUT", body, {"Origin": "http://localhost:8788"})
+            self.assertEqual((code, json.loads(out)["per_day"]), (200, kept))
+            self.state = {**self.state, "rev": json.loads(out)["rev"]}
+        code, _, _ = self.call("/business/state", "PUT", {**self.state, "per_day": "x"}, {"Origin": "http://localhost:8788"})
+        self.assertEqual(code, 400)
 
     def test_review_verdicts(self):
         body = {**self.state, "reviews": {

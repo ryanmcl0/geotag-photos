@@ -30,9 +30,11 @@ const tokenFor = async (key: string | undefined, tier: string, secret: string) =
 // loc: the place-name label ./post.py pull bakes into the photo, and its style;
 // locText: the name typed on the Posts page instead of the automatic one ("Name" or "Name / Region").
 // route: ./post.py pull renders one map card of the whole trip's GPS route for it.
+// stripText: the words typed for this photo's side strip (a draft with `whole`), in locText's forms.
 interface PhotoRef {
     trip: string; id: string; ar?: number; blur?: boolean;
     map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; locText?: string; route?: boolean; crop?: number[];
+    stripText?: string;
 }
 const MAP_STYLES = ['route', 'pin', 'china'];
 const LOC_STYLES = ['A', 'C'];
@@ -50,6 +52,7 @@ interface PhoneRef { trip: string; id?: string; file?: string; ar?: number }
 interface HistoryRef {
     trip: string; id?: string; file?: string; ar?: number; blur?: boolean;
     map?: 'route' | 'pin' | 'china'; loc?: 'A' | 'C'; locText?: string; route?: boolean; crop?: number[]; phone?: boolean; waitlist?: boolean; removed?: string;
+    stripText?: string;
 }
 const MAX_HISTORY_PER_POST = 100;
 // Demoted photos: still attached to the post but outside the carousel, so they
@@ -66,11 +69,16 @@ const MAX_WAITLIST_PER_POST = 40;
 // noHighlight opts a draft out of the public Highlights page (/api/highlights).
 // trial (xhs drafts, which ./post.py ig also posts to Instagram): a trial reel,
 // 'auto' = shared to followers if it performs well, 'manual' = shared by hand.
+// whole ("Preserve aspect ratio"): ./post.py pull keeps unframed portrait photos whole on the post's shape, with a
+// black side strip carrying the place (tools/side_strip.py); stripLevel is what the strips say by default
+// (absent = the place, 'region', 'country').
+const STRIP_LEVELS = ['place', 'region', 'country'];
 interface Post {
     id: string; name: string; created?: string; photos: PhotoRef[]; phone?: PhoneRef[];
     platform?: 'ig' | 'xhs'; posted?: boolean; caption?: string; song?: string;
     num?: number; account?: string; history?: HistoryRef[]; waitlist?: PhotoRef[];
     noHighlight?: boolean; trial?: 'auto' | 'manual';
+    whole?: boolean; stripLevel?: 'place' | 'region' | 'country';
 }
 // Doc-level owner switches. highlightsEnabled is the Highlights page's master
 // feature flag (absent/false = the page doesn't exist anywhere on the site);
@@ -232,12 +240,14 @@ function validPosts(posts: unknown): posts is Post[] {
             (ph.blur === undefined || typeof ph.blur === 'boolean') &&
             (ph.map === undefined || MAP_STYLES.includes(ph.map)) &&
             (ph.loc === undefined || LOC_STYLES.includes(ph.loc)) &&
-            validLocText(ph.locText) && validCrop(ph.crop) &&
+            validLocText(ph.locText) && validLocText(ph.stripText) && validCrop(ph.crop) &&
             (ph.route === undefined || typeof ph.route === 'boolean')) &&
         ((p as Post).platform === undefined || ['ig', 'xhs'].includes((p as Post).platform!)) &&
         ((p as Post).posted === undefined || typeof (p as Post).posted === 'boolean') &&
         ((p as Post).noHighlight === undefined || typeof (p as Post).noHighlight === 'boolean') &&
         ((p as Post).trial === undefined || ['auto', 'manual'].includes((p as Post).trial!)) &&
+        ((p as Post).whole === undefined || typeof (p as Post).whole === 'boolean') &&
+        ((p as Post).stripLevel === undefined || STRIP_LEVELS.includes((p as Post).stripLevel!)) &&
         ((p as Post).caption === undefined ||
             (typeof (p as Post).caption === 'string' && (p as Post).caption!.length <= 4000)) &&
         ((p as Post).song === undefined ||
@@ -264,7 +274,7 @@ function validPosts(posts: unknown): posts is Post[] {
                 (ph.blur === undefined || typeof ph.blur === 'boolean') &&
                 (ph.map === undefined || MAP_STYLES.includes(ph.map)) &&
             (ph.loc === undefined || LOC_STYLES.includes(ph.loc)) &&
-            validLocText(ph.locText) && validCrop(ph.crop) &&
+            validLocText(ph.locText) && validLocText(ph.stripText) && validCrop(ph.crop) &&
             (ph.route === undefined || typeof ph.route === 'boolean')))) &&
         ((p as Post).history === undefined || (
             Array.isArray((p as Post).history) &&
@@ -276,7 +286,7 @@ function validPosts(posts: unknown): posts is Post[] {
                 (h.blur === undefined || typeof h.blur === 'boolean') &&
                 (h.map === undefined || MAP_STYLES.includes(h.map)) &&
                 (h.loc === undefined || LOC_STYLES.includes(h.loc)) &&
-                validLocText(h.locText) && validCrop(h.crop) &&
+                validLocText(h.locText) && validLocText(h.stripText) && validCrop(h.crop) &&
                 (h.route === undefined || typeof h.route === 'boolean') &&
                 (h.phone === undefined || typeof h.phone === 'boolean') &&
                 (h.waitlist === undefined || typeof h.waitlist === 'boolean') &&

@@ -2213,6 +2213,8 @@ window.Posts = (function () {
                 };
                 if (post.caption) dup.caption = post.caption;
                 if (post.song) dup.song = post.song;
+                if (post.whole) dup.whole = true;
+                if (post.stripLevel) dup.stripLevel = post.stripLevel;
                 if (waitOf(post).length) dup.waitlist = waitOf(post).map(ph => ({ ...ph }));
                 let phone = (post.phone || []).map(ph => ({ ...ph }));
                 const fit = otherPlat === 'xhs' ? fitToXhs(dup, phone) : null;
@@ -2321,6 +2323,8 @@ window.Posts = (function () {
         }
         card.appendChild(strip);
         if (set === 'main') {
+            const whole = sideStripRow(root, post);
+            if (whole) card.appendChild(whole);
             const names = placeNamesRow(root, post);
             if (names) card.appendChild(names);
         }
@@ -2897,6 +2901,30 @@ window.Posts = (function () {
     }
     const needsFrame = (post, ref) => !!ref && !!ref.id && typeof ref.ar === 'number' &&
         Math.abs(ref.ar - postShapeOf(post)) / postShapeOf(post) > 0.01;
+    // ---------- ▮ Preserve aspect ratio (the side strip) ----------
+    // Ticked on a draft (post.whole), every portrait photo taller than the post's shape and not framed with ✂
+    // is posted whole: ./post.py pull puts it against one edge of a canvas at the post's shape and fills the
+    // spare strip black, with the flag and the place on it (tools/side_strip.py). The strip changes sides from
+    // one such slide to the next. Same rule as side_strip.wanted: a strip under a tenth of the width (a 3:4
+    // phone photo on 4:5) has no room for the text, so that photo is left as it is.
+    const STRIP_MIN = 0.10;
+    const stripFits = (post, ref) => !!ref && !!ref.id && typeof ref.ar === 'number' && !ref.crop &&
+        1 - ref.ar / postShapeOf(post) >= STRIP_MIN;
+    const stripApplies = (post, ref) => !!(post && post.whole) && stripFits(post, ref);
+    // The automatic text at the draft's level, from the place name and the line under it ([name, region]).
+    // Same as side_strip.level_text: place = "Guiyang" / "Guizhou, China", region = "Guizhou" / "China",
+    // country = "China".
+    const STRIP_LEVELS = [['', 'place: Guiyang / Guizhou, China'], ['region', 'region: Guizhou / China'],
+        ['country', 'country only: China']];
+    function stripAuto(name, region, level) {
+        name = (name || '').trim();
+        region = (region || '').trim();
+        const parts = region.split(',').map(x => x.trim()).filter(Boolean);
+        if (level === 'country') return [parts.length ? parts[parts.length - 1] : name, ''];
+        if (level === 'region' && parts.length >= 2) return [parts[0], parts.slice(1).join(', ')];
+        return [name, region];
+    }
+
     const shapeName = r => ({ '0.80': '4:5', '1.00': '1:1', '0.75': '3:4', '1.50': '3:2', '1.33': '4:3',
         '1.78': '16:9', '1.91': '1.91:1' })[r.toFixed(2)] || `${r.toFixed(2)}:1`;
 
@@ -3077,7 +3105,9 @@ window.Posts = (function () {
     }
     const placesOpen = new Set();  // post ids whose place-name list is expanded
     function placeNamesRow(root, post) {
-        const pinned = post.photos.map((ref, idx) => [ref, idx]).filter(([ref]) => ref.loc && !isPhoneRef(ref));
+        // A photo posted whole with the side strip carries its place there instead (sideStripRow).
+        const pinned = post.photos.map((ref, idx) => [ref, idx])
+            .filter(([ref]) => ref.loc && !isPhoneRef(ref) && !stripApplies(post, ref));
         if (!pinned.length) return null;
         // Collapsed by default; open state survives the card re-rendering on edits.
         const box = document.createElement('details');
@@ -3158,6 +3188,150 @@ window.Posts = (function () {
         fill();
         fetchAutoNames(pinned.map(([ref]) => ref), fill);
         return box;
+    }
+
+    // The tick box and, once ticked, the words on each strip: a big line and a small one per photo, filled in
+    // with the automatic text and editable (saved on the photo as stripText: "Big line", "Big line / small
+    // line", "Big line /" = no small line, "off" = a plain strip).
+    const stripsOpen = new Set();  // post ids whose strip-text list is expanded
+    function sideStripRow(root, post) {
+        const fits = post.photos.map((ref, idx) => [ref, idx]).filter(([ref]) => stripFits(post, ref));
+        if (!post.whole && (postOrientation(post) !== 'portrait' || !fits.length)) return null;
+        const wrap = document.createElement('div');
+        wrap.className = 'posts-whole';
+        const head = document.createElement('div');
+        head.className = 'posts-whole-head';
+        const tick = document.createElement('label');
+        tick.className = 'posts-whole-tick';
+        tick.title = 'Portrait photos taller than the post (2:3 camera photos on 4:5) are posted whole instead of ' +
+            'cropped: each sits against one edge, with a black strip beside it carrying the flag and the place. ' +
+            'The strip changes sides from slide to slide. A photo framed with ✂ is cut as usual. Applied on pull.';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = !!post.whole;
+        box.addEventListener('change', () => {
+            const on = box.checked;
+            if (on) stripsOpen.add(post.id);
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                if (on) p.whole = true; else delete p.whole;
+            }).then(() => renderManager(root));
+        });
+        tick.append(box, ' Preserve aspect ratio');
+        head.appendChild(tick);
+        wrap.appendChild(head);
+        if (!post.whole) return wrap;
+
+        const level = post.stripLevel || '';
+        const pick = document.createElement('label');
+        pick.className = 'posts-trial';
+        pick.title = 'What the strips say when you have not typed anything for a photo';
+        const sel = document.createElement('select');
+        STRIP_LEVELS.forEach(([v, label]) => sel.add(new Option(label, v)));
+        sel.value = level;
+        sel.addEventListener('change', () => {
+            const v = sel.value;
+            mutate(posts => {
+                const p = posts.find(x => x.id === post.id);
+                if (!p) return;
+                if (v) p.stripLevel = v; else delete p.stripLevel;
+            }).then(() => renderManager(root));
+        });
+        pick.append('Strip says the ', sel);
+        head.appendChild(pick);
+        if (!fits.length) {
+            const none = document.createElement('span');
+            none.className = 'posts-places-state';
+            none.style.width = 'auto';
+            none.textContent = 'no photo here is taller than the post, so nothing changes';
+            head.appendChild(none);
+            return wrap;
+        }
+
+        const list = document.createElement('details');
+        list.className = 'posts-places';
+        list.open = stripsOpen.has(post.id);
+        list.addEventListener('toggle', () => {
+            if (list.open) stripsOpen.add(post.id); else stripsOpen.delete(post.id);
+        });
+        const sum = document.createElement('summary');
+        sum.className = 'posts-places-head';
+        sum.textContent = `▮ Side strip text (${fits.length})`;
+        sum.title = 'The big line and the small line on each strip, as they will print. Edit either one; ' +
+            'type "off" as the big line for a plain strip. Saved when you leave the field.';
+        list.appendChild(sum);
+        const typedOf = ref => {
+            const t = ref.stripText || '';
+            const i = t.indexOf('/');
+            return i === -1 ? [t.trim(), null] : [t.slice(0, i).trim(), t.slice(i + 1).trim()];
+        };
+        const autoOf = ref => {
+            const a = autoNames[autoKey(ref)];
+            return Array.isArray(a) ? stripAuto(a[0], a[1], level) : null;
+        };
+        const fields = [];
+        fits.forEach(([ref, idx], n) => {
+            const row = document.createElement('div');
+            row.className = 'posts-places-row';
+            const num = document.createElement('span');
+            num.className = 'posts-places-num';
+            num.textContent = idx + 1;
+            num.title = `Strip on the ${n % 2 ? 'left' : 'right'}`;
+            const stack = document.createElement('div');
+            stack.className = 'posts-places-stack';
+            const mk = (cls, label) => {
+                const i = document.createElement('input');
+                i.type = 'text';
+                i.className = 'posts-song ' + cls;
+                i.maxLength = 60;
+                i.setAttribute('aria-label', `Photo ${idx + 1}: ${label}`);
+                i.addEventListener('input', () => { i.dataset.edited = '1'; });
+                return i;
+            };
+            const bigIn = mk('posts-places-name', 'big line on the strip');
+            const smallIn = mk('posts-places-line', 'small line on the strip');
+            const save = () => {
+                const auto = autoOf(ref);
+                const [ah, as] = auto || ['', ''];
+                const n1 = bigIn.value.trim() || ah, r = smallIn.value.trim();
+                let v;
+                if (n1.toLowerCase() === 'off') v = 'off';
+                else if (!n1) v = '';
+                else if (n1 === ah && r === as) v = '';               // as automatic: keep it automatic
+                else if (r === as || (!r && !auto)) v = n1;           // only the big line changed
+                else v = r ? `${n1} / ${r}` : `${n1} /`;
+                editPhoto(root, post.id, ref, 'main', ph => { if (v) ph.stripText = v; else delete ph.stripText; });
+            };
+            bigIn.addEventListener('change', save);
+            smallIn.addEventListener('change', save);
+            stack.append(bigIn, smallIn);
+            const state = document.createElement('span');
+            state.className = 'posts-places-state';
+            row.append(num, stack, state);
+            list.appendChild(row);
+            fields.push([ref, bigIn, smallIn, state]);
+        });
+        const fill = () => fields.forEach(([ref, bigIn, smallIn, state]) => {
+            const a = autoNames[autoKey(ref)];
+            const auto = autoOf(ref);
+            const [tn, tr] = typedOf(ref);
+            const off = tn.toLowerCase() === 'off';
+            bigIn.placeholder = !SYNC_URL ? 'automatic place (shown on the local site)'
+                : !auto && a !== 'missing' ? 'working out the automatic place…'
+                : !auto ? (autoNamesError ? 'automatic place unavailable: ' + autoNamesError
+                                          : 'automatic place: restart the local site (the sync) to see it')
+                : auto[0] ? auto[0] : 'no position on record: type the words';
+            smallIn.placeholder = 'small line';
+            const put = (el, v) => { if (!el.dataset.edited && document.activeElement !== el) el.value = v; };
+            put(bigIn, tn || (auto ? auto[0] : ''));
+            put(smallIn, off ? '' : tr !== null ? tr : (auto ? auto[1] : ''));
+            state.textContent = ref.stripText ? (off ? 'no text' : 'edited') : 'automatic';
+        });
+        fill();
+        fetchAutoNames(fits.map(([ref]) => ref).filter(ref => !noPlace(ref)), fill);
+        wrap.appendChild(list);
+        return wrap;
     }
 
     const cycleLoc = (root, postId, ref, set) =>
@@ -3625,10 +3799,12 @@ window.Posts = (function () {
         // top-left, the blur mark the bottom-left), so none can sit on another.
         const pullMarks = [
             ref.map && ['🗺 ' + MAP_SHORT[ref.map], `Map card on pull: ${MAP_LABELS[ref.map]}`],
-            ref.loc && ['📍 ' + ref.loc, `Place name on pull: ${LOC_LABELS[ref.loc]}`],
+            ref.loc && !stripApplies(post, ref) && ['📍 ' + ref.loc, `Place name on pull: ${LOC_LABELS[ref.loc]}`],
+            stripApplies(post, ref) && ['▮ strip', 'Posted whole on pull, with the black side strip '
+                + '(Preserve aspect ratio). Frame it with ✂ to cut it to the post instead'],
             ref.route && ['🛣', 'Trip route card on pull'],
             ref.crop && ['✂', 'Cut at your framing on pull'],
-            !ref.crop && needsFrame(post, ref) && ref.ar < 1 && ['⬚ whole', 'Portrait, not framed: pulled whole. '
+            !ref.crop && needsFrame(post, ref) && ref.ar < 1 && !stripApplies(post, ref) && ['⬚ whole', 'Portrait, not framed: pulled whole. '
                 + `./post.py ig centre-crops it to fit Instagram; frame it with ✂ to choose the part yourself`],
         ].filter(Boolean);
         if (pullMarks.length) {

@@ -691,6 +691,12 @@ body.posts-selecting .photo-cell.posts-in-target::after {
 }
 
 /* ---------- 📍 place names pull will bake in (one field per pinned photo) ---------- */
+/* "Preserve aspect ratio": the tick box, what the strips say, and the per-photo words (sideStripRow) */
+.posts-whole { margin-top: 10px; }
+.posts-whole-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.posts-whole-tick { color: #ccc; font-size: 13px; cursor: pointer; user-select: none; white-space: nowrap; }
+.posts-whole-tick input { margin: 0 4px 0 0; vertical-align: -2px; accent-color: #1d4ed8; }
+.posts-whole .posts-places { margin-top: 8px; }
 .posts-places { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .posts-places-head { color: #999; font-size: 12px; cursor: pointer; user-select: none; width: fit-content; }
 .posts-places-head:hover { color: #ccc; }

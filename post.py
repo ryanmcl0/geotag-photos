@@ -17,6 +17,13 @@ Everything for working with post drafts. Always takes a subcommand:
                       is listed, and a wrong name is fixed with
                       --location <photo number> "Name" (or "Name / Region",
                       "auto" to go back, "off" to drop the label).
+                      On a draft with "Preserve aspect ratio" ticked, each
+                      portrait photo taller than the post (2:3 on 4:5) and not
+                      framed with ✂ is kept whole: it sits against one edge of
+                      a canvas at the post's shape, the spare strip black with
+                      the flag and the place on it, changing sides from slide
+                      to slide (tools/side_strip.py). The words come from the
+                      draft's card ("Side strip text").
                       A photo over 32 MB (Xiaohongshu's upload limit) is
                       shrunk to fit as it is copied: a lossless repack if
                       that is enough, else the best re-encode that fits.
@@ -1078,7 +1085,7 @@ def blur_note(n):
             f'could not decode, left unblurred as *{NEEDS_BLUR}, blur it by hand')
 
 
-def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=None):
+def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=None, strips=None):
     """Bring dest_dir in line with the plan. Reorders done on the site are
     applied by renaming the existing local NN_ files (in-place edits kept);
     only genuinely new photos are copied from the drive. Returns (copied,
@@ -1109,7 +1116,13 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
     shape before its label goes on: at the framing chosen on the Posts page
     (ref['crop']), else centred; a portrait photo with no framing is left whole
     (photo_shape). A changed shape or framing regenerates the copy the same
-    way, and a re-edit exported over a copy is cropped again."""
+    way, and a re-edit exported over a copy is cropped again.
+
+    strips ({source name: "strip|big line|small line|side|country|vN"}, from strip_sigs: the draft has
+    "Preserve aspect ratio" ticked) are the unframed portrait photos that are kept whole on a canvas at the
+    post's shape, with the side strip (tools/side_strip.py). A strip takes the place of that photo's 📍 label
+    and is remembered like one, so a changed text or side remakes the copy from its source and a re-edit
+    exported over it gets its strip again."""
     found = [] if found is None else found
     planned = {dst.name for _, _, _, dst in plan}
 
@@ -1140,7 +1153,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
     shrunk = state.setdefault('compressed', {})   # md5 of copies shrunk to UPLOAD_CAP, by source name
     located = state.setdefault('located', {})   # source name -> the label baked into its copy
     shaped = state.setdefault('shaped', {})     # source name -> the post shape its copy was cropped to
-    locs = locs or {}
+    locs = {**(locs or {}), **(strips or {})}   # a strip is that copy's label: same remake rules
     post_shape = shape
     # source name -> (shape, chosen frame); (None, None) = an unframed portrait photo, posted whole
     own_shape = {src.name: photo_shape(ref, src, post_shape) for _, ref, src, _ in plan}
@@ -1152,6 +1165,15 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
         shape, frame = own_shape.get(src.name, (None, None))
         want_shape = shape_sig(shape, frame)
         how = 'your framing' if frame else "the post's shape"
+        if is_strip(sig):
+            # kept whole on the post's shape, the strip beside it (an unframed portrait: nothing is cut)
+            _, head, sub, side, cc = sig.split('|')[:5]
+            if stamp_strip(dst, post_shape, side, head, sub, cc):
+                print(f'   ▮ {dst.name}: whole, strip on the {side}'
+                      + (f': {head}' + (f' / {sub}' if sub else '') if head or sub else ' (no text)'))
+            shaped.pop(src.name, None)
+            located[src.name] = sig
+            return
         if want_shape:
             if sig:
                 style, head, sub = sig.split('|')[:3]
@@ -1174,6 +1196,17 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
         else:
             located.pop(src.name, None)
     state.pop('manual_faces', None)   # retired hand-marking tool
+
+    def reedit(ref, src, edited, post_file, altered):
+        """Queue a re-edit for Edits (note_reedit), unless it is a copy that already carries its side strip
+        (edited by hand after a pull): that is not the photo any more and must never go over the original."""
+        if is_strip(locs.get(src.name)):
+            sys.path.insert(0, str(ROOT / 'tools'))
+            import side_strip
+            if not side_strip.wanted(*image_size(edited), post_shape):
+                print(f'   · {edited.name}: changed by hand with its strip on, kept here, not offered for Edits')
+                return
+        note_reedit(found, ref, src, edited, dest_dir, post_file, altered)
 
     def fit(src, dst):
         """Bring a finished copy under UPLOAD_CAP and fingerprint it."""
@@ -1209,8 +1242,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
         have_blur = bool(blurred.get(src.name, False))
         if src.name in adopted:
             new = adopted.pop(src.name)
-            note_reedit(found, ref, src, new, dest_dir, dst,
-                        want_blur or bool(locs.get(src.name)) or bool(want_shape))
+            reedit(ref, src, new, dst, want_blur or bool(locs.get(src.name)) or bool(want_shape))
             dst.unlink(missing_ok=True)
             new.rename(dst)
             print(f'   ⇢ {dst.name}: adopted re-edited export {new.name}')
@@ -1265,7 +1297,7 @@ def sync_post_dir(dest_dir, plan, reblur=False, found=None, locs=None, shape=Non
                 continue
             # A re-edit exported over the copy: queued for Edits clean (staged before it is changed here),
             # then cropped and labelled again.
-            note_reedit(found, ref, src, dst, dest_dir, dst, want_blur or bool(want_loc) or bool(want_shape))
+            reedit(ref, src, dst, dst, want_blur or bool(want_loc) or bool(want_shape))
             if not want_blur:
                 if want_loc or want_shape:
                     label(ref, src, dst)
@@ -1539,6 +1571,53 @@ def crop_to_shape(path, ratio, frame=None):
         kw['icc_profile'] = icc
     out.save(path, 'HEIF' if heic else 'JPEG', **kw)
     return before, ratio_label(ratio)
+
+
+def is_strip(sig):
+    return bool(sig) and sig.startswith('strip|')
+
+
+def stamp_strip(path, ratio, side, head, sub, cc):
+    """Put the copy at path whole on a canvas of shape `ratio` with the side strip (tools/side_strip.py).
+    → False when it is not narrower than the shape (nothing is written)."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import side_strip
+    return side_strip.stamp(path, path, ratio, side, head, sub, cc or None)
+
+
+def strip_sigs(post, plan, shape):
+    """{source name: "strip|big line|small line|side|country code|vN"} for every carousel photo that is posted
+    whole with the side strip: the draft has "Preserve aspect ratio" ticked (post['whole']), the photo is
+    portrait with no ✂ framing, and it is narrow enough against the post's shape to leave room for the text
+    (side_strip.wanted). The strip changes sides from one such photo to the next, starting on the right.
+    The text is the automatic place name at the draft's level (post['stripLevel']: place / region / country),
+    or what is typed for the photo on the Posts page (ref['stripText']: "Big line", "Big line / small line",
+    "Big line /" = no small line, "off" = a plain strip). → (sigs, notes to print)."""
+    if not post.get('whole') or not shape:
+        return {}, []
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import side_strip
+    level = post.get('stripLevel') if post.get('stripLevel') in side_strip.LEVELS else 'place'
+    clean = lambda t: ' '.join((t or '').replace('|', '/').split())
+    sigs, notes, n = {}, [], 0
+    for i, ref, src, _ in plan:
+        own, _frame = photo_shape(ref, src, shape)
+        if own:
+            continue                    # framed with ✂ (or not portrait): cut to the post's shape as usual
+        w, h = image_size(src)
+        if not side_strip.wanted(w, h, shape):
+            if side_strip.strip_share(w, h, shape) > 0.01:
+                notes.append(f'▮ {i:02d}: only a little narrower than the post ({ratio_label(w / h)} on '
+                             f'{ratio_label(shape)}), no room for a strip: left as it is')
+            continue
+        name, region, cc = side_strip.auto_text(ref['trip'], ref['id'])
+        pair = side_strip.split_text(ref.get('stripText'), *side_strip.level_text(name, region, level))
+        head, sub = pair if pair else ('', '')
+        side = side_strip.SIDES[n % 2]
+        n += 1
+        sigs[src.name] = '|'.join(['strip', clean(head), clean(sub), side, (cc or '') if pair else '',
+                                   f'v{side_strip.LOOK}'])
+    return sigs, notes
 
 
 def location_sigs(dest_dir, plan, overrides=()):
@@ -2043,17 +2122,25 @@ def cmd_pull(args):
             if cap_what:
                 print(f"   📝 {cap_what}  →  {dest_dir / 'caption.txt'}")
             sigs, notes = location_sigs(dest_dir, plan)
-            for n in notes:
+            strips, strip_notes = strip_sigs(post, plan, shape)
+            for n in notes + strip_notes:
                 print(f"   {n}")
+            if strips:
+                print(f"   ▮ Preserve aspect ratio: {len(strips)} portrait photo(s) posted whole, with the side strip")
             for i, ref, src, dst in plan:
                 big = '  (over 32 MB, shrunk to fit)' if _too_big(src) else ''
                 own, frame = photo_shape(ref, src, shape)
                 cut = shape_change(src, own, frame)
                 print(f"   {i:02d} {src}  →  {dst}{big}" + (f"  (cropped {cut[0]} → {cut[1]}" +
                       (", your framing)" if frame else ")") if cut else '') +
-                      ("  (portrait, kept whole: frame it with ✂ on the Posts page)" if not own and shape else ''))
-                if src.name in sigs:
-                    style, head, sub = sigs[src.name].split('|', 2)
+                      ("  (whole, with the side strip)" if src.name in strips else
+                       "  (portrait, kept whole: frame it with ✂ on the Posts page)" if not own and shape else ''))
+                if src.name in strips:
+                    _, head, sub, side = strips[src.name].split('|')[:4]
+                    print(f"      ▮ strip on the {side}: " + (head + (f" / {sub}" if sub else '') if head or sub
+                                                              else 'no text'))
+                elif src.name in sigs:
+                    style, head, sub = sigs[src.name].split('|')[:3]
                     print(f"      📍 {head}" + (f" / {sub}" if sub else '') + f"  ({style})")
                 if ref.get('map'):
                     print(f"      🗺  {ref['map']} card {size[0]}x{size[1]}  →  "
@@ -2081,20 +2168,31 @@ def cmd_pull(args):
         except (OSError, ValueError):
             old_manifest = {}
         sigs, notes = location_sigs(dest_dir, plan, getattr(args, 'location', None) or [])
-        for n in notes:
+        strips, strip_notes = strip_sigs(post, plan, shape)
+        sigs = {k: v for k, v in sigs.items() if k not in strips}   # the strip carries the place instead
+        for n in notes + strip_notes:
             print(f"   {n}")
         copied, renamed, adopted = sync_post_dir(dest_dir, plan,
                                                  reblur=getattr(args, 'reblur', False),
-                                                 found=found, locs=sigs, shape=shape)
+                                                 found=found, locs=sigs, shape=shape, strips=strips)
         if sigs:
             # every label on this post, with the fix for a wrong one
             num = post.get('num')
             print(f"   📍 {len(sigs)} labelled:")
             for i, ref, src, dst in plan:
                 if src.name in sigs:
-                    style, head, sub = sigs[src.name].split('|', 2)
+                    style, head, sub = sigs[src.name].split('|')[:3]
                     print(f"      {i:02d} {head}" + (f" / {sub}" if sub else ''))
             print(f"      wrong? ./post.py pull {num if num else '<#>'} --location <photo number> \"Name\"")
+        if strips:
+            # every strip on this post; the text is changed on the Posts page
+            print(f"   ▮ {len(strips)} whole with the side strip (Preserve aspect ratio):")
+            for i, ref, src, dst in plan:
+                if src.name in strips:
+                    _, head, sub, side = strips[src.name].split('|')[:4]
+                    print(f"      {i:02d} {side:<5} " + (head + (f" / {sub}" if sub else '') if head or sub
+                                                         else 'no text'))
+            print("      other words? Type them under \"Side strip text\" on the draft's card, then pull again")
         manifest = {
             'name': post['name'],
             'version': doc.get('version'),
@@ -2343,6 +2441,8 @@ def cmd_backfill(args):
                 fit_md5 = state.get('compressed', {}).get(src.name)
                 if fit_md5 and fit_md5 == _file_md5(dst):
                     continue   # shrunk to UPLOAD_CAP by a pull: not a re-edit
+                if is_strip(state.get('located', {}).get(src.name)):
+                    continue   # the photo on its canvas with the side strip: never goes back over the original
                 if _sample_differs(src, dst):
                     cands.setdefault(src, []).append((dst.stat().st_mtime, dst, r, d))
             if dirty:
